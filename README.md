@@ -68,6 +68,10 @@ For a person or developer, the practical goal is simple: connect an agent once a
 That creates several concrete outcomes:
 
 - **Use more intelligence without rebuilding your stack.** A Codex, Claude, Gemini, Grok, Llama, Perplexity, local model, enterprise agent, or future system can participate through an adapter instead of requiring every pair of systems to invent a private integration.
+- **Spend fewer AI tokens on agents talking to agents.** Reusable state, compact machine-native claims, references, deltas, receipts, and verified cached results can replace repeated natural-language restatement of context where prose is unnecessary.
+- **Reduce inference cost.** Fewer tokens processed and fewer duplicated model calls can directly reduce usage-based AI expenditure.
+- **Shorten request/response cycles.** Smaller contexts, less repeated serialization, less network transfer, reusable results, and capability-aware routing can reduce end-to-end latency.
+- **Improve the information available to computation.** Provenance, evidence, freshness, source independence, and trustability can travel with a result instead of forcing every downstream agent to reconstruct that context independently.
 - **Get a result with context about whether it should be trusted.** A response can carry provenance, evidence, source independence, freshness, and a trustability assessment instead of arriving as an opaque answer.
 - **Reduce dependency on one provider.** If several nodes can perform the same capability, the network can select among them according to trust, latency, price, privacy, freshness, or availability.
 - **Move less data.** If only a small part of shared state changed, send the delta. If a valid result is already available, reuse it. If a large dataset can be processed locally, send the result instead of the dataset.
@@ -76,12 +80,78 @@ That creates several concrete outcomes:
 - **Keep sensitive data closer to where it lives.** Computation can move toward private or local information while only a result, proof, or minimal derived state crosses the network.
 - **Fail over by capability, not hostname.** The disappearance of one provider does not have to mean the disappearance of the capability.
 
+### Token and inference economics
+
+> **One of TRUYN's primary economic goals is to reduce the number of AI tokens and repeated inference operations required for machines to cooperate.**
+
+Today's multi-agent systems often make machines communicate through human-oriented text. An agent may repeatedly receive a long prompt, conversation history, copied documents, tool outputs, intermediate reasoning summaries, and another agent's prose answer — even when both sides only need a small state change or a structured result.
+
+TRUYN is designed to make a different exchange possible:
+
+```text
+re-send context + explain it again + infer again
+                     ↓
+state reference + delta + claim + proof + result
+```
+
+If a baseline workflow processes `T_base` tokens and the equivalent TRUYN-assisted workflow processes `T_truyn`, the token reduction is:
+
+```text
+token reduction = 1 − (T_truyn / T_base)
+```
+
+For usage-priced models, if input and output token prices are `P_in` and `P_out`, the direct model cost of a workflow is approximately:
+
+```text
+AI cost = T_in × P_in + T_out × P_out
+```
+
+so avoided token processing and avoided duplicate calls translate directly into avoided inference spend.
+
+**Illustrative example — not a measured TRUYN benchmark:** suppose an agent-to-agent handoff currently consumes 4,000 input tokens plus 1,000 output tokens. Across 100,000 handoffs per month, that is 500 million processed tokens. If structured state, references, deltas and reusable results reduce the average handoff to 500 input + 150 output tokens, the same number of handoffs would process 65 million tokens — an **87% reduction** in this hypothetical workload.
+
+At a hypothetical blended processing price of **$5 per million tokens**, that arithmetic corresponds to roughly **$2,500/month → $325/month**, or **$2,175/month avoided token spend** for that workload alone. Actual savings depend entirely on model prices, caching policies, context sizes, output sizes, workload structure and how much information can safely be represented without prose.
+
+The commercial effect compounds in large agent systems because token cost is only one component:
+
+```text
+fewer tokens
+    ↓
+less inference work
+    ↓
+less model spend
+    +
+shorter contexts
+    ↓
+faster model cycles
+    +
+fewer duplicate calls
+    ↓
+lower compute demand
+    +
+smaller payloads
+    ↓
+lower transfer / storage overhead
+```
+
+This creates a direct business objective for TRUYN:
+
+**more useful machine cooperation per dollar, per second, and per unit of compute.**
+
+TRUYN also aims to improve **effective computation quality**, but not because fewer tokens are automatically better. Compression that removes necessary information can make results worse. The intended quality gain comes from replacing repeated, lossy re-explanation with explicit machine-readable state, provenance, evidence, freshness and verification — while escalating to richer data or natural language whenever the task actually requires it.
+
+The target is therefore not simply **minimum tokens**. It is:
+
+> **minimum sufficient information for the required result and trust level.**
+
 ### The measurable effects
 
 The exact gains depend on workload and must be benchmarked by the reference implementation. But the architectural savings are directly measurable.
 
 | Current pattern | TRUYN target behavior | Measurable effect |
 |---|---|---|
+| Long natural-language context is repeatedly passed between agents | Exchange state references, structured claims, deltas and reusable results where sufficient | Token reduction = **`1 − T_truyn / T_base`** |
+| Equivalent reasoning/inference is repeatedly executed | Reuse sufficiently fresh, signed and policy-compatible results | Avoided inference calls = **baseline calls − required fresh calls** |
 | One agent integrates separately with `N` providers | Agent connects to TRUYN; providers advertise capabilities | Agent-side network integration can move from many provider connections toward **one network adapter**, while capability semantics remain explicit |
 | Full object of size `S` is retransmitted after a small change `d` | Send a `DELTA` against shared state | Payload ratio approaches **`d / S`** when both sides share the base state |
 | The same object of size `S` is fetched independently by `N` consumers | Reuse a fresh signed/cached result | Transfer can approach **`S + N·r` instead of `N·S`**, where `r` is a small receipt/result reference |
@@ -90,11 +160,11 @@ The exact gains depend on workload and must be benchmarked by the reference impl
 | One hard-coded API becomes unavailable | Discover another eligible provider | Failover can occur at the **capability layer** instead of requiring application-specific fallback logic |
 | A result arrives without evidence | Return claim + provenance + attestations + trust vector | The consumer receives a **machine-readable basis for acceptance or rejection**, not only a payload |
 
-A simple example: if two nodes share a 10 MB state object and only 10 KB changed, a delta representation has a theoretical payload ratio of roughly **0.1% of the full state size before protocol overhead**. If a private 1 GB dataset can be evaluated locally and the remote party only requires a 1 KB signed decision result, the potential avoided raw-data transfer is correspondingly enormous. These are arithmetic examples, not claims of measured TRUYN production performance.
+A simple data-transfer example: if two nodes share a 10 MB state object and only 10 KB changed, a delta representation has a theoretical payload ratio of roughly **0.1% of the full state size before protocol overhead**. If a private 1 GB dataset can be evaluated locally and the remote party only requires a 1 KB signed decision result, the potential avoided raw-data transfer is correspondingly enormous. These are arithmetic examples, not claims of measured TRUYN production performance.
 
 ### The new capability
 
-The deeper benefit is not just lower bandwidth or lower latency.
+The deeper benefit is not just lower bandwidth, fewer tokens, lower AI cost, or lower latency.
 
 Today an application normally asks:
 
