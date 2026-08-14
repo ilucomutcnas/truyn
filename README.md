@@ -59,6 +59,66 @@ TRUYN is designed around the needs of autonomous systems:
 
 ---
 
+## What do you actually get?
+
+TRUYN is designed to turn agent interoperability from a collection of one-off integrations into a **network capability**.
+
+For a person or developer, the practical goal is simple: connect an agent once and let it discover, request, verify, and use capabilities provided by other agents, computers, services, sensors, or models — without manually wiring every possible provider in advance.
+
+That creates several concrete outcomes:
+
+- **Use more intelligence without rebuilding your stack.** A Codex, Claude, Gemini, Grok, Llama, Perplexity, local model, enterprise agent, or future system can participate through an adapter instead of requiring every pair of systems to invent a private integration.
+- **Get a result with context about whether it should be trusted.** A response can carry provenance, evidence, source independence, freshness, and a trustability assessment instead of arriving as an opaque answer.
+- **Reduce dependency on one provider.** If several nodes can perform the same capability, the network can select among them according to trust, latency, price, privacy, freshness, or availability.
+- **Move less data.** If only a small part of shared state changed, send the delta. If a valid result is already available, reuse it. If a large dataset can be processed locally, send the result instead of the dataset.
+- **Do less duplicate work.** Repeated equivalent requests can reuse sufficiently fresh, signed state or results rather than recomputing everything from zero.
+- **Stop polling when nothing happened.** A system can subscribe to a meaningful change and receive an update only when the condition is satisfied.
+- **Keep sensitive data closer to where it lives.** Computation can move toward private or local information while only a result, proof, or minimal derived state crosses the network.
+- **Fail over by capability, not hostname.** The disappearance of one provider does not have to mean the disappearance of the capability.
+
+### The measurable effects
+
+The exact gains depend on workload and must be benchmarked by the reference implementation. But the architectural savings are directly measurable.
+
+| Current pattern | TRUYN target behavior | Measurable effect |
+|---|---|---|
+| One agent integrates separately with `N` providers | Agent connects to TRUYN; providers advertise capabilities | Agent-side network integration can move from many provider connections toward **one network adapter**, while capability semantics remain explicit |
+| Full object of size `S` is retransmitted after a small change `d` | Send a `DELTA` against shared state | Payload ratio approaches **`d / S`** when both sides share the base state |
+| The same object of size `S` is fetched independently by `N` consumers | Reuse a fresh signed/cached result | Transfer can approach **`S + N·r` instead of `N·S`**, where `r` is a small receipt/result reference |
+| A dataset of size `D` is moved to a remote computer only to obtain result `R` | Compute near the data and return `R` | Avoided payload fraction can approach **`1 − R/D`** when remote raw data is unnecessary |
+| Poll every `p` seconds for duration `t` | `SUBSCRIBE` and deliver only on relevant changes | Polling requests fall from approximately **`t/p` to the number of actual events `k`** |
+| One hard-coded API becomes unavailable | Discover another eligible provider | Failover can occur at the **capability layer** instead of requiring application-specific fallback logic |
+| A result arrives without evidence | Return claim + provenance + attestations + trust vector | The consumer receives a **machine-readable basis for acceptance or rejection**, not only a payload |
+
+A simple example: if two nodes share a 10 MB state object and only 10 KB changed, a delta representation has a theoretical payload ratio of roughly **0.1% of the full state size before protocol overhead**. If a private 1 GB dataset can be evaluated locally and the remote party only requires a 1 KB signed decision result, the potential avoided raw-data transfer is correspondingly enormous. These are arithmetic examples, not claims of measured TRUYN production performance.
+
+### The new capability
+
+The deeper benefit is not just lower bandwidth or lower latency.
+
+Today an application normally asks:
+
+```text
+Which API do I call?
+```
+
+TRUYN is designed to let it ask:
+
+```text
+What do I need?
+How fresh must it be?
+How trustworthy must it be?
+What constraints must be respected?
+```
+
+Then the network can determine **who can provide it, whether existing state can satisfy it, whether independent verification is required, where computation should happen, and what minimum information must move**.
+
+That is the real change: **from connecting applications to endpoints to connecting intelligence to available intelligence.**
+
+> **Status note:** these are architectural outcomes and validation targets described by the TRUYN design. The repository does not claim production benchmark results before the reference implementation and reproducible measurements exist. See the [Whitepaper](WHITEPAPER.md) for the quantitative model and evaluation methodology.
+
+---
+
 ## Trustability is a network primitive
 
 A signature can prove **who said something**. It cannot prove that what was said is true.
