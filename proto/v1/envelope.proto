@@ -1,0 +1,11 @@
+syntax = "proto3";
+package truyn.v1;
+
+message Envelope {
+  uint32 protocol_version = 1;
+  string message_type = 2;
+  bytes message_id = 3;
+  string sender_node_id = 4;
+  bytes body = 5;
+  bytes signature = 6;
+}

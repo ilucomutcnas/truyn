@@ -1,0 +1,15 @@
+syntax = "proto3";
+package truyn.v1;
+
+message State {
+  bytes state_id = 1;
+  uint64 revision = 2;
+  bytes payload = 3;
+}
+
+message Delta {
+  bytes state_id = 1;
+  uint64 base_revision = 2;
+  uint64 target_revision = 3;
+  bytes payload = 4;
+}

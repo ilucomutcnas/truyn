@@ -1,0 +1,9 @@
+syntax = "proto3";
+package truyn.v1;
+
+message Need {
+  bytes request_id = 1;
+  string capability = 2;
+  bytes constraints = 3;
+  bytes payload = 4;
+}

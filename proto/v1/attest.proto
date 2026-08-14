@@ -1,0 +1,17 @@
+syntax = "proto3";
+package truyn.v1;
+
+enum AttestationVerdict {
+  ATTESTATION_VERDICT_UNSPECIFIED = 0;
+  ATTESTATION_VERDICT_SUPPORTS = 1;
+  ATTESTATION_VERDICT_DISPUTES = 2;
+  ATTESTATION_VERDICT_UNKNOWN = 3;
+}
+
+message Attestation {
+  bytes claim_id = 1;
+  string attester_node_id = 2;
+  AttestationVerdict verdict = 3;
+  bytes evidence_ref = 4;
+  bytes signature = 5;
+}

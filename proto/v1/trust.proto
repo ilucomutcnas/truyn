@@ -1,0 +1,10 @@
+syntax = "proto3";
+package truyn.v1;
+
+message Trustability {
+  bytes claim_id = 1;
+  double score = 2;
+  map<string, double> dimensions = 3;
+  int64 computed_at_unix_ms = 4;
+  bytes policy_ref = 5;
+}

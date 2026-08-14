@@ -1,0 +1,8 @@
+syntax = "proto3";
+package truyn.v1;
+
+message Capability {
+  string name = 1;
+  repeated string tags = 2;
+  int64 expires_at_unix_ms = 3;
+}
