@@ -1,0 +1,15 @@
+syntax = "proto3";
+package truyn.v1;
+
+import "proto/v1/common.proto";
+import "proto/v1/capability.proto";
+
+message Offer {
+  bytes offer_id = 1;
+  bytes provider_node_id = 2;
+  CapabilityDescriptor capability = 3;
+  Price price = 4;
+  repeated string locality = 5;
+  uint64 valid_until_unix_ms = 6;
+  Signature signature = 7;
+}

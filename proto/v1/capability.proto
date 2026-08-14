@@ -1,8 +1,11 @@
 syntax = "proto3";
 package truyn.v1;
 
-message Capability {
+message CapabilityDescriptor {
   string name = 1;
-  repeated string tags = 2;
-  int64 expires_at_unix_ms = 3;
+  string version = 2;
+  string domain = 3;
+  string input_schema = 4;
+  string output_schema = 5;
+  repeated string tags = 6;
 }

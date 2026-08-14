@@ -1,12 +1,19 @@
 syntax = "proto3";
 package truyn.v1;
 
+import "proto/v1/common.proto";
+
 message Claim {
   bytes claim_id = 1;
   string subject = 2;
-  bytes value = 3;
-  int64 observed_at_unix_ms = 4;
-  string issuer_node_id = 5;
-  bytes provenance = 6;
-  bytes signature = 7;
+  string predicate = 3;
+  bytes value = 4;
+  string value_type = 5;
+  string domain = 6;
+  bytes source_node_id = 7;
+  repeated Reference provenance = 8;
+  repeated Reference evidence = 9;
+  uint64 observed_at_unix_ms = 10;
+  uint64 expires_at_unix_ms = 11;
+  Signature signature = 12;
 }

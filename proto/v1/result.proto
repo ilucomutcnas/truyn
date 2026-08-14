@@ -1,0 +1,18 @@
+syntax = "proto3";
+package truyn.v1;
+
+import "proto/v1/common.proto";
+
+message Result {
+  bytes result_id = 1;
+  bytes request_id = 2;
+  bytes provider_node_id = 3;
+  bytes output_inline = 4;
+  repeated Reference output_refs = 5;
+  repeated Reference claim_refs = 6;
+  Reference trust_receipt_ref = 7;
+  uint64 measured_latency_ms = 8;
+  Price charged_cost = 9;
+  uint64 completed_at_unix_ms = 10;
+  Signature signature = 11;
+}

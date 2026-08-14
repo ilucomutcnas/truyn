@@ -1,5 +1,13 @@
 # TRUYN/1 ATTEST
 
-**Status:** draft skeleton.
+**Status:** draft normative skeleton.
 
-Defines support, dispute, verification evidence, attester identity, independence metadata, and signed attestation lifecycle.
+`ATTEST` records a signed verification judgment about a claim. The core verdict space is:
+
+- `SUPPORTS`;
+- `DISPUTES`;
+- `INCONCLUSIVE`.
+
+An attestation SHOULD include confidence, relevant domain, evidence/provenance references, time and an independence/lineage hint when available. The trust engine determines how much weight the attestation receives; raw count is not automatically independent evidence.
+
+See `verification.md` and `trustability.md`.

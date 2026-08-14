@@ -1,9 +1,14 @@
 syntax = "proto3";
 package truyn.v1;
 
+import "proto/v1/common.proto";
+
 message Need {
   bytes request_id = 1;
-  string capability = 2;
-  bytes constraints = 3;
-  bytes payload = 4;
+  bytes requester_node_id = 2;
+  string capability = 3;
+  bytes input_inline = 4;
+  repeated Reference input_refs = 5;
+  RequestPolicy policy = 6;
+  Signature signature = 7;
 }

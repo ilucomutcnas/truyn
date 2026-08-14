@@ -1,5 +1,9 @@
 # TRUYN/1 DELTA
 
-**Status:** draft skeleton.
+**Status:** draft normative skeleton.
 
-Defines changes relative to a known base state, revision checks, conflict handling, integrity validation, and fallback to full state when a base is unavailable.
+`DELTA` conveys a change relative to an identified base state. It exists to avoid retransmitting a full state/object when both parties already possess the same verified base.
+
+A delta MUST identify the base state and resulting state plus patch encoding/digest. A receiver MUST NOT apply a delta to an unknown or mismatched base.
+
+Delta efficiency is workload-dependent and must be benchmarked; the protocol does not claim a universal compression ratio.

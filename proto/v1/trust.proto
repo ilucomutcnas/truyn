@@ -1,10 +1,22 @@
 syntax = "proto3";
 package truyn.v1;
 
-message Trustability {
+message TrustVector {
   bytes claim_id = 1;
-  double score = 2;
-  map<string, double> dimensions = 3;
-  int64 computed_at_unix_ms = 4;
-  bytes policy_ref = 5;
+  bytes requester_node_id = 2;
+  string domain = 3;
+  string purpose = 4;
+  string policy_id = 5;
+  double identity_confidence = 6;
+  double integrity_confidence = 7;
+  double domain_history = 8;
+  double provenance_quality = 9;
+  double evidence_quality = 10;
+  double consensus_support = 11;
+  double independence = 12;
+  double freshness = 13;
+  double sybil_resistance = 14;
+  double anomaly_confidence = 15;
+  double composite_score = 16;
+  uint64 evaluated_at_unix_ms = 17;
 }

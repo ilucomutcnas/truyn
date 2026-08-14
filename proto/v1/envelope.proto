@@ -1,11 +1,42 @@
 syntax = "proto3";
 package truyn.v1;
 
+import "proto/v1/common.proto";
+import "proto/v1/identity.proto";
+import "proto/v1/offer.proto";
+import "proto/v1/need.proto";
+import "proto/v1/object.proto";
+import "proto/v1/claim.proto";
+import "proto/v1/attest.proto";
+import "proto/v1/state.proto";
+import "proto/v1/delta.proto";
+import "proto/v1/subscribe.proto";
+import "proto/v1/compute.proto";
+import "proto/v1/result.proto";
+import "proto/v1/trust_receipt.proto";
+import "proto/v1/revoke.proto";
+
 message Envelope {
-  uint32 protocol_version = 1;
-  string message_type = 2;
-  bytes message_id = 3;
-  string sender_node_id = 4;
-  bytes body = 5;
-  bytes signature = 6;
+  uint32 protocol_generation = 1;
+  bytes message_id = 2;
+  bytes sender_node_id = 3;
+  uint64 created_at_unix_ms = 4;
+
+  oneof payload {
+    NodeIdentity identity = 10;
+    Offer offer = 11;
+    Need need = 12;
+    ContentObject content_object = 13;
+    Claim claim = 14;
+    Attestation attest = 15;
+    State state = 16;
+    Delta delta = 17;
+    Subscription subscribe = 18;
+    ComputeRequest compute = 19;
+    Result result = 20;
+    TrustReceipt trust_receipt = 21;
+    Revoke revoke = 22;
+  }
+
+  Signature signature = 30;
 }
