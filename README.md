@@ -175,20 +175,6 @@ The requester asks for the **outcome**, not a predetermined server.
 
 ---
 
-## Project status
-
-TRUYN is currently in the **research, protocol-design, and reference-implementation stage**.
-
-The repository already contains:
-
-- **[The TRUYN Manifesto](MANIFESTO.md)** — the values and direction of the project.
-- **[The TRUYN Whitepaper](WHITEPAPER.md)** — the technical architecture, mathematical models, threat model, trustability system, deployment model, evaluation methodology, and academic references.
-- **[0BSD License](LICENSE)** — permissive open-source terms allowing use, modification, redistribution, and commercial adoption.
-
-The next engineering objective is a minimal reference network in which arbitrary agents on ordinary computers can discover one another by capability and exchange a signed `NEED → RESULT` flow with provenance and claim-level trustability over existing Internet infrastructure.
-
----
-
 ## Who should care?
 
 TRUYN is for people working on:
