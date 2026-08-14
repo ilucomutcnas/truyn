@@ -134,20 +134,60 @@ Existing infrastructure remains the transport underlay. TRUYN changes the logica
 
 ## Any agent should be able to join
 
-The goal is vendor-neutral interoperability.
+**TRUYN is vendor-neutral by design. Intelligence should be able to communicate with intelligence regardless of who built the model, agent, runtime, IDE, cloud, or device.**
 
-A TRUYN node should be connectable to:
+The target is interoperability with **any agent that can expose or consume an adapter through MCP, an SDK, a local API, a remote API, a gateway, or a native TRUYN client**.
 
-- OpenAI / Codex-based agents
-- Llama and other open-weight models
-- local AI runtimes
-- autonomous software agents
-- sensors and edge devices
-- cloud services
-- enterprise systems
-- future agent frameworks that do not exist yet
+That includes, but is not limited to:
 
-Adapters such as **MCP, SDKs, local APIs, and gateways** can connect existing systems to the network without making those adapter protocols the network itself.
+| Ecosystem | Agents, models, and runtimes TRUYN should be able to connect |
+|---|---|
+| **OpenAI** | ChatGPT, Codex, OpenAI API / Responses-based agents, custom OpenAI agents |
+| **Anthropic** | Claude, Claude Code, Anthropic API-based agents |
+| **Google** | Gemini, Gemini CLI, Gemini Code Assist, Vertex AI / Gemini-based agents |
+| **xAI** | Grok and xAI API-based agents |
+| **Perplexity** | Perplexity Agent API, Sonar-based systems, Perplexity-powered agents |
+| **Microsoft** | Microsoft Copilot Studio agents, Microsoft 365 Copilot agents, Microsoft Agents SDK / Agent Framework systems |
+| **GitHub** | GitHub Copilot, Copilot coding agents, Copilot CLI, custom GitHub agents |
+| **Amazon Web Services** | Amazon Q Developer and AWS-hosted agentic systems |
+| **Cursor** | Cursor Agent and custom agents operating through Cursor environments |
+| **Windsurf** | Windsurf / Cascade-based coding agents |
+| **Meta** | Llama-based agents and open-weight Llama runtimes |
+| **Mistral AI** | Mistral Agents, Mistral Vibe, Mistral API-based agents |
+| **DeepSeek** | DeepSeek-based agents and self-hosted DeepSeek runtimes |
+| **Alibaba / Qwen** | Qwen-based agents and self-hosted Qwen runtimes |
+| **Cohere** | Cohere-powered agents and enterprise agent systems |
+| **NVIDIA** | NVIDIA NIM / Nemotron-based agentic systems and GPU-hosted inference agents |
+| **Local / open-source runtimes** | Ollama, vLLM, llama.cpp and other locally hosted model runtimes |
+| **Agent frameworks** | LangChain / LangGraph, AutoGen, CrewAI, Semantic Kernel and other multi-agent frameworks |
+| **Custom systems** | Private enterprise agents, research agents, robots, sensors, edge devices, autonomous software and agents that do not exist yet |
+
+The list is intentionally open-ended. **TRUYN should never require two agents to use the same model provider, the same framework, or even the same kind of intelligence.**
+
+A Codex agent should be able to request a capability from Claude Code. A Gemini agent should be able to receive a verified result produced by a Llama node. Grok should be able to consume a claim attested by independent Perplexity, Mistral, Qwen, or sensor nodes. A private enterprise agent should be able to participate without becoming dependent on any of them.
+
+```text
+Codex ───────┐
+Claude ──────┤
+Gemini ──────┤
+Grok ────────┤
+Perplexity ──┤
+Copilot ─────┤
+Llama ───────┤
+Mistral ─────┤
+Qwen ────────┤──→ TRUYN ←──→ any intelligence
+DeepSeek ────┤
+Amazon Q ────┤
+Cursor ──────┤
+Windsurf ────┤
+Custom AI ───┘
+```
+
+Adapters such as **MCP, SDKs, local APIs, remote APIs, and gateways** connect existing systems to TRUYN without making those adapter protocols the network itself.
+
+> **MCP can connect an agent to TRUYN. TRUYN connects intelligence to intelligence.**
+
+The names above describe the intended interoperability surface; they do not imply endorsement, partnership, or that every native adapter is already implemented in the current repository.
 
 ---
 
