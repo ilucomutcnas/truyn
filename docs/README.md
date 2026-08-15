@@ -21,6 +21,15 @@ Human-facing documentation for TRUYN architecture, concepts, setup, operations, 
 - [Public Edge Domains](architecture/PUBLIC_EDGE_DOMAINS.md) — intentionally public hostname roles and the public/control-plane separation; live origin/resource identifiers are deliberately excluded.
 - [Multimodal Provider Parity Benchmark](benchmarks/MULTIMODAL_PROVIDER_PARITY.md) — planned apples-to-apples methodology for reasoning, image and video comparisons.
 
+### Measured benchmark evidence
+
+- [Cross-Cloud A/B Baseline](benchmarks/CROSS_CLOUD_AB_2026-08-15.md) — measured baseline; explicitly records where the early PoC did not improve tokens/cost/latency.
+- [Cross-Cloud 8× Hot-Path Optimization](benchmarks/CROSS_CLOUD_8X_OPTIMIZATION_2026-08-15.md) — measured transport/orchestration optimization gate.
+- [Content-Addressed Context Efficiency](benchmarks/CONTEXT_EFFICIENCY_2026-08-15.md) — measured sparse context/delta economic gate.
+- [Semantic Retrieval Gate](benchmarks/SEMANTIC_RETRIEVAL_GATE_2026-08-15.md) — measured natural-language question + root CID retrieval/provenance/economic gate.
+
+Public benchmark evidence describes performance under authorized project-controlled providers. It does not grant public access to the underlying provider accounts and does not substitute for the independent provider-security negative test gate.
+
 ### Getting started
 
 - [BYOK](getting-started/BYOK.md) — target user-facing provider onboarding and credential-locality contract.
