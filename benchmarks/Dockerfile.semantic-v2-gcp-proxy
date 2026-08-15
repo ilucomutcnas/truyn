@@ -1,0 +1,4 @@
+FROM node:20-alpine
+WORKDIR /app
+COPY benchmarks/semantic-v2-gcp-proxy.js ./benchmarks/semantic-v2-gcp-proxy.js
+CMD ["node", "benchmarks/semantic-v2-gcp-proxy.js"]
