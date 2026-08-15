@@ -55,7 +55,6 @@ jobs:
           gcloud services enable \
             aiplatform.googleapis.com \
             cloudcommerceconsumerprocurement.googleapis.com \
-            commerceagreement.googleapis.com \
             --project="$GCP_PROJECT_ID_VALUE" \
             --quiet
           echo 'CLAUDE_REQUIRED_APIS=enabled'
