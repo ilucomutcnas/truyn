@@ -28,7 +28,8 @@ jobs:
       GEMINI_MODEL: gemini-2.5-flash
       GOOGLE_CLOUD_LOCATION: global
       VERTEX_EMBEDDING_LOCATION: us-central1
-      VERTEX_EMBEDDING_MODEL: text-multilingual-embedding-002
+      VERTEX_EMBEDDING_MODEL: gemini-embedding-001
+      VERTEX_EMBEDDING_DIMENSIONS: '768'
       SEMANTIC_V2_CORPUS_BLOCKS: '600'
       SEMANTIC_V2_RETRIEVAL_CASES: '360'
       SEMANTIC_V2_LIVE_CASES: '6'
@@ -149,7 +150,7 @@ jobs:
             --region="$GCP_PROXY_REGION" \
             --image="$image" \
             --service-account="$GCP_RUNTIME_SA_VALUE" \
-            --port=8080 --min=0 --max=1 --cpu=1 --memory=512Mi \
+            --port=8080 --min=0 --max=4 --cpu=1 --memory=512Mi \
             --set-env-vars="BENCHMARK_PROXY_TOKEN=${token}" \
             --no-invoker-iam-check --quiet >/dev/null
           url="$(gcloud run services describe "$GCP_PROXY_SERVICE" --project="$GCP_PROJECT_ID_VALUE" --region="$GCP_PROXY_REGION" --format='value(status.url)')"
@@ -167,7 +168,7 @@ jobs:
         run: |
           set -euo pipefail
           path="/v1/projects/${GCP_PROJECT_ID}/locations/${VERTEX_EMBEDDING_LOCATION}/publishers/google/models/${VERTEX_EMBEDDING_MODEL}:predict"
-          body='{"instances":[{"task_type":"RETRIEVAL_QUERY","content":"multilingual semantic retrieval preflight"}],"parameters":{"autoTruncate":true}}'
+          body='{"instances":[{"task_type":"RETRIEVAL_QUERY","content":"multilingual semantic retrieval preflight"}],"parameters":{"autoTruncate":true,"outputDimensionality":768}}'
           curl -fsS -H "Authorization: Bearer ${GCP_ACCESS_TOKEN}" -H 'Content-Type: application/json' -d "$body" "${VERTEX_API_ENDPOINT}${path}" | jq -e '.predictions[0].embeddings.values | length > 0' >/dev/null
 
       - name: Run multilingual seven-actor Semantic Retrieval Gate v2
