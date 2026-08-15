@@ -51,7 +51,7 @@ function round(value, digits = 9) {
  */
 export function createSemanticContextRouterV2({
   embedder,
-  lexicalTieBreakWeight = 0.015
+  lexicalTieBreakWeight = 0
 } = {}) {
   if (!embedder || typeof embedder.embedMany !== 'function') {
     throw new Error('semantic router v2 requires embedder.embedMany(texts, options)');
