@@ -40,9 +40,9 @@ TRUYN is open, but openness of the protocol is not permission to consume another
 >
 > **TRUYN is open. Intelligence is BYOK by default.**
 
-The target security architecture requires every execution provider to have an accountable owner/tenant boundary, visibility policy and billing mode. Capability matching is followed by server-side authorization before dispatch.
+The reference implementation now enforces a first fail-closed provider boundary: provider ownership is bound to the cryptographic sender of a signed `OFFER`, private-provider discovery and dispatch are authorization-aware, provider-signed requester allowlists support private BYOK providers, and provider-host access plus billing checks run before adapter/upstream execution.
 
-A public relay may be reachable by anyone while private providers remain unusable by foreign requesters. Knowing a provider ID, using a custom client, forging an `ownerId` field or calling a legacy endpoint must not grant access.
+A public relay may be reachable by anyone while private providers remain unusable by foreign requesters. Knowing a provider ID, using a custom client, forging an `ownerId` field or calling a legacy/fast/WebSocket path does not grant access to an unauthorized private provider.
 
 The safety invariant is:
 
@@ -51,14 +51,33 @@ foreign requester
 + public relay
 + known private provider ID
 + custom/malicious client
-= zero owner-funded provider calls
+= zero unauthorized provider execution
 ```
 
-Normal users are expected to **Bring Your Own Intelligence / Bring Your Own Provider (BYOK)**. Their upstream provider credentials remain with their own provider runtime or secure local environment and do not travel through TRUYN protocol envelopes.
+Normal users are expected to **Bring Your Own Intelligence / Bring Your Own Provider (BYOK)**. Their upstream provider credentials remain with their own provider runtime or local/cloud execution environment and do not travel through TRUYN protocol envelopes.
 
-The architecture also supports future explicitly shared, prepaid, subscription or sponsored providers, but no such mode creates an implicit entitlement. Sponsored/free owner-funded access defaults to disabled/zero until deliberately enabled by the provider owner.
+The architecture also supports future explicitly shared, prepaid, subscription or sponsored providers, but no such mode creates an implicit entitlement. Sponsored/free owner-funded access defaults to disabled/zero; prepaid/subscription remain fail-closed until an entitlement resolver exists.
 
-**Important status:** the ownership/BYOK/central-authorization model is an approved target architecture. The current MVP must not be interpreted as production-grade provider isolation until the security gate in the roadmap and threat model is implemented and passes negative tests.
+The production-style public-network plane is also closed by default. Public registration and public dispatch require an explicit public-network master opt-in plus their own separate opt-ins. Implementing BYOK does not itself open a relay.
+
+### BYOK quickstart
+
+The official CLI now implements a first provider setup flow for OpenAI, OpenAI-compatible, Anthropic, Azure OpenAI and Vertex Gemini profiles.
+
+```bash
+truyn init
+
+export OPENAI_API_KEY='...'
+truyn setup --provider openai --model <your-model>
+truyn setup --provider openai --model <your-model> --test
+truyn setup-status
+```
+
+The persisted profile stores the credential **environment-variable name**, not the credential value. `--test` makes a minimal call to the user's configured provider and only then marks the profile verified. Requester and provider use separate TRUYN identities; the remote provider is published private (`owner-only`) for that requester and runs with billing mode `byok`.
+
+For a non-loopback relay, official CLI AI-workload entry points require a verified private BYOK profile. This is defense in depth: relay/provider authorization remains authoritative even against a modified client.
+
+See [Bring Your Own Intelligence](docs/getting-started/BYOK.md) for provider-specific constraints and the exact implemented boundary.
 
 Read:
 
@@ -251,21 +270,21 @@ The names above describe intended interoperability, not endorsement, partnership
 
 ---
 
-## Multi-cloud, multimodal reference target
+## Multi-cloud, multimodal reference implementation
 
-The public reference architecture is designed to test **equivalent capabilities across independent clouds**, rather than comparing unlike outputs.
+The public provider layer contains adapters for equivalent capabilities across independent clouds, rather than requiring protocol-level model names.
 
 | Capability | Google Cloud / Vertex AI | Microsoft Azure / Foundry |
 |---|---|---|
 | Reasoning / text | Gemini | GPT, Grok, DeepSeek, Llama, Mistral, Kimi |
-| Image generation | Google image-generation track (Imagen lineage / current supported Vertex image endpoint) | Azure OpenAI `gpt-image` family; Azure-direct FLUX as an optional second image provider |
-| Video generation | Veo | Sora 2 |
+| Image generation | Google image-generation track | Azure OpenAI `gpt-image`; Azure FLUX adapter |
+| Video generation | Veo | Sora adapter |
 
-This is an **architecture target, not a claim that every listed provider is already implemented or deployed**. Concrete model versions, regions, quotas, deployment IDs, cloud identities and private topology are operational concerns and are not part of the public protocol contract.
+Concrete model versions, regions, quotas, deployment IDs, cloud identities and private topology are operational concerns and are not part of the public protocol contract. Provider availability is also distinct from adapter implementation: a cloud deployment may remain unavailable because of provider entitlement/quota even when the TRUYN adapter path exists.
 
-Reference/test providers funded by a TRUYN operator remain owner-private unless explicitly shared. The existence of a provider in a benchmark or reference deployment does not give public users access to its quota.
+Reference/test providers funded by a TRUYN operator remain owner-private unless explicitly shared. The existence of a provider adapter or private reference deployment does not give public users access to its quota.
 
-Media results are intended to travel through TRUYN as verifiable **artifact references** with provenance, size, media type and digest instead of embedding large image/video binaries in protocol envelopes.
+Media results travel through the normalized artifact path as verifiable references with provenance, size, media type and digest instead of requiring large image/video binaries inside TRUYN RESULT envelopes.
 
 See [Multi-Cloud Provider Architecture](docs/architecture/MULTI_CLOUD_PROVIDER_ARCHITECTURE.md) and [Multimodal Provider Parity Benchmark](docs/benchmarks/MULTIMODAL_PROVIDER_PARITY.md).
 
@@ -283,11 +302,13 @@ A future capability market is an explicit entitlement system. It does not weaken
 
 ## Current status
 
-TRUYN is an **experimental architecture and implementation project**. The repository contains a working MVP relay/node/adapter path, cloud PoC work, protocol drafts, benchmarks and a broader target architecture.
+TRUYN is an **experimental architecture and implementation project**. The repository contains a working MVP relay/node/adapter path, protocol drafts, provider integrations, security gates, local demos and reproducible tests.
 
-The current MVP demonstrates signed identity, capability discovery, routing and result exchange. It is **not yet a production-grade public paid-provider security boundary**. The approved next security architecture requires provider ownership/tenant binding, central server-side authorization, authorization-aware discovery, BYOK-by-default onboarding, billing/quota attribution, private provider backchannels and negative security tests before public users can safely coexist with owner-funded providers.
+The current reference implementation demonstrates signed identity, capability discovery, authorization-aware routing, signed results, private provider requester allowlists, provider-host access control, fail-closed billing modes, explicit public-network configuration gates, and a first official verified BYOK CLI flow.
 
-No document should interpret a public TRUYN endpoint as permission to consume TRUYN-operated provider accounts.
+This does **not** mean the entire future security/control plane is finished. Rich account/tenant ownership, durable distributed quota/accounting, prepaid/subscription entitlement resolution, OS credential-store integration, production origin/perimeter hardening and the future stable mainnet remain additional work.
+
+No document or public endpoint should be interpreted as permission to consume TRUYN-operated provider accounts.
 
 ---
 
