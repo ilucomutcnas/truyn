@@ -26,7 +26,7 @@ jobs:
       AZURE_OPENAI_DEPLOYMENT: truyn-gpt-4-1-mini
       GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID || secrets.GCP_PROJECT_ID }}
       GCP_WIF_PROVIDER_VALUE: ${{ vars.GCP_WIF_PROVIDER || secrets.GCP_WIF_PROVIDER }}
-      GCP_DEPLOYER_SA_VALUE: ${{ vars.GCP_DEPLOYER_SERVICE_ACCOUNT_EMAIL || secrets.GCP_DEPLOYER_SERVICE_ACCOUNT_EMAIL }}
+      GCP_RUNTIME_SA_VALUE: ${{ vars.GCP_RUNTIME_SERVICE_ACCOUNT_EMAIL || secrets.GCP_RUNTIME_SERVICE_ACCOUNT_EMAIL }}
       GOOGLE_CLOUD_LOCATION: global
       GEMINI_MODEL: gemini-2.5-flash
       BENCHMARK_WARMUPS: '1'
@@ -75,22 +75,20 @@ jobs:
           echo "::add-mask::$token"
           echo "AZURE_OPENAI_ACCESS_TOKEN=$token" >> "$GITHUB_ENV"
 
-          # The benchmark runner is an orchestration identity, not the Azure provider runtime identity.
-          # Use an ephemeral account key for the direct control arm so the measurement is not blocked
-          # by data-plane RBAC differences. The key is masked, never printed, never stored, and exists
-          # only for this job. The TRUYN arm continues to use Managed Identity in Container Apps.
           key="$(az cognitiveservices account keys list -g "$AZURE_RG" -n "$AZURE_OPENAI_NAME" --query key1 -o tsv)"
           [[ -n "$key" ]] || { echo 'AZURE_OPENAI_API_KEY=missing'; exit 1; }
           echo "::add-mask::$key"
           echo "AZURE_OPENAI_API_KEY=$key" >> "$GITHUB_ENV"
           echo 'AZURE_DIRECT_CREDENTIALS=ready'
 
-      - name: Authenticate to Google Cloud using WIF
+      # Use the same GCP runtime service account that powers truyn-gemini.
+      # This keeps Vertex AI permissions/principal aligned between direct and TRUYN arms.
+      - name: Authenticate direct Gemini arm as runtime identity
         uses: google-github-actions/auth@v3
         with:
           project_id: ${{ env.GCP_PROJECT_ID }}
           workload_identity_provider: ${{ env.GCP_WIF_PROVIDER_VALUE }}
-          service_account: ${{ env.GCP_DEPLOYER_SA_VALUE }}
+          service_account: ${{ env.GCP_RUNTIME_SA_VALUE }}
           create_credentials_file: true
           export_environment_variables: true
 
