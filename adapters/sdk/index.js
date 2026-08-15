@@ -24,6 +24,19 @@ function billingEstimate(need) {
   return Number.isInteger(value) && value > 0 ? value : null;
 }
 
+function isRecoverableSocketError(error) {
+  const message = String(error?.message || '').toLowerCase();
+  return message === 'fast_socket_closed'
+    || error?.code === 'ECONNRESET'
+    || error?.code === 'ETIMEDOUT'
+    || message.includes('socket hang up')
+    || message.includes('websocket closed');
+}
+
+function delay(ms) {
+  return ms > 0 ? new Promise((resolve) => setTimeout(resolve, ms)) : Promise.resolve();
+}
+
 export function validateAdapter(adapter) {
   if (!adapter || typeof adapter.execute !== 'function') throw new Error('Adapter execute(request) is required');
   const capabilities = normalizeCapabilities(adapter.capabilities);
@@ -40,7 +53,7 @@ export function createFunctionAdapter({ name = 'function-adapter', version = '0.
 }
 
 export class TruynAdapterHost {
-  constructor({ node, adapter, pollIntervalMs = 500, fastPath = false, longPollMs = 25_000, socketPath = false, accessPolicy, billingPolicy = null } = {}) {
+  constructor({ node, adapter, pollIntervalMs = 500, fastPath = false, longPollMs = 25_000, socketPath = false, socketReconnectDelayMs = 250, accessPolicy, billingPolicy = null } = {}) {
     if (!node) throw new Error('node is required');
     this.node = node;
     this.adapter = validateAdapter(adapter);
@@ -48,6 +61,7 @@ export class TruynAdapterHost {
     this.fastPath = fastPath;
     this.longPollMs = longPollMs;
     this.socketPath = socketPath;
+    this.socketReconnectDelayMs = socketReconnectDelayMs;
     this.accessPolicy = accessPolicy || createProviderAccessPolicy();
     this.billingPolicy = billingPolicy;
     this.running = false;
@@ -245,10 +259,19 @@ export class TruynAdapterHost {
     this.running = true;
     this.loopPromise = (async () => {
       while (this.running) {
-        await this.runOnce();
+        try {
+          await this.runOnce();
+        } catch (error) {
+          if (this.running && this.fastPath && this.socketPath && isRecoverableSocketError(error)) {
+            this.node.closeFastSocket?.();
+            await delay(this.socketReconnectDelayMs);
+            continue;
+          }
+          throw error;
+        }
         if (!this.running) break;
         if (!this.fastPath && this.pollIntervalMs > 0) {
-          await new Promise((resolve) => setTimeout(resolve, this.pollIntervalMs));
+          await delay(this.pollIntervalMs);
         }
       }
     })();
