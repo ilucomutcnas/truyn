@@ -44,7 +44,7 @@ export async function proxyCloudflareOrigin(request, env, fetchImpl = globalThis
   }
 
   const incomingUrl = new URL(request.url);
-  if (incomingUrl.host === config.origin.host) {
+  if (incomingUrl.hostname === config.origin.hostname) {
     return jsonResponse(503, { ok: false, error: 'edge_origin_invalid' });
   }
 
