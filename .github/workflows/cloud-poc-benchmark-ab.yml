@@ -1,12 +1,7 @@
-# Controlled trigger: relay trace 8x benchmark round 3, 2026-08-15
+# Expensive benchmark: manual-only to avoid accidental provider quota consumption.
 name: Cloud PoC Cross-Cloud A/B Benchmark
 
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - '.github/workflows/cloud-poc-benchmark-ab.yml'
   workflow_dispatch:
 
 permissions:
