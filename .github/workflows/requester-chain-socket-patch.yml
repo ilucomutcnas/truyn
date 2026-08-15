@@ -1,0 +1,260 @@
+name: Requester WebSocket CHAIN hot-path patch
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/requester-chain-socket-patch.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  patch-test-commit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Apply requester persistent-socket CHAIN patch
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path, before, after):
+              p = Path(path)
+              src = p.read_text()
+              count = src.count(before)
+              if count != 1:
+                  raise SystemExit(f'{path}: expected one anchor, found {count}')
+              p.write_text(src.replace(before, after, 1))
+
+          replace_once(
+              'node/client.js',
+              "    this.fastSocketQueue = [];\n    this.fastSocketWaiters = [];",
+              "    this.fastSocketQueue = [];\n    this.fastSocketWaiters = [];\n    this.fastSocketChainWaiters = new Map();"
+          )
+
+          replace_once(
+              'node/client.js',
+              "  async compactChain(stages, { waitMs = 120_000 } = {}) {\n    if (!this.sessionToken) throw new Error('Node must register before compact CHAIN');\n    if (!Array.isArray(stages) || stages.length < 2) throw new Error('compactChain requires at least two stages');\n    const payload = { stages };\n    const frame = this.compactFrame('CHAIN', payload);\n    const response = await requestJson(`${this.relayUrl}/v1/fast/chains?waitMs=${Math.max(0, Math.floor(waitMs))}`, {\n      method: 'POST',\n      headers: { authorization: `Bearer ${this.sessionToken}` },\n      body: JSON.stringify({ frame, payload })\n    });",
+              "  async compactChain(stages, { waitMs = 120_000 } = {}) {\n    if (!this.sessionToken) throw new Error('Node must register before compact CHAIN');\n    if (!Array.isArray(stages) || stages.length < 2) throw new Error('compactChain requires at least two stages');\n    const payload = { stages };\n    const frame = this.compactFrame('CHAIN', payload);\n    const boundedWait = Math.max(0, Math.min(120_000, Math.floor(waitMs)));\n    let response;\n    let requesterTransport = 'http';\n\n    if (this.fastSocket?.readyState === WebSocket.OPEN) {\n      requesterTransport = 'websocket';\n      response = await new Promise((resolve, reject) => {\n        const waiter = { resolve, reject, timer: null };\n        waiter.timer = setTimeout(() => {\n          if (this.fastSocketChainWaiters.get(frame.i) === waiter) this.fastSocketChainWaiters.delete(frame.i);\n          reject(new Error('fast_socket_chain_timeout'));\n        }, boundedWait || 120_000);\n        this.fastSocketChainWaiters.set(frame.i, waiter);\n        this.fastSocket.send(JSON.stringify({ kind: 'CHAIN', frame, payload, waitMs: boundedWait }), (error) => {\n          if (!error) return;\n          if (this.fastSocketChainWaiters.get(frame.i) === waiter) this.fastSocketChainWaiters.delete(frame.i);\n          clearTimeout(waiter.timer);\n          reject(error);\n        });\n      });\n    } else {\n      response = await requestJson(`${this.relayUrl}/v1/fast/chains?waitMs=${boundedWait}`, {\n        method: 'POST',\n        headers: { authorization: `Bearer ${this.sessionToken}` },\n        body: JSON.stringify({ frame, payload })\n      });\n    }"
+          )
+
+          replace_once(
+              'node/client.js',
+              "      ...response,\n      frame,\n      payload,\n      results: verifiedResults,",
+              "      ...response,\n      requesterTransport,\n      frame,\n      payload,\n      results: verifiedResults,"
+          )
+
+          replace_once(
+              'node/client.js',
+              "  rejectFastSocketWaiters(error) {\n    const waiters = this.fastSocketWaiters.splice(0);\n    for (const waiter of waiters) waiter.reject(error);\n  }",
+              "  rejectFastSocketWaiters(error) {\n    const waiters = this.fastSocketWaiters.splice(0);\n    for (const waiter of waiters) waiter.reject(error);\n  }\n\n  rejectFastSocketChainWaiters(error) {\n    const waiters = [...this.fastSocketChainWaiters.values()];\n    this.fastSocketChainWaiters.clear();\n    for (const waiter of waiters) {\n      if (waiter.timer) clearTimeout(waiter.timer);\n      waiter.reject(error);\n    }\n  }"
+          )
+
+          replace_once(
+              'node/client.js',
+              "          if (message?.kind === 'ACK') return;\n          if (message?.kind === 'ERROR') {\n            this.rejectFastSocketWaiters(new Error(message.error || 'fast_socket_error'));\n            return;\n          }\n          this.deliverFastSocketEvent(message);",
+              "          if (message?.kind === 'ACK') return;\n          if (message?.kind === 'CHAIN_RESULT') {\n            const waiter = this.fastSocketChainWaiters.get(message.chainId);\n            if (!waiter) return;\n            this.fastSocketChainWaiters.delete(message.chainId);\n            if (waiter.timer) clearTimeout(waiter.timer);\n            waiter.resolve(message);\n            return;\n          }\n          if (message?.kind === 'ERROR') {\n            const error = new Error(message.error || 'fast_socket_error');\n            if (message.chainId) {\n              const waiter = this.fastSocketChainWaiters.get(message.chainId);\n              if (waiter) {\n                this.fastSocketChainWaiters.delete(message.chainId);\n                if (waiter.timer) clearTimeout(waiter.timer);\n                waiter.reject(error);\n                return;\n              }\n            }\n            this.rejectFastSocketWaiters(error);\n            this.rejectFastSocketChainWaiters(error);\n            return;\n          }\n          this.deliverFastSocketEvent(message);"
+          )
+
+          replace_once(
+              'node/client.js',
+              "        this.rejectFastSocketWaiters(new Error('fast_socket_closed'));\n      });",
+              "        const closeError = new Error('fast_socket_closed');\n        this.rejectFastSocketWaiters(closeError);\n        this.rejectFastSocketChainWaiters(closeError);\n      });"
+          )
+
+          replace_once(
+              'node/client.js',
+              "    this.rejectFastSocketWaiters(new Error('fast_socket_closed'));\n  }",
+              "    const closeError = new Error('fast_socket_closed');\n    this.rejectFastSocketWaiters(closeError);\n    this.rejectFastSocketChainWaiters(closeError);\n  }"
+          )
+
+          replace_once(
+              'network/relay/server.js',
+              "    stageTransport: chain.trace?.stageTransport || [],\n    segments,",
+              "    requesterTransport: chain.trace?.requesterTransport || (chain.socket ? 'websocket' : 'http'),\n    stageTransport: chain.trace?.stageTransport || [],\n    segments,"
+          )
+
+          replace_once(
+              'network/relay/server.js',
+              "  function closeChain(chain, status, body) {\n    if (chain.timer) clearTimeout(chain.timer);\n    chain.status = status === 200 ? 'completed' : 'failed';\n    chain.completedAt = new Date().toISOString();\n    if (!chain.res.writableEnded) {\n      chain.res.once('finish', () => traceMark(chain, 'responseFlushed'));\n      json(chain.res, status, body);\n    }\n  }",
+              "  function closeChain(chain, status, body) {\n    if (chain.timer) clearTimeout(chain.timer);\n    chain.status = status === 200 ? 'completed' : 'failed';\n    chain.completedAt = new Date().toISOString();\n    if (chain.socket?.readyState === WebSocket.OPEN) {\n      const message = JSON.stringify({ kind: 'CHAIN_RESULT', status, ...body });\n      chain.socket.send(message, (error) => {\n        if (!error) traceMark(chain, 'responseFlushed');\n      });\n      return;\n    }\n    if (chain.res && !chain.res.writableEnded) {\n      chain.res.once('finish', () => traceMark(chain, 'responseFlushed'));\n      json(chain.res, status, body);\n    }\n  }\n\n  function startChain({ requesterNodeId, frame, payload, waitMs, res = null, socket = null, requestReceivedAtMs = performance.now(), requestReceivedWallTime = new Date().toISOString(), requesterTransport = 'http' }) {\n    if (chains.has(frame.i)) return { status: 409, body: { ok: false, error: 'duplicate_chain' } };\n    if (!Array.isArray(payload?.stages) || payload.stages.length < 2 || payload.stages.length > 8) {\n      return { status: 400, body: { ok: false, error: 'invalid_chain_stages' } };\n    }\n    for (let index = 0; index < payload.stages.length; index += 1) {\n      const capability = capabilityName(payload.stages[index]);\n      if (!capability || typeof capability !== 'string') {\n        return { status: 400, body: { ok: false, error: 'invalid_chain_capability', stageIndex: index } };\n      }\n      if (!matchingOffers({ capability, requesterNodeId })[0]) {\n        return { status: 404, body: { ok: false, error: 'no_matching_provider', capability, stageIndex: index } };\n      }\n    }\n\n    const chain = {\n      chainId: frame.i,\n      requester: requesterNodeId,\n      frame,\n      payload,\n      res,\n      socket,\n      timer: null,\n      createdAt: new Date().toISOString(),\n      status: 'running',\n      currentStage: -1,\n      providers: [],\n      providerTrust: [],\n      results: [],\n      trace: {\n        requesterTransport,\n        marks: {\n          publicRequestReceived: { monotonicMs: requestReceivedAtMs, wallTime: requestReceivedWallTime }\n        },\n        stageTransport: []\n      }\n    };\n    chain.timer = setTimeout(() => {\n      if (chain.status !== 'running') return;\n      closeChain(chain, 504, { ok: false, error: 'chain_wait_timeout', chainId: frame.i });\n    }, waitMs || 120_000);\n    chains.set(frame.i, chain);\n    touch(requesterNodeId);\n    dispatchChainStage(chain, 0);\n    return null;\n  }"
+          )
+
+          old_http = """      if (req.method === 'POST' && url.pathname === '/v1/fast/chains') {
+        const requesterNodeId = authenticatedNodeId(req);
+        if (!requesterNodeId) return json(res, 401, { ok: false, error: 'unauthorized' });
+        const requester = nodes.get(requesterNodeId);
+        const { frame, payload } = await readJson(req);
+        const verification = verifyCompactFrame(frame, payload, requester.publicKey, { allowedTypes: ['CHAIN'] });
+        if (!verification.ok) return json(res, 400, { ok: false, error: verification.reason });
+        if (chains.has(frame.i)) return json(res, 409, { ok: false, error: 'duplicate_chain' });
+        if (!Array.isArray(payload?.stages) || payload.stages.length < 2 || payload.stages.length > 8) {
+          return json(res, 400, { ok: false, error: 'invalid_chain_stages' });
+        }
+        for (let index = 0; index < payload.stages.length; index += 1) {
+          const capability = capabilityName(payload.stages[index]);
+          if (!capability || typeof capability !== 'string') {
+            return json(res, 400, { ok: false, error: 'invalid_chain_capability', stageIndex: index });
+          }
+          if (!matchingOffers({ capability, requesterNodeId })[0]) {
+            return json(res, 404, { ok: false, error: 'no_matching_provider', capability, stageIndex: index });
+          }
+        }
+
+        const waitMs = boundedWaitMs(url, 120_000);
+        const chain = {
+          chainId: frame.i,
+          requester: requesterNodeId,
+          frame,
+          payload,
+          res,
+          timer: null,
+          createdAt: new Date().toISOString(),
+          status: 'running',
+          currentStage: -1,
+          providers: [],
+          providerTrust: [],
+          results: [],
+          trace: {
+            marks: {
+              publicRequestReceived: {
+                monotonicMs: requestReceivedAtMs,
+                wallTime: requestReceivedWallTime
+              }
+            },
+            stageTransport: []
+          }
+        };
+        chain.timer = setTimeout(() => {
+          if (chain.status !== 'running') return;
+          closeChain(chain, 504, { ok: false, error: 'chain_wait_timeout', chainId: frame.i });
+        }, waitMs || 120_000);
+        chains.set(frame.i, chain);
+        touch(requesterNodeId);
+        dispatchChainStage(chain, 0);
+        return;
+      }"""
+          new_http = """      if (req.method === 'POST' && url.pathname === '/v1/fast/chains') {
+        const requesterNodeId = authenticatedNodeId(req);
+        if (!requesterNodeId) return json(res, 401, { ok: false, error: 'unauthorized' });
+        const requester = nodes.get(requesterNodeId);
+        const { frame, payload } = await readJson(req);
+        const verification = verifyCompactFrame(frame, payload, requester.publicKey, { allowedTypes: ['CHAIN'] });
+        if (!verification.ok) return json(res, 400, { ok: false, error: verification.reason });
+        const started = startChain({
+          requesterNodeId,
+          frame,
+          payload,
+          waitMs: boundedWaitMs(url, 120_000),
+          res,
+          requestReceivedAtMs,
+          requestReceivedWallTime,
+          requesterTransport: 'http'
+        });
+        if (started) return json(res, started.status, started.body);
+        return;
+      }"""
+          replace_once('network/relay/server.js', old_http, new_http)
+
+          replace_once(
+              'network/relay/server.js',
+              "    socket.on('message', (data) => {\n      const receivedAtMs = performance.now();\n      try {\n        touch(nodeId);\n        const message = JSON.parse(data.toString());\n        if (message?.kind !== 'RESULT') throw new Error('unsupported_socket_message');\n        const processed = processFastResult(nodeId, message.frame, message.payload, receivedAtMs);\n        if (socket.readyState === WebSocket.OPEN) {\n          socket.send(JSON.stringify({ kind: 'ACK', ...processed.body, status: processed.status }));\n        }\n      } catch (error) {\n        if (socket.readyState === WebSocket.OPEN) {\n          socket.send(JSON.stringify({ kind: 'ERROR', ok: false, error: error.message }));\n        }\n      }\n    });",
+              "    socket.on('message', (data) => {\n      const receivedAtMs = performance.now();\n      const receivedWallTime = new Date().toISOString();\n      let message = null;\n      try {\n        touch(nodeId);\n        message = JSON.parse(data.toString());\n        if (message?.kind === 'CHAIN') {\n          const requester = nodes.get(nodeId);\n          const verification = verifyCompactFrame(message.frame, message.payload, requester.publicKey, { allowedTypes: ['CHAIN'] });\n          if (!verification.ok) {\n            socket.send(JSON.stringify({ kind: 'ERROR', chainId: message.frame?.i || null, ok: false, status: 400, error: verification.reason }));\n            return;\n          }\n          const rawWaitMs = Number(message.waitMs);\n          const waitMs = Number.isFinite(rawWaitMs) ? Math.max(0, Math.min(120_000, Math.floor(rawWaitMs))) : 120_000;\n          const started = startChain({\n            requesterNodeId: nodeId,\n            frame: message.frame,\n            payload: message.payload,\n            waitMs,\n            socket,\n            requestReceivedAtMs: receivedAtMs,\n            requestReceivedWallTime: receivedWallTime,\n            requesterTransport: 'websocket'\n          });\n          if (started) {\n            socket.send(JSON.stringify({ kind: 'ERROR', chainId: message.frame?.i || null, ok: false, status: started.status, error: started.body.error }));\n          }\n          return;\n        }\n        if (message?.kind !== 'RESULT') throw new Error('unsupported_socket_message');\n        const processed = processFastResult(nodeId, message.frame, message.payload, receivedAtMs);\n        if (socket.readyState === WebSocket.OPEN) {\n          socket.send(JSON.stringify({ kind: 'ACK', ...processed.body, status: processed.status }));\n        }\n      } catch (error) {\n        if (socket.readyState === WebSocket.OPEN) {\n          socket.send(JSON.stringify({ kind: 'ERROR', chainId: message?.frame?.i || null, ok: false, error: error.message }));\n        }\n      }\n    });"
+          )
+
+          replace_once(
+              'benchmarks/cross-cloud-ab.js',
+              "  if (researchProvider === reviewProvider) throw new Error('TRUYN benchmark requires distinct Azure and Gemini provider identities');\n  console.error(`TRUYN single-request chain ready: research=${researchProvider}; review=${reviewProvider}`);",
+              "  if (researchProvider === reviewProvider) throw new Error('TRUYN benchmark requires distinct Azure and Gemini provider identities');\n  await requester.ensureFastSocket();\n  console.error(`TRUYN single-request chain ready over persistent requester socket: research=${researchProvider}; review=${reviewProvider}`);"
+          )
+
+          replace_once(
+              'benchmarks/cross-cloud-ab.js',
+              "    edgeIngressEgressResidualMs: round(Math.max(0, endToEndLatencyMs - (relayTrace.relayTotalMs || 0)), 3),",
+              "    requesterPublicEdgeResidualMs: round(Math.max(0, endToEndLatencyMs - (relayTrace.relayTotalMs || 0)), 3),"
+          )
+          replace_once(
+              'benchmarks/cross-cloud-ab.js',
+              "      edgeIngressEgressResidualMs: stats(samples, (sample) => sample.orchestrationBreakdown?.edgeIngressEgressResidualMs),",
+              "      requesterPublicEdgeResidualMs: stats(samples, (sample) => sample.orchestrationBreakdown?.requesterPublicEdgeResidualMs),"
+          )
+
+          replace_once(
+              'benchmarks/cross-cloud-ab.js',
+              "    candidate: 'One persistent requester session sends one signed compact CHAIN through relay.truyn.org. Relay dispatches Azure then Gemini internally over provider long-poll backchannels and returns both signed provider RESULTs in one public HTTP response.',",
+              "    candidate: 'One pre-established persistent requester WebSocket sends one signed compact CHAIN through canonical wss://relay.truyn.org. Relay dispatches Azure then Gemini over persistent provider WebSockets and returns both signed provider RESULTs over the same requester WebSocket.',"
+          )
+          replace_once(
+              'benchmarks/cross-cloud-ab.js',
+              "    bootstrapOutsideMeasuredArm: 'Requester registration, OFFER discovery and provider public-key caching happen before warm-up/measured timing. Provider inference remains fully measured.',",
+              "    bootstrapOutsideMeasuredArm: 'Requester registration, OFFER discovery, provider public-key caching, and canonical requester WebSocket handshake happen before warm-up/measured timing. Provider inference remains fully measured.',"
+          )
+          replace_once(
+              'benchmarks/cross-cloud-ab.js',
+              "    providerBackchannel: 'Providers use the relay origin directly; the public requester remains on canonical relay.truyn.org / Front Door.',",
+              "    requesterTransport: 'Persistent WebSocket over canonical wss://relay.truyn.org / Front Door; TLS/WebSocket handshake is completed before measured arms. HTTP CHAIN remains fallback only.',\n    providerBackchannel: 'Providers use persistent WebSockets to the relay origin directly; the public requester remains on canonical relay.truyn.org / Front Door.',"
+          )
+
+          replace_once(
+              'tests/mvp.test.js',
+              "  const requester = new TruynNode({ relayUrl });\n  t.after(() => researchNode.closeFastSocket());\n  t.after(() => reviewNode.closeFastSocket());",
+              "  const requester = new TruynNode({ relayUrl });\n  t.after(() => researchNode.closeFastSocket());\n  t.after(() => reviewNode.closeFastSocket());\n  t.after(() => requester.closeFastSocket());"
+          )
+          replace_once(
+              'tests/mvp.test.js',
+              "  await requester.register();\n  const researchWork = researchHost.runOnce();",
+              "  await requester.register();\n  await requester.ensureFastSocket();\n  const researchWork = researchHost.runOnce();"
+          )
+          replace_once(
+              'tests/mvp.test.js',
+              "  assert.equal(relay.state.providerSockets.size, 2);",
+              "  assert.equal(result.requesterTransport, 'websocket');\n  assert.equal(relay.state.providerSockets.size, 3);"
+          )
+          replace_once(
+              'tests/mvp.test.js',
+              "  assert.deepEqual(traceBody.trace.stageTransport, ['socket', 'socket']);",
+              "  assert.equal(traceBody.trace.requesterTransport, 'websocket');\n  assert.deepEqual(traceBody.trace.stageTransport, ['socket', 'socket']);"
+          )
+          PY
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Run complete test suite
+        run: npm test
+
+      - name: Verify intended diff only
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf node_modules
+          rm -f package-lock.json
+          git diff --check
+          git status --short
+          git diff -- node/client.js network/relay/server.js benchmarks/cross-cloud-ab.js tests/mvp.test.js
+          unexpected="$(git status --short | awk '{print $2}' | grep -vE '^(node/client.js|network/relay/server.js|benchmarks/cross-cloud-ab.js|tests/mvp.test.js|.github/workflows/requester-chain-socket-patch.yml)$' || true)"
+          [[ -z "$unexpected" ]] || { echo "Unexpected paths: $unexpected"; exit 1; }
+
+      - name: Commit tested hot-path change
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add node/client.js network/relay/server.js benchmarks/cross-cloud-ab.js tests/mvp.test.js
+          git rm .github/workflows/requester-chain-socket-patch.yml
+          git diff --cached --check
+          git commit -m 'Move requester CHAIN hot path to persistent WebSocket'
+          git push origin HEAD:main
