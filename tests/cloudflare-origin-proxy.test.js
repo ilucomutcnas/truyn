@@ -51,7 +51,7 @@ test('Cloudflare origin proxy rejects the public edge hostname even when an alte
   assert.equal(calls, 0, 'recursive origin configuration must fail before fetch');
 });
 
-test('Cloudflare origin proxy overwrites client proof, preserves path/query/body, and never follows redirects', async () => {
+test('Cloudflare origin proxy overwrites client proof and preserves path/query/body', async () => {
   let captured = null;
   const fetchImpl = async (url, init) => {
     captured = { url: String(url), init };
@@ -86,6 +86,25 @@ test('Cloudflare origin proxy overwrites client proof, preserves path/query/body
   assert.equal(captured.init.headers.get(ORIGIN_GUARD_HEADER), 'edge-secret');
   assert.equal(captured.init.headers.get('authorization'), 'Bearer requester-session');
   assert.equal(await new Response(captured.init.body).text(), '{"hello":"world"}');
+});
+
+test('Cloudflare origin proxy denies redirects without leaking the private redirect target', async () => {
+  const response = await proxyCloudflareOrigin(request('https://relay.example/v1/needs'), {
+    TRUYN_ORIGIN_URL: 'https://origin.example',
+    TRUYN_ORIGIN_GUARD_TOKEN: 'edge-secret'
+  }, async (_url, init) => {
+    assert.equal(init.redirect, 'manual');
+    return new Response(null, {
+      status: 302,
+      headers: { location: 'https://private-origin.example/internal/path' }
+    });
+  });
+
+  assert.equal(response.status, 502);
+  assert.equal(response.headers.get('location'), null);
+  const text = await response.text();
+  assert.equal(text.includes('private-origin.example'), false);
+  assert.deepEqual(JSON.parse(text), { ok: false, error: 'origin_redirect_denied' });
 });
 
 test('Cloudflare origin proxy preserves WebSocket upgrade while injecting only the Worker proof', async () => {
