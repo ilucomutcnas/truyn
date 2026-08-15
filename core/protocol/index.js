@@ -2,10 +2,10 @@ import { createHash, randomBytes, randomUUID, sign as cryptoSign, verify as cryp
 
 export const PROTOCOL = 'TRUYN/1';
 export const MVP_TYPES = Object.freeze(['IDENTITY', 'OFFER', 'NEED', 'RESULT', 'REVOKE']);
-export const COMPACT_TYPES = Object.freeze(['NEED', 'RESULT', 'CHAIN']);
+export const COMPACT_TYPES = Object.freeze(['NEED', 'RESULT', 'CHAIN', 'CONTEXT_PUT', 'CONTEXT_DELTA']);
 
-const COMPACT_TYPE_CODES = Object.freeze({ NEED: 'N', RESULT: 'R', CHAIN: 'C' });
-const COMPACT_CODE_TYPES = Object.freeze({ N: 'NEED', R: 'RESULT', C: 'CHAIN' });
+const COMPACT_TYPE_CODES = Object.freeze({ NEED: 'N', RESULT: 'R', CHAIN: 'C', CONTEXT_PUT: 'P', CONTEXT_DELTA: 'D' });
+const COMPACT_CODE_TYPES = Object.freeze({ N: 'NEED', R: 'RESULT', C: 'CHAIN', P: 'CONTEXT_PUT', D: 'CONTEXT_DELTA' });
 
 function normalize(value) {
   if (Array.isArray(value)) return value.map(normalize);

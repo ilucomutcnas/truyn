@@ -1,0 +1,40 @@
+name: Context Ref CI
+
+on:
+  push:
+    branches:
+      - perf/context-ref-delta-gate
+    paths:
+      - 'core/context/**'
+      - 'core/protocol/**'
+      - 'node/**'
+      - 'network/relay/**'
+      - 'adapters/sdk/**'
+      - 'benchmarks/context-ref-delta-ab.js'
+      - 'tests/context.test.js'
+      - '.github/workflows/context-ref-ci.yml'
+  pull_request:
+    paths:
+      - 'core/context/**'
+      - 'core/protocol/**'
+      - 'node/**'
+      - 'network/relay/**'
+      - 'adapters/sdk/**'
+      - 'benchmarks/context-ref-delta-ab.js'
+      - 'tests/context.test.js'
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm install --no-audit --no-fund
+      - run: npm test
+      - run: node --check benchmarks/context-ref-delta-ab.js
+      - run: git diff --check
