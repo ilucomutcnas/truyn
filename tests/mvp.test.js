@@ -10,6 +10,7 @@ import {
   verifyEnvelope
 } from '../core/protocol/index.js';
 import { trustabilityLite } from '../core/trust/index.js';
+import { createLocalDevelopmentAccessPolicy } from '../core/security/provider-access.js';
 import { createRelay } from '../network/relay/server.js';
 import { TruynNode } from '../node/client.js';
 import { createFunctionAdapter, TruynAdapterHost } from '../adapters/sdk/index.js';
@@ -121,6 +122,7 @@ test('single signed CHAIN executes two providers over persistent sockets with <=
   const researchNode = new TruynNode({ relayUrl });
   const reviewNode = new TruynNode({ relayUrl });
   const requester = new TruynNode({ relayUrl });
+  const localAccess = createLocalDevelopmentAccessPolicy();
   t.after(() => researchNode.closeFastSocket());
   t.after(() => reviewNode.closeFastSocket());
   t.after(() => requester.closeFastSocket());
@@ -129,6 +131,7 @@ test('single signed CHAIN executes two providers over persistent sockets with <=
     node: researchNode,
     fastPath: true,
     socketPath: true,
+    accessPolicy: localAccess,
     adapter: createFunctionAdapter({
       name: 'research-test',
       capabilities: ['research'],
@@ -139,6 +142,7 @@ test('single signed CHAIN executes two providers over persistent sockets with <=
     node: reviewNode,
     fastPath: true,
     socketPath: true,
+    accessPolicy: localAccess,
     adapter: createFunctionAdapter({
       name: 'review-test',
       capabilities: ['review'],
