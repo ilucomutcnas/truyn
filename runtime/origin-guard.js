@@ -1,7 +1,8 @@
 import http from 'node:http';
 import { timingSafeEqual } from 'node:crypto';
+import { ORIGIN_GUARD_HEADER } from './origin-guard-contract.js';
 
-export const ORIGIN_GUARD_HEADER = 'x-truyn-origin-token';
+export { ORIGIN_GUARD_HEADER } from './origin-guard-contract.js';
 
 function enabled(value) {
   const normalized = String(value || '').trim().toLowerCase();
