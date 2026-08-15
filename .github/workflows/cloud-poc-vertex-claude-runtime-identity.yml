@@ -1,0 +1,81 @@
+name: Cloud PoC Vertex Claude Runtime Identity
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/cloud-poc-vertex-claude-runtime-identity.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  prove:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      GCP_PROJECT_ID_VALUE: ${{ vars.GCP_PROJECT_ID || secrets.GCP_PROJECT_ID }}
+      GCP_WIF_PROVIDER_VALUE: ${{ vars.GCP_WIF_PROVIDER || secrets.GCP_WIF_PROVIDER }}
+      GCP_DEPLOYER_SA_VALUE: ${{ vars.GCP_DEPLOYER_SERVICE_ACCOUNT_EMAIL || secrets.GCP_DEPLOYER_SERVICE_ACCOUNT_EMAIL }}
+      GCP_RUNTIME_SA_VALUE: ${{ vars.GCP_RUNTIME_SERVICE_ACCOUNT_EMAIL || secrets.GCP_RUNTIME_SERVICE_ACCOUNT_EMAIL }}
+      CLAUDE_MODEL: claude-sonnet-4-6
+      CLAUDE_LOCATION: global
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Authenticate deployer through WIF
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID_VALUE }}
+          workload_identity_provider: ${{ env.GCP_WIF_PROVIDER_VALUE }}
+          service_account: ${{ env.GCP_DEPLOYER_SA_VALUE }}
+          create_credentials_file: true
+          export_environment_variables: true
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID_VALUE }}
+
+      - name: Obtain runtime identity token and call Claude
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ -n "${GCP_RUNTIME_SA_VALUE:-}" ]] || { echo 'GCP_RUNTIME_SA=missing'; exit 1; }
+          token="$(gcloud auth print-access-token --impersonate-service-account="$GCP_RUNTIME_SA_VALUE")"
+          endpoint="https://aiplatform.googleapis.com/v1/projects/${GCP_PROJECT_ID_VALUE}/locations/${CLAUDE_LOCATION}/publishers/anthropic/models/${CLAUDE_MODEL}:rawPredict"
+          cat > request.json <<'JSON'
+          {
+            "anthropic_version": "vertex-2023-10-16",
+            "max_tokens": 32,
+            "stream": false,
+            "messages": [
+              {
+                "role": "user",
+                "content": [
+                  {"type": "text", "text": "Return exactly TRUYN_VERTEX_CLAUDE_OK and nothing else."}
+                ]
+              }
+            ]
+          }
+          JSON
+          http_code="$(curl -sS -o response.json -w '%{http_code}' \
+            -X POST \
+            -H "Authorization: Bearer ${token}" \
+            -H 'Content-Type: application/json; charset=utf-8' \
+            --data-binary @request.json \
+            "$endpoint")"
+          if [[ "$http_code" != "200" ]]; then
+            echo "VERTEX_CLAUDE_HTTP=$http_code"
+            jq '{error}' response.json || cat response.json
+            exit 1
+          fi
+          output="$(jq -r '[.content[]? | select(.type == "text") | .text] | join("\n")' response.json | xargs)"
+          [[ "$output" == 'TRUYN_VERTEX_CLAUDE_OK' ]] || { echo "Unexpected Claude output: $output"; exit 1; }
+          jq '{id, model, stop_reason, usage, marker: ([.content[]? | select(.type == "text") | .text] | join("\n"))}' response.json
+          echo 'VERTEX_CLAUDE_IDENTITY=runtime-service-account'
+          echo 'VERTEX_CLAUDE_PUBLIC_RELAY_EXPOSURE=false'
+          echo 'VERTEX_CLAUDE_RUNTIME_PROOF=success'
