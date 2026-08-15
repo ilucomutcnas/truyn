@@ -23,6 +23,7 @@ if (providerName === 'vertex-image') {
     projectId: process.env.GCP_PROJECT_ID,
     location: process.env.GCP_IMAGE_REGION || 'global',
     model: process.env.VERTEX_IMAGE_MODEL || 'gemini-2.5-flash-image',
+    endpoint: process.env.VERTEX_API_ENDPOINT || 'https://aiplatform.googleapis.com',
     accessTokenProvider: async () => process.env.GCP_ACCESS_TOKEN
   };
 } else if (providerName === 'azure-openai-image') {
