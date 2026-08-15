@@ -1,19 +1,14 @@
 import http from 'node:http';
-import { createVertexGeminiProvider } from '../adapters/providers/vertex-gemini.js';
 
 const host = process.env.HOST || '0.0.0.0';
 const port = Number(process.env.PORT || 8080);
 const authToken = process.env.BENCHMARK_PROXY_TOKEN;
+const metadataHost = process.env.GCE_METADATA_HOST || 'metadata.google.internal';
+const vertexEndpoint = (process.env.REAL_VERTEX_API_ENDPOINT || 'https://aiplatform.googleapis.com').replace(/\/$/, '');
 
 if (!authToken) throw new Error('BENCHMARK_PROXY_TOKEN is required');
 
-const provider = createVertexGeminiProvider({
-  projectId: process.env.GCP_PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT,
-  location: process.env.GOOGLE_CLOUD_LOCATION || 'global',
-  model: process.env.GEMINI_MODEL || 'gemini-2.5-flash'
-});
-
-function send(res, status, body) {
+function sendJson(res, status, body) {
   const data = JSON.stringify(body);
   res.writeHead(status, {
     'content-type': 'application/json; charset=utf-8',
@@ -22,34 +17,56 @@ function send(res, status, body) {
   res.end(data);
 }
 
+async function runtimeAccessToken() {
+  const response = await fetch(`http://${metadataHost}/computeMetadata/v1/instance/service-accounts/default/token`, {
+    headers: { 'Metadata-Flavor': 'Google' }
+  });
+  const body = await response.json();
+  if (!response.ok || !body.access_token) {
+    throw new Error(body?.error_description || body?.error || `Google metadata HTTP ${response.status}`);
+  }
+  return body.access_token;
+}
+
 const server = http.createServer(async (req, res) => {
   if (req.method === 'GET' && req.url === '/health') {
-    return send(res, 200, { ok: true, role: 'benchmark-gemini-direct-proxy' });
+    return sendJson(res, 200, { ok: true, role: 'benchmark-gemini-direct-proxy' });
   }
 
-  if (req.method !== 'POST' || req.url !== '/invoke') {
-    return send(res, 404, { ok: false, error: 'not_found' });
+  if (req.method !== 'POST' || !req.url?.startsWith('/v1/projects/') || !req.url.endsWith(':generateContent')) {
+    return sendJson(res, 404, { ok: false, error: 'not_found' });
   }
 
   if (req.headers.authorization !== `Bearer ${authToken}`) {
-    return send(res, 401, { ok: false, error: 'unauthorized' });
+    return sendJson(res, 401, { ok: false, error: 'unauthorized' });
   }
 
   try {
-    let raw = '';
+    const chunks = [];
+    let size = 0;
     for await (const chunk of req) {
-      raw += chunk;
-      if (raw.length > 1_000_000) throw new Error('request_too_large');
+      size += chunk.length;
+      if (size > 1_000_000) throw new Error('request_too_large');
+      chunks.push(chunk);
     }
-    const body = JSON.parse(raw || '{}');
-    const result = await provider.execute({
-      capability: body.capability,
-      input: body.input,
-      policy: body.policy || {}
+    const requestBody = Buffer.concat(chunks);
+    const token = await runtimeAccessToken();
+    const upstream = await fetch(`${vertexEndpoint}${req.url}`, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${token}`,
+        'content-type': req.headers['content-type'] || 'application/json'
+      },
+      body: requestBody
     });
-    return send(res, 200, { ok: true, result });
+    const body = Buffer.from(await upstream.arrayBuffer());
+    res.writeHead(upstream.status, {
+      'content-type': upstream.headers.get('content-type') || 'application/json; charset=utf-8',
+      'content-length': body.length
+    });
+    res.end(body);
   } catch (error) {
-    return send(res, 500, { ok: false, error: error.message });
+    sendJson(res, 500, { error: { message: error.message } });
   }
 });
 
