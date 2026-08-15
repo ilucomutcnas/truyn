@@ -1,4 +1,5 @@
 import { createProviderAccessPolicy } from '../../core/security/provider-access.js';
+import { billingAttributionFromExecution } from '../../core/security/billing-attribution.js';
 
 function normalizeCapabilities(capabilities) {
   const values = typeof capabilities === 'function' ? capabilities() : capabilities;
@@ -121,6 +122,18 @@ export class TruynAdapterHost {
     return null;
   }
 
+  billingAttribution(need, billing, metadata, status) {
+    const providerId = this.node?.identity?.nodeId;
+    return billingAttributionFromExecution({
+      need,
+      providerId,
+      providerOwnerId: providerId,
+      billing,
+      resultMetadata: metadata,
+      status
+    });
+  }
+
   async runOnce() {
     await this.publishCapabilities();
     let polled;
@@ -213,6 +226,7 @@ export class TruynAdapterHost {
         if (billing) {
           metadata.billingMode = billing.mode;
           metadata.billingResponsibility = billing.billingResponsibility;
+          metadata.billingAttribution = this.billingAttribution(need, billing, metadata, 'success');
         }
         if (contextResolution) metadata.contextResolution = contextResolution;
         if (need.chain) metadata.chainStage = need.stageIndex;
@@ -229,6 +243,7 @@ export class TruynAdapterHost {
         if (billing) {
           metadata.billingMode = billing.mode;
           metadata.billingResponsibility = billing.billingResponsibility;
+          metadata.billingAttribution = this.billingAttribution(need, billing, metadata, 'failed');
         }
         if (need.chain) metadata.chainStage = need.stageIndex;
         if (compact) await this.node.compactResult(need.id, null, metadata);
