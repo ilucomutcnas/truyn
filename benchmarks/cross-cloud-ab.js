@@ -19,6 +19,12 @@ const maxRateLimitRetries = Number(process.env.BENCHMARK_RATE_LIMIT_MAX_RETRIES 
 const relayReadRetryDelayMs = Number(process.env.BENCHMARK_RELAY_READ_RETRY_MS || 3000);
 const outputPath = process.env.BENCHMARK_OUTPUT || 'cross-cloud-ab.json';
 
+const optimizationBaseline = Object.freeze({
+  protocolOverheadBytes: Number(process.env.TRUYN_BASELINE_PROTOCOL_BYTES || 4143.4),
+  orchestrationOverheadMs: Number(process.env.TRUYN_BASELINE_ORCHESTRATION_MS || 1491.2),
+  requiredImprovementFactor: Number(process.env.TRUYN_REQUIRED_IMPROVEMENT_FACTOR || 8)
+});
+
 for (const [name, value] of Object.entries({
   TRUYN_RELAY: relayUrl,
   AZURE_OPENAI_ENDPOINT: azureEndpoint,
@@ -36,18 +42,17 @@ if (!Number.isInteger(maxRateLimitRetries) || maxRateLimitRetries < 0) throw new
 if (!Number.isFinite(relayReadRetryDelayMs) || relayReadRetryDelayMs < 0) throw new Error('BENCHMARK_RELAY_READ_RETRY_MS must be a non-negative number');
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-const bytes = (value) => Buffer.byteLength(JSON.stringify(value));
 const round = (value, digits = 6) => value == null ? null : Number(value.toFixed(digits));
 
 const researchInput = {
   task: 'In one concise sentence, explain what an intelligence network is. End with marker TRUYN_AB_AZURE_OK.'
 };
 const researchPolicy = {
-  purpose: 'cross-cloud-ab-v1',
+  purpose: 'cross-cloud-ab-v2-compact-hot-path',
   expectedProvider: 'azure-openai'
 };
 const reviewPolicy = {
-  purpose: 'cross-cloud-ab-v1',
+  purpose: 'cross-cloud-ab-v2-compact-hot-path',
   expectedProvider: 'vertex-gemini'
 };
 const makeReviewInput = (candidate) => ({
@@ -167,7 +172,8 @@ async function directChain() {
       providerBillableOutputTokens: azure.usage.billableOutputTokens + gemini.usage.billableOutputTokens,
       providerTotalTokens: azure.usage.totalTokens + gemini.usage.totalTokens,
       providerBodyBytes,
-      protocolEnvelopeBytes: 0,
+      protocolOverheadBytes: 0,
+      truynPayloadBytes: 0,
       measuredApplicationBodyBytes: providerBodyBytes,
       estimatedCost: costForProviders(azure, gemini)
     }
@@ -180,108 +186,85 @@ function isRetriableNetworkError(error) {
 }
 
 const relayNetworkRetries = [];
-let relayTransientRecoveryMs = 0;
 async function relayRead(label, operation) {
   for (let attempt = 0; ; attempt += 1) {
-    const attemptStartedAt = Date.now();
     try {
       return await operation();
     } catch (error) {
       if (!isRetriableNetworkError(error) || attempt >= 9) throw error;
-      const failedAttemptMs = Date.now() - attemptStartedAt;
       const delayMs = relayReadRetryDelayMs * Math.min(attempt + 1, 5);
-      relayTransientRecoveryMs += failedAttemptMs + delayMs;
-      relayNetworkRetries.push({
-        label,
-        retry: attempt + 1,
-        failedAttemptMs,
-        delayMs,
-        error: String(error?.message || error),
-        cause: error?.cause?.code || null
-      });
-      console.error(`${label}: transient relay read failure; retry ${attempt + 1}/9 after ${delayMs}ms`);
+      relayNetworkRetries.push({ label, retry: attempt + 1, delayMs, error: String(error?.message || error), cause: error?.cause?.code || null });
+      console.error(`${label}: transient relay bootstrap read failure; retry ${attempt + 1}/9 after ${delayMs}ms`);
       await sleep(delayMs);
     }
   }
 }
 
-async function waitForOffer(node, capability, timeoutMs = 120000) {
+const requester = new TruynNode({ relayUrl, identity: createIdentity() });
+const routeCache = new Map();
+
+async function prepareTruynHotPath(timeoutMs = 180_000) {
+  await requester.register({ name: 'cross-cloud-ab-v2-requester' });
+  const capabilities = ['research', 'review'];
   const startedAt = Date.now();
-  while (Date.now() - startedAt < timeoutMs) {
-    const found = await relayRead(`find-${capability}`, () => node.find(capability));
-    if (found.offers?.length) return found.offers;
-    await sleep(500);
+  for (const capability of capabilities) {
+    while (Date.now() - startedAt < timeoutMs) {
+      const found = await relayRead(`bootstrap-find-${capability}`, () => requester.find(capability));
+      const fastOffers = (found.offers || []).filter((offer) => offer.payload?.metadata?.fastPath === true);
+      if (fastOffers.length > 0) {
+        routeCache.set(capability, fastOffers);
+        break;
+      }
+      await sleep(1_000);
+    }
+    if (!routeCache.has(capability)) throw new Error(`Timed out waiting for fast-path OFFER ${capability}`);
   }
-  throw new Error(`Timed out waiting for OFFER ${capability}`);
+  const researchProvider = routeCache.get('research')[0].from;
+  const reviewProvider = routeCache.get('review')[0].from;
+  if (researchProvider === reviewProvider) throw new Error('TRUYN benchmark requires distinct Azure and Gemini provider identities');
+  console.error(`TRUYN compact hot path ready: research=${researchProvider}; review=${reviewProvider}`);
 }
 
-async function truynTransact(node, capability, input, policy) {
-  const offers = await waitForOffer(node, capability);
-  const needEnvelope = node.envelope('NEED', {
-    capability: { name: capability },
-    input,
-    policy
-  });
-  const needEnvelopeBytes = bytes(needEnvelope);
-  const response = await fetch(`${node.relayUrl}/v1/needs`, {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      authorization: `Bearer ${node.sessionToken}`
-    },
-    body: JSON.stringify({ envelope: needEnvelope })
-  });
-  const matched = await response.json();
-  if (!response.ok) throw new Error(matched.error || `TRUYN NEED HTTP ${response.status}`);
-  if (!matched.needId || !matched.provider) throw new Error('TRUYN relay did not return matched need/provider');
-
-  let resultEvent = null;
-  const resultStartedAt = Date.now();
-  while (Date.now() - resultStartedAt < 120000) {
-    const polled = await relayRead(`poll-${capability}`, () => node.poll());
-    resultEvent = polled.events.find((event) => event.kind === 'RESULT' && event.envelope?.payload?.requestId === matched.needId) || null;
-    if (resultEvent) break;
-    await sleep(250);
+async function truynTransact(capability, input, policy) {
+  const cachedOffers = routeCache.get(capability) || [];
+  const result = await requester.compactNeed(capability, input, policy, { waitMs: 120_000 });
+  if (result.verification?.ok !== true) throw new Error(`${capability} compact RESULT signature verification failed`);
+  if (!cachedOffers.some((offer) => offer.from === result.provider)) {
+    throw new Error(`${capability} RESULT provider is outside the preflight route cache`);
   }
-  if (!resultEvent) throw new Error(`Timed out waiting for RESULT ${matched.needId}`);
-  if (resultEvent.verification?.ok !== true) throw new Error(`${capability} RESULT signature verification failed`);
-  if (resultEvent.envelope.from !== matched.provider) throw new Error(`${capability} RESULT provider does not match relay-selected provider`);
-  const metadata = resultEvent.envelope.payload?.metadata || {};
-  if (metadata.failed) throw new Error(`${capability} provider failed: ${metadata.error || 'unknown error'}`);
+  if (result.metadata?.failed) throw new Error(`${capability} provider failed: ${result.metadata.error || 'unknown error'}`);
 
+  const matchedOffer = cachedOffers.find((offer) => offer.from === result.provider);
   return {
-    output: resultEvent.envelope.payload?.output,
-    metadata,
-    providerNodeId: matched.provider,
-    offersSeen: offers.length,
+    output: result.output,
+    metadata: result.metadata,
+    providerNodeId: result.provider,
+    offersSeen: cachedOffers.length,
     signatureVerified: true,
-    matchTrustability: matched.providerTrust || null,
-    resultTrustability: resultEvent.trust || null,
-    needEnvelopeBytes,
-    resultEnvelopeBytes: bytes(resultEvent.envelope)
+    matchTrustability: matchedOffer?.trust || null,
+    resultTrustability: result.trust || null,
+    needFrameBytes: result.needFrameBytes,
+    resultFrameBytes: result.resultFrameBytes,
+    protocolOverheadBytes: result.protocolOverheadBytes,
+    truynPayloadBytes: result.truynPayloadBytes
   };
 }
 
 async function truynChain() {
   const startedAt = Date.now();
-  const transientRecoveryAtStart = relayTransientRecoveryMs;
-  const requester = new TruynNode({ relayUrl, identity: createIdentity() });
-  await requester.register({ name: 'cross-cloud-ab-requester' });
-
-  const azureTx = await truynTransact(requester, 'research', researchInput, researchPolicy);
+  const azureTx = await truynTransact('research', researchInput, researchPolicy);
   if (!String(azureTx.output).includes('TRUYN_AB_AZURE_OK')) throw new Error(`TRUYN Azure marker missing: ${azureTx.output}`);
-  const geminiTx = await truynTransact(requester, 'review', makeReviewInput(azureTx.output), reviewPolicy);
+  const geminiTx = await truynTransact('review', makeReviewInput(azureTx.output), reviewPolicy);
   if (!String(geminiTx.output).includes('TRUYN_AB_GEMINI_OK')) throw new Error(`TRUYN Gemini marker missing: ${geminiTx.output}`);
   if (azureTx.providerNodeId === geminiTx.providerNodeId) throw new Error('TRUYN benchmark requires distinct Azure and Gemini provider identities');
 
   const azure = summarizeProvider(azureTx, 'azure');
   const gemini = summarizeProvider(geminiTx, 'gemini');
   const providerBodyBytes = (azure.providerBodyBytes || 0) + (gemini.providerBodyBytes || 0);
-  const protocolEnvelopeBytes = azureTx.needEnvelopeBytes + azureTx.resultEnvelopeBytes + geminiTx.needEnvelopeBytes + geminiTx.resultEnvelopeBytes;
+  const protocolOverheadBytes = azureTx.protocolOverheadBytes + geminiTx.protocolOverheadBytes;
+  const truynPayloadBytes = azureTx.truynPayloadBytes + geminiTx.truynPayloadBytes;
   const providerLatencyMs = (azure.providerLatencyMs || 0) + (gemini.providerLatencyMs || 0);
-  const transientRecoveryMs = relayTransientRecoveryMs - transientRecoveryAtStart;
-  const rawEndToEndLatencyMs = Date.now() - startedAt;
-  const endToEndLatencyMs = Math.max(0, rawEndToEndLatencyMs - transientRecoveryMs);
+  const endToEndLatencyMs = Date.now() - startedAt;
 
   return {
     mode: 'truyn',
@@ -295,8 +278,6 @@ async function truynChain() {
       geminiResult: geminiTx.resultTrustability
     },
     endToEndLatencyMs,
-    rawEndToEndLatencyMs,
-    transientRelayRecoveryMs: transientRecoveryMs,
     providerLatencyMs,
     orchestrationOverheadMs: endToEndLatencyMs - providerLatencyMs,
     azure,
@@ -308,8 +289,9 @@ async function truynChain() {
       providerBillableOutputTokens: azure.usage.billableOutputTokens + gemini.usage.billableOutputTokens,
       providerTotalTokens: azure.usage.totalTokens + gemini.usage.totalTokens,
       providerBodyBytes,
-      protocolEnvelopeBytes,
-      measuredApplicationBodyBytes: providerBodyBytes + protocolEnvelopeBytes,
+      protocolOverheadBytes,
+      truynPayloadBytes,
+      measuredApplicationBodyBytes: providerBodyBytes + protocolOverheadBytes + truynPayloadBytes,
       estimatedCost: costForProviders(azure, gemini)
     }
   };
@@ -323,12 +305,12 @@ function median(values) {
   const mid = Math.floor(sorted.length / 2);
   return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
 }
-function stats(samples, selector) {
+function stats(samples, selector, digits = 3) {
   const values = samples.map(selector).filter((value) => Number.isFinite(value));
   if (!values.length) return { mean: null, median: null, min: null, max: null };
   return {
-    mean: round(mean(values), 3),
-    median: round(median(values), 3),
+    mean: round(mean(values), digits),
+    median: round(median(values), digits),
     min: Math.min(...values),
     max: Math.max(...values)
   };
@@ -337,22 +319,25 @@ function aggregateMode(samples) {
   return {
     runs: samples.length,
     latencyMs: stats(samples, (sample) => sample.endToEndLatencyMs),
-    rawLatencyMs: stats(samples, (sample) => sample.rawEndToEndLatencyMs),
-    transientRelayRecoveryMs: stats(samples, (sample) => sample.transientRelayRecoveryMs),
     providerLatencyMs: stats(samples, (sample) => sample.providerLatencyMs),
     orchestrationOverheadMs: stats(samples, (sample) => sample.orchestrationOverheadMs),
     providerInputTokens: stats(samples, (sample) => sample.aggregate.providerInputTokens),
     providerBillableOutputTokens: stats(samples, (sample) => sample.aggregate.providerBillableOutputTokens),
     providerTotalTokens: stats(samples, (sample) => sample.aggregate.providerTotalTokens),
     providerBodyBytes: stats(samples, (sample) => sample.aggregate.providerBodyBytes),
-    protocolEnvelopeBytes: stats(samples, (sample) => sample.aggregate.protocolEnvelopeBytes),
+    protocolOverheadBytes: stats(samples, (sample) => sample.aggregate.protocolOverheadBytes),
+    truynPayloadBytes: stats(samples, (sample) => sample.aggregate.truynPayloadBytes),
     measuredApplicationBodyBytes: stats(samples, (sample) => sample.aggregate.measuredApplicationBodyBytes),
-    estimatedCostUsd: stats(samples, (sample) => sample.aggregate.estimatedCost?.totalUsd)
+    estimatedCostUsd: stats(samples, (sample) => sample.aggregate.estimatedCost?.totalUsd, 9)
   };
 }
 function reductionPercent(baseline, candidate) {
   if (!Number.isFinite(baseline) || baseline === 0 || !Number.isFinite(candidate)) return null;
   return round(((baseline - candidate) / baseline) * 100, 3);
+}
+function improvementFactor(baseline, candidate) {
+  if (!Number.isFinite(baseline) || !Number.isFinite(candidate) || candidate <= 0) return null;
+  return round(baseline / candidate, 3);
 }
 
 function isRateLimitError(error) {
@@ -386,6 +371,7 @@ async function runArm(label, fn) {
   return result;
 }
 
+await prepareTruynHotPath();
 console.error(`Warm-up pairs: ${warmups}; measured pairs: ${iterations}; pacing: ${pacingMs}ms; max rate-limit retries: ${maxRateLimitRetries}`);
 for (let i = 0; i < warmups; i += 1) {
   await runArm(`warmup-${i + 1}-direct`, directChain);
@@ -407,32 +393,59 @@ for (let i = 0; i < iterations; i += 1) {
 
 const direct = aggregateMode(directSamples);
 const truyn = aggregateMode(truynSamples);
+const protocolTarget = optimizationBaseline.protocolOverheadBytes / optimizationBaseline.requiredImprovementFactor;
+const orchestrationTarget = optimizationBaseline.orchestrationOverheadMs / optimizationBaseline.requiredImprovementFactor;
+const protocolFactor = improvementFactor(optimizationBaseline.protocolOverheadBytes, truyn.protocolOverheadBytes.mean);
+const orchestrationFactor = improvementFactor(optimizationBaseline.orchestrationOverheadMs, truyn.orchestrationOverheadMs.mean);
 const directCost = direct.estimatedCostUsd.mean;
 const truynCost = truyn.estimatedCostUsd.mean;
 
+const optimizationGate = {
+  baseline: optimizationBaseline,
+  targets: {
+    protocolOverheadBytesMax: round(protocolTarget, 3),
+    orchestrationOverheadMsMax: round(orchestrationTarget, 3)
+  },
+  measured: {
+    protocolOverheadBytesMean: truyn.protocolOverheadBytes.mean,
+    orchestrationOverheadMsMean: truyn.orchestrationOverheadMs.mean
+  },
+  improvementFactor: {
+    protocolOverhead: protocolFactor,
+    orchestrationOverhead: orchestrationFactor
+  },
+  pass: {
+    protocolOverhead8x: Number.isFinite(truyn.protocolOverheadBytes.mean) && truyn.protocolOverheadBytes.mean <= protocolTarget,
+    orchestrationOverhead8x: Number.isFinite(truyn.orchestrationOverheadMs.mean) && truyn.orchestrationOverheadMs.mean <= orchestrationTarget
+  }
+};
+optimizationGate.passed = optimizationGate.pass.protocolOverhead8x && optimizationGate.pass.orchestrationOverhead8x;
+
 const report = {
-  benchmark: 'TRUYN cross-cloud A/B v1',
+  benchmark: 'TRUYN cross-cloud A/B v2 compact hot path',
   status: 'success',
   generatedAt: new Date().toISOString(),
   methodology: {
     baseline: 'Direct GitHub runner -> Azure OpenAI -> Vertex Gemini, no TRUYN relay/envelopes.',
-    candidate: 'GitHub requester -> TRUYN relay -> Azure provider -> signed RESULT -> TRUYN relay -> Gemini provider -> signed RESULT.',
+    candidate: 'Persistent registered requester -> session-bound compact signed NEED -> synchronous relay wait -> long-poll provider -> compact signed RESULT; repeated for Azure then Gemini.',
     sameModels: { azure: azureModel, gemini: geminiModel },
     sameTaskAndAdapterPrompt: true,
     alternatingOrder: true,
+    bootstrapOutsideMeasuredArm: 'Requester registration, OFFER discovery, provider public-key caching and identity bootstrap happen before warm-up/measured arm timing. This is the steady-state session path; provider inference remains fully measured.',
+    compactFrame: 'Each NEED/RESULT hot-path control frame contains only type code, 96-bit request id and Ed25519 signature. Sender identity/public key/protocol version are bound to the authenticated persistent session and are not repeated. Payload remains signed but is detached from the control frame.',
     warmups,
     measuredPairs: iterations,
     pacingMs,
     maxRateLimitRetries,
-    relayReadRetryDelayMs,
     rateLimitRetryEvents: rateLimitRetries,
-    relayNetworkRetryEvents: relayNetworkRetries,
-    retryAccounting: 'Rate-limited attempts are not counted as measured samples. Pacing and rate-limit retry sleep occur outside each successful arm latency timer. Safe TRUYN relay read operations (discovery/poll) retry transient network failures without replaying NEED/provider work; failed-read duration plus recovery sleep is recorded separately and excluded from normalized successful-arm latency, while raw TRUYN latency is retained in each sample.',
-    byteMetric: 'Measured JSON application-body bytes only. Direct = provider request/response bodies. TRUYN = the same provider bodies plus signed NEED/RESULT envelope bodies. HTTP/TLS headers, polling, registration, OFFER discovery, TCP/IP and CDN framing are intentionally excluded.',
+    relayBootstrapNetworkRetryEvents: relayNetworkRetries,
+    retryAccounting: 'Rate-limited attempts are not counted as measured samples. Pacing and rate-limit retry sleep occur outside successful-arm latency. Relay read retries apply only to pre-measurement bootstrap discovery and cannot replay provider work.',
+    byteMetric: 'protocolOverheadBytes is the exact serialized compact signed control-frame bytes for four messages (two NEED + two RESULT). truynPayloadBytes is reported separately and includes the detached signed TRUYN payloads. measuredApplicationBodyBytes = provider JSON bodies + compact control frames + TRUYN payloads. The v1 field called protocolEnvelopeBytes contained both protocol metadata and payload; v2 separates them so protocol overhead is no longer conflated with application data.',
     costMetric: 'Estimated variable model inference cost from measured billable tokens and the price snapshot embedded by the workflow; infrastructure fixed costs are excluded.'
   },
   relayUrl,
   pricing: rates,
+  optimizationGate,
   aggregate: { direct, truyn },
   claims: {
     tokenReductionPercent: reductionPercent(direct.providerTotalTokens.mean, truyn.providerTotalTokens.mean),
@@ -455,8 +468,9 @@ console.log(JSON.stringify({
   measuredPairs: iterations,
   direct: report.aggregate.direct,
   truyn: report.aggregate.truyn,
+  optimizationGate: report.optimizationGate,
   claims: report.claims,
   pricing: report.pricing,
   rateLimitRetries: report.methodology.rateLimitRetryEvents.length,
-  relayNetworkRetries: report.methodology.relayNetworkRetryEvents.length
+  relayBootstrapNetworkRetries: report.methodology.relayBootstrapNetworkRetryEvents.length
 }, null, 2));

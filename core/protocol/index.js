@@ -1,7 +1,11 @@
-import { createHash, randomUUID, sign as cryptoSign, verify as cryptoVerify, createPublicKey } from 'node:crypto';
+import { createHash, randomBytes, randomUUID, sign as cryptoSign, verify as cryptoVerify, createPublicKey } from 'node:crypto';
 
 export const PROTOCOL = 'TRUYN/1';
 export const MVP_TYPES = Object.freeze(['IDENTITY', 'OFFER', 'NEED', 'RESULT', 'REVOKE']);
+export const COMPACT_TYPES = Object.freeze(['NEED', 'RESULT']);
+
+const COMPACT_TYPE_CODES = Object.freeze({ NEED: 'N', RESULT: 'R' });
+const COMPACT_CODE_TYPES = Object.freeze({ N: 'NEED', R: 'RESULT' });
 
 function normalize(value) {
   if (Array.isArray(value)) return value.map(normalize);
@@ -84,4 +88,64 @@ export function verifyEnvelope(envelope, { allowedTypes = MVP_TYPES } = {}) {
   );
 
   return ok ? { ok: true } : { ok: false, reason: 'invalid_signature' };
+}
+
+export function compactRequestId() {
+  return randomBytes(12).toString('base64url');
+}
+
+export function compactType(frame) {
+  return COMPACT_CODE_TYPES[frame?.t] || null;
+}
+
+function compactSigningValue(type, id, payload) {
+  const code = COMPACT_TYPE_CODES[type];
+  if (!code) throw new Error(`Unsupported compact message type: ${type}`);
+  return [code, id, payload];
+}
+
+export function createCompactFrame({ type, payload, privateKeyPem, id = compactRequestId() }) {
+  if (!COMPACT_TYPES.includes(type)) throw new Error(`Unsupported compact message type: ${type}`);
+  if (!id || typeof id !== 'string' || !payload || !privateKeyPem) {
+    throw new Error('id, payload and privateKeyPem are required for compact frames');
+  }
+
+  const code = COMPACT_TYPE_CODES[type];
+  const signature = cryptoSign(
+    null,
+    Buffer.from(canonicalize(compactSigningValue(type, id, payload))),
+    privateKeyPem
+  ).toString('base64url');
+
+  // Hot-path identity is session-bound. Public key, node ID, protocol version and
+  // timestamps stay in the registered identity/session and are not repeated here.
+  return { t: code, i: id, s: signature };
+}
+
+export function verifyCompactFrame(frame, payload, publicKeyPem, { allowedTypes = COMPACT_TYPES } = {}) {
+  if (!frame || !frame.t || !frame.i || !frame.s || !payload || !publicKeyPem) {
+    return { ok: false, reason: 'missing_required_field' };
+  }
+  const type = compactType(frame);
+  if (!type || !allowedTypes.includes(type)) return { ok: false, reason: 'unsupported_type' };
+
+  let signature;
+  try {
+    signature = Buffer.from(frame.s, 'base64url');
+  } catch {
+    return { ok: false, reason: 'invalid_signature_encoding' };
+  }
+  if (signature.length !== 64) return { ok: false, reason: 'invalid_signature_encoding' };
+
+  const ok = cryptoVerify(
+    null,
+    Buffer.from(canonicalize(compactSigningValue(type, frame.i, payload))),
+    publicKeyPem,
+    signature
+  );
+  return ok ? { ok: true, type } : { ok: false, reason: 'invalid_signature' };
+}
+
+export function compactFrameBytes(frame) {
+  return Buffer.byteLength(JSON.stringify(frame));
 }

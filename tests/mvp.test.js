@@ -1,7 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createIdentity, signValue, verifyValue } from '../core/identity/index.js';
-import { createEnvelope, nodeIdFromPublicKey, verifyEnvelope } from '../core/protocol/index.js';
+import {
+  compactFrameBytes,
+  createCompactFrame,
+  createEnvelope,
+  nodeIdFromPublicKey,
+  verifyCompactFrame,
+  verifyEnvelope
+} from '../core/protocol/index.js';
 import { trustabilityLite } from '../core/trust/index.js';
 import { createRelay } from '../network/relay/server.js';
 import { TruynNode } from '../node/client.js';
@@ -33,6 +40,18 @@ test('signed TRUYN envelope verifies and tampering is rejected', () => {
   const tampered = structuredClone(envelope);
   tampered.payload.input.query = 'changed';
   assert.deepEqual(verifyEnvelope(tampered), { ok: false, reason: 'invalid_signature' });
+});
+
+test('session-bound compact frames preserve Ed25519 verification under 125 bytes', () => {
+  const identity = createIdentity();
+  const payload = { capability: { name: 'research' }, input: { query: 'hello' }, policy: {} };
+  const frame = createCompactFrame({ type: 'NEED', payload, privateKeyPem: identity.privateKeyPem });
+  assert.equal(verifyCompactFrame(frame, payload, identity.publicKeyPem).ok, true);
+  assert.ok(compactFrameBytes(frame) <= 125, `compact frame was ${compactFrameBytes(frame)} bytes`);
+
+  const tampered = structuredClone(payload);
+  tampered.input.query = 'changed';
+  assert.deepEqual(verifyCompactFrame(frame, tampered, identity.publicKeyPem), { ok: false, reason: 'invalid_signature' });
 });
 
 test('trustability lite increases after successful tasks', () => {
@@ -76,6 +95,35 @@ test('two independent nodes discover, route NEED and return signed RESULT', asyn
   assert.equal(requesterEvents.events[0].verification.ok, true);
   assert.equal(requesterEvents.events[0].envelope.payload.requestId, requestId);
   assert.ok(requesterEvents.events[0].trust.score > 0);
+});
+
+test('compact long-poll NEED returns signed RESULT synchronously with <= 250 protocol bytes per transaction', async (t) => {
+  const relay = createRelay();
+  const relayUrl = await relay.listen({ port: 0 });
+  t.after(() => relay.close());
+
+  const provider = new TruynNode({ relayUrl });
+  const requester = new TruynNode({ relayUrl });
+  await provider.register();
+  await requester.register();
+  await provider.offer('research', { fastPath: true });
+
+  const providerWork = (async () => {
+    const polled = await provider.pollCompact({ waitMs: 2_000 });
+    assert.equal(polled.events.length, 1);
+    const event = polled.events[0];
+    assert.equal(event.kind, 'NEED');
+    assert.equal(event.verification.ok, true);
+    await provider.compactResult(event.frame.i, { answer: 'working' }, { providerLatencyMs: 1 });
+  })();
+
+  const result = await requester.compactNeed('research', { query: 'TRUYN' }, {}, { waitMs: 2_000 });
+  await providerWork;
+
+  assert.equal(result.output.answer, 'working');
+  assert.equal(result.verification.ok, true);
+  assert.equal(result.provider, provider.identity.nodeId);
+  assert.ok(result.protocolOverheadBytes <= 250, `compact transaction overhead was ${result.protocolOverheadBytes} bytes`);
 });
 
 test('relay excludes stale OFFERs and routes to the live replacement provider', async (t) => {
