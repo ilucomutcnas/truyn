@@ -3,11 +3,6 @@ name: Cloud PoC Semantic Retrieval A/B
 
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - '.github/workflows/cloud-poc-semantic-retrieval-ab.yml'
-      - 'benchmarks/semantic-retrieval-ab.js'
 
 concurrency:
   group: truyn-semantic-retrieval-gate
