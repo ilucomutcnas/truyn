@@ -10,6 +10,7 @@ test('Azure Foundry adapter uses OpenAI v1 chat completions and normalizes telem
     deployment: 'DeepSeek-V3.2',
     vendor: 'deepseek',
     family: 'deepseek',
+    apiKey: null,
     accessTokenProvider: async () => 'azure-token',
     fetchImpl: async (url, options) => {
       calls.push({ url: String(url), options });
