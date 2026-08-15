@@ -12,6 +12,8 @@ This document prevents architectural ideas from being lost between the whitepape
 | Repository ownership | `STRUCTURE.md` and subsystem READMEs |
 | Implementation sequence | `ROADMAP.md` |
 | Public explanation | `README.md` |
+| Public multi-cloud provider target | `docs/architecture/MULTI_CLOUD_PROVIDER_ARCHITECTURE.md` |
+| Multimodal comparison methodology | `docs/benchmarks/MULTIMODAL_PROVIDER_PARITY.md` |
 
 A mismatch is a defect to be reconciled. README/roadmap language MUST NOT silently create protocol semantics that do not exist in `spec/`.
 
@@ -71,6 +73,49 @@ When EVI is positive and policy permits, additional verification is justified.
 
 ### Capability economy
 Cost-aware routing is part of the core request model; mandatory settlement is not. A future capability market can add payment/settlement adapters without making TRUYN dependent on a blockchain, currency or provider.
+
+## Multi-cloud and multimodal provider contract
+
+TRUYN routes stable logical capabilities. Cloud vendors, model families and concrete model versions are provider metadata and policy inputs; they are not the primary capability namespace.
+
+Reference capabilities include:
+
+```text
+reasoning.general
+media.image.generate
+media.image.edit
+media.video.generate
+media.video.transform
+```
+
+The public reference target maintains capability parity across Google Cloud and Microsoft Azure so benchmarks can compare reasoning with reasoning, image generation with image generation, and video generation with video generation.
+
+The current public target is documented in `MULTI_CLOUD_PROVIDER_ARCHITECTURE.md`. It includes Google reasoning/image/video tracks and Azure reasoning providers plus Azure image and video generation. Catalog entries are not implementation claims.
+
+### Media results
+
+Large image/video binaries SHOULD NOT be embedded directly in signed TRUYN envelopes when an authenticated/content-addressed artifact reference can represent them.
+
+A media `RESULT` should carry a logical artifact descriptor such as:
+
+```text
+artifact id
+media type
+content digest
+size
+provenance
+retrieval reference
+```
+
+Provider-specific temporary URLs, bucket names and credentials are adapter/storage concerns, not protocol identity.
+
+### Asynchronous providers
+
+A provider MAY require a long-running job or polling operation. That execution detail MUST remain behind the provider adapter. At the network boundary the requester still observes a normal TRUYN request/result lifecycle.
+
+### Provider identity isolation
+
+Different provider families or materially different capability runtimes SHOULD remain independently attributable so TRUYN can preserve provider-specific provenance, health, latency, cost and trust history. Reusing implementation code does not require collapsing provider identities.
 
 ## Network modes
 
