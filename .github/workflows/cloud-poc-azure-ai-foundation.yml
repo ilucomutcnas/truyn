@@ -23,6 +23,7 @@ jobs:
       AZURE_OPENAI_DEPLOYMENT: truyn-gpt-4-1-mini
       AZURE_OPENAI_MODEL: gpt-4.1-mini
       AZURE_OPENAI_MODEL_VERSION: '2025-04-14'
+      AZURE_OPENAI_CAPACITY: '100'
     steps:
       - name: Azure login with OIDC
         uses: azure/login@v2
@@ -73,7 +74,7 @@ jobs:
               --model-version "$AZURE_OPENAI_MODEL_VERSION" \
               --model-format OpenAI \
               --sku-name Standard \
-              --sku-capacity 1 \
+              --sku-capacity "$AZURE_OPENAI_CAPACITY" \
               >/dev/null
             echo 'AZURE_OPENAI_DEPLOYMENT=created'
           fi
