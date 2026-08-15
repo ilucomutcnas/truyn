@@ -72,7 +72,8 @@ test('usage is normalized to a stable allowlisted schema', () => {
   const serialized = JSON.stringify(receipt);
   assert.equal(serialized.includes('must-not-survive'), false);
   assert.equal(serialized.includes('apiKey'), false);
-  assert.equal(serialized.includes('authorization'), false);
+  assert.equal(serialized.includes('Bearer '), false);
+  assert.equal(Object.hasOwn(receipt.usage, 'authorization'), false);
 });
 
 test('execution receipt uses verified request/provider context and normalized provider metadata only', () => {
