@@ -1,0 +1,124 @@
+name: Cloud PoC Infrastructure Discovery
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/cloud-poc-discovery.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  discover-azure:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Azure login with OIDC
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID || secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Discover TRUYN Azure resources
+        shell: bash
+        run: |
+          set -euo pipefail
+          rg=truyn
+          echo "AZURE_SUBSCRIPTION=$(az account show --query name -o tsv)"
+          echo "AZURE_RESOURCE_GROUP=$rg"
+          echo "AZURE_RG_LOCATION=$(az group show -n "$rg" --query location -o tsv)"
+          echo '--- resources ---'
+          az resource list -g "$rg" --query '[].{name:name,type:type,location:location}' -o table
+
+          echo '--- Azure OpenAI / AI Services accounts ---'
+          accounts="$(az cognitiveservices account list -g "$rg" --query "[?kind=='OpenAI' || kind=='AIServices'].name" -o tsv)"
+          if [[ -z "$accounts" ]]; then
+            echo 'AZURE_AI_ACCOUNT_FOUND=false'
+          else
+            echo 'AZURE_AI_ACCOUNT_FOUND=true'
+            while IFS= read -r account; do
+              [[ -n "$account" ]] || continue
+              endpoint="$(az cognitiveservices account show -g "$rg" -n "$account" --query properties.endpoint -o tsv)"
+              kind="$(az cognitiveservices account show -g "$rg" -n "$account" --query kind -o tsv)"
+              echo "AZURE_AI_ACCOUNT=$account kind=$kind endpoint=$endpoint"
+              echo "AZURE_AI_DEPLOYMENTS_FOR=$account"
+              az cognitiveservices account deployment list -g "$rg" -n "$account" --query '[].{deployment:name,model:properties.model.name,version:properties.model.version,sku:sku.name,capacity:sku.capacity}' -o table || true
+            done <<< "$accounts"
+          fi
+
+          echo '--- Container Apps ---'
+          az containerapp env list -g "$rg" --query '[].{name:name,location:location,staticIp:properties.staticIp}' -o table || true
+          az containerapp list -g "$rg" --query '[].{name:name,fqdn:properties.configuration.ingress.fqdn,provisioning:properties.provisioningState}' -o table || true
+
+          echo '--- Azure Container Registries ---'
+          az acr list -g "$rg" --query '[].{name:name,loginServer:loginServer,sku:sku.name}' -o table || true
+
+  discover-gcp:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GCP_PROJECT_ID_VALUE: ${{ vars.GCP_PROJECT_ID || secrets.GCP_PROJECT_ID }}
+      GCP_WIF_PROVIDER_VALUE: ${{ vars.GCP_WIF_PROVIDER || secrets.GCP_WIF_PROVIDER }}
+      GCP_DEPLOYER_SA_VALUE: ${{ vars.GCP_DEPLOYER_SERVICE_ACCOUNT_EMAIL || secrets.GCP_DEPLOYER_SERVICE_ACCOUNT_EMAIL }}
+      GCP_RUNTIME_SA_VALUE: ${{ vars.GCP_RUNTIME_SERVICE_ACCOUNT_EMAIL || secrets.GCP_RUNTIME_SERVICE_ACCOUNT_EMAIL }}
+      GCP_REGION_CONFIGURED: ${{ vars.GCP_REGION || secrets.GCP_REGION }}
+    steps:
+      - name: Normalize GCP region
+        shell: bash
+        run: |
+          set -euo pipefail
+          region="$(printf '%s' "$GCP_REGION_CONFIGURED" | grep -oE '[a-z]+-[a-z0-9]+[0-9]|global' | head -n1 || true)"
+          [[ -n "$region" ]] || { echo 'GCP_REGION_FORMAT=invalid'; exit 1; }
+          echo "GCP_REGION_VALUE=$region" >> "$GITHUB_ENV"
+
+      - name: Authenticate to Google Cloud using WIF
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID_VALUE }}
+          workload_identity_provider: ${{ env.GCP_WIF_PROVIDER_VALUE }}
+          service_account: ${{ env.GCP_DEPLOYER_SA_VALUE }}
+          create_credentials_file: true
+          export_environment_variables: true
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID_VALUE }}
+
+      - name: Discover TRUYN GCP resources
+        shell: bash
+        run: |
+          set -euo pipefail
+          project="$GCP_PROJECT_ID_VALUE"
+          region="$GCP_REGION_VALUE"
+          runtime_sa="$GCP_RUNTIME_SA_VALUE"
+          echo "GCP_PROJECT=$project"
+          echo "GCP_REGION=$region"
+          echo "GCP_RUNTIME_SERVICE_ACCOUNT=$runtime_sa"
+
+          echo '--- enabled APIs ---'
+          for api in run.googleapis.com artifactregistry.googleapis.com aiplatform.googleapis.com iamcredentials.googleapis.com; do
+            state="$(gcloud services list --project="$project" --enabled --filter="config.name:$api" --format='value(config.name)' | head -n1 || true)"
+            echo "$api=$([[ -n "$state" ]] && echo enabled || echo disabled)"
+          done
+
+          echo '--- runtime service account project roles ---'
+          gcloud projects get-iam-policy "$project" \
+            --flatten='bindings[].members' \
+            --filter="bindings.members:serviceAccount:${runtime_sa}" \
+            --format='table(bindings.role)' || true
+
+          echo '--- Cloud Run services ---'
+          if [[ "$region" != global ]]; then
+            gcloud run services list --project="$project" --region="$region" --format='table(metadata.name,status.url,status.conditions[0].status)' || true
+            echo '--- Artifact Registry repositories ---'
+            gcloud artifacts repositories list --project="$project" --location="$region" --format='table(name,format)' || true
+          else
+            gcloud run services list --project="$project" --platform=managed --format='table(metadata.name,location,status.url)' || true
+            gcloud artifacts repositories list --project="$project" --format='table(name,format,location)' || true
+          fi
