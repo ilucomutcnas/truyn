@@ -39,17 +39,24 @@ export function createVertexGeminiProvider({
     capabilities,
     async execute({ capability, input, policy }) {
       const startedAt = Date.now();
+      const providerOptions = policy?.providerOptions && typeof policy.providerOptions === 'object' ? policy.providerOptions : {};
+      const { providerOptions: _providerOptions, ...taskPolicy } = policy || {};
+      const thinkingBudget = providerOptions.thinkingBudget;
+      if (thinkingBudget != null && (!Number.isInteger(thinkingBudget) || thinkingBudget < -1)) {
+        throw new Error('Vertex Gemini thinkingBudget must be an integer >= -1');
+      }
       const prompt = [
         `You are a TRUYN provider for capability: ${capability}.`,
         'Return only the useful task result. Do not describe TRUYN internals unless asked.',
         `Task input: ${typeof input === 'string' ? input : JSON.stringify(input)}`,
-        Object.keys(policy || {}).length ? `Request policy: ${JSON.stringify(policy)}` : null
+        Object.keys(taskPolicy).length ? `Request policy: ${JSON.stringify(taskPolicy)}` : null
       ].filter(Boolean).join('\n\n');
 
       const token = await accessTokenProvider({ fetchImpl });
       const modelPath = `projects/${projectId}/locations/${location}/publishers/google/models/${model}`;
       const requestBody = JSON.stringify({
-        contents: [{ role: 'user', parts: [{ text: prompt }] }]
+        contents: [{ role: 'user', parts: [{ text: prompt }] }],
+        ...(thinkingBudget == null ? {} : { generationConfig: { thinkingConfig: { thinkingBudget } } })
       });
       const response = await fetchImpl(`${endpoint.replace(/\/$/, '')}/v1/${modelPath}:generateContent`, {
         method: 'POST',
@@ -75,6 +82,7 @@ export function createVertexGeminiProvider({
           providerRequestBodyBytes,
           providerResponseBodyBytes,
           providerBodyBytes: providerRequestBodyBytes + providerResponseBodyBytes,
+          thinkingBudget: thinkingBudget ?? null,
           usage: body.usageMetadata || null
         }
       };
