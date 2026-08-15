@@ -8,7 +8,7 @@ TRUYN is an open-source project for **agent-to-agent communication, decentralize
 
 No new cables. No new hardware Internet. A new network contract.
 
-[Manifesto](MANIFESTO.md) · [Whitepaper](WHITEPAPER.md) · [Architecture](STRUCTURE.md) · [Protocol](spec/protocol/v1/README.md) · [Roadmap](ROADMAP.md) · [0BSD License](LICENSE)
+[Manifesto](MANIFESTO.md) · [Whitepaper](WHITEPAPER.md) · [Architecture](STRUCTURE.md) · [Multi-cloud providers](docs/architecture/MULTI_CLOUD_PROVIDER_ARCHITECTURE.md) · [Protocol](spec/protocol/v1/README.md) · [Roadmap](ROADMAP.md) · [0BSD License](LICENSE)
 
 ---
 
@@ -200,6 +200,26 @@ The names above describe intended interoperability, not endorsement, partnership
 
 ---
 
+## Multi-cloud, multimodal reference target
+
+The public reference architecture is designed to test **equivalent capabilities across independent clouds**, rather than comparing unlike outputs.
+
+| Capability | Google Cloud / Vertex AI | Microsoft Azure / Foundry |
+|---|---|---|
+| Reasoning / text | Gemini | GPT, Grok, DeepSeek, Llama, Mistral, Kimi |
+| Image generation | Google image-generation track (Imagen lineage / current supported Vertex image endpoint) | Azure OpenAI `gpt-image` family; Azure-direct FLUX as an optional second image provider |
+| Video generation | Veo | Sora 2 |
+
+This is an **architecture target, not a claim that every listed provider is already implemented or deployed**. Concrete model versions, regions, quotas and access requirements are resolved at deployment/benchmark time.
+
+The distinction matters for Grok: xAI offers Grok Imagine image/video generation through xAI's own API, but the current Azure Foundry Grok catalog documents the Azure Grok path as chat/reasoning; some variants accept image input while returning text. TRUYN therefore does not advertise Azure Grok as an image/video generator unless that capability becomes explicitly available through the deployed Azure catalog.
+
+Media results are intended to travel through TRUYN as verifiable **artifact references** with provenance, size, media type and digest instead of embedding large image/video binaries in protocol envelopes.
+
+See [Multi-Cloud Provider Architecture](docs/architecture/MULTI_CLOUD_PROVIDER_ARCHITECTURE.md) and [Multimodal Provider Parity Benchmark](docs/benchmarks/MULTIMODAL_PROVIDER_PARITY.md).
+
+---
+
 ## Capability economy
 
 TRUYN's routing model can support a future open market of machine capabilities: inference, verification, translation, storage, data access, code review, sensing and other services. Providers can advertise cost and conditions; requesters can choose according to trust, quality, latency, location, privacy, availability and price.
@@ -231,6 +251,8 @@ TRUYN uses the **Zero-Clause BSD (0BSD)** license to minimize friction for resea
 - [Manifesto](MANIFESTO.md) — why TRUYN should exist.
 - [Whitepaper](WHITEPAPER.md) — academic rationale, formulas, threat model and research basis.
 - [Architecture Contract](docs/architecture/ARCHITECTURE_CONTRACT.md) — canonical mapping of concepts to implementation owners.
+- [Multi-Cloud Provider Architecture](docs/architecture/MULTI_CLOUD_PROVIDER_ARCHITECTURE.md) — public Google/Azure reasoning, image and video capability architecture.
+- [Multimodal Provider Parity Benchmark](docs/benchmarks/MULTIMODAL_PROVIDER_PARITY.md) — planned apples-to-apples benchmark methodology.
 - [TRUYN/1 Protocol](spec/protocol/v1/README.md) — normative protocol semantics.
 - [Repository Structure](STRUCTURE.md) — where each subsystem belongs.
 - [Roadmap](ROADMAP.md) — staged implementation plan.
