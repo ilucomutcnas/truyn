@@ -1,0 +1,241 @@
+name: Temporary Semantic v2 Projection Retrieval Proof
+
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/tmp-semantic-v2-retrieval-projection.yml']
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  retrieval:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      GCP_PROJECT_ID_VALUE: ${{ vars.GCP_PROJECT_ID || secrets.GCP_PROJECT_ID }}
+      GCP_WIF_PROVIDER_VALUE: ${{ vars.GCP_WIF_PROVIDER || secrets.GCP_WIF_PROVIDER }}
+      GCP_DEPLOYER_SA_VALUE: ${{ vars.GCP_DEPLOYER_SERVICE_ACCOUNT_EMAIL || secrets.GCP_DEPLOYER_SERVICE_ACCOUNT_EMAIL }}
+      GCP_RUNTIME_SA_VALUE: ${{ vars.GCP_RUNTIME_SERVICE_ACCOUNT_EMAIL || secrets.GCP_RUNTIME_SERVICE_ACCOUNT_EMAIL }}
+      GCP_PROXY_REGION: us-east4
+      GCP_AR_REPO: truyn-poc
+      GCP_PROXY_SERVICE: truyn-semanticv2-projection-${{ github.run_id }}
+      GEMINI_MODEL: gemini-2.5-flash
+      GOOGLE_CLOUD_LOCATION: global
+      VERTEX_EMBEDDING_LOCATION: us-central1
+      VERTEX_EMBEDDING_MODEL: gemini-embedding-001
+      VERTEX_EMBEDDING_DIMENSIONS: '768'
+      SEMANTIC_V2_CORPUS_BLOCKS: '600'
+      SEMANTIC_V2_RETRIEVAL_CASES: '360'
+      SEMANTIC_V2_LIVE_CASES: '6'
+      SEMANTIC_V2_OUTPUT: semantic-retrieval-v2-projection.json
+      SEMANTIC_V2_SOURCE_SHA: 6f2ddf743e83ad1704a831a7058a93ad668c6a69
+      SEMANTIC_V2_PROXY_SHA: c1ea39a3f5a0408035fea7f00604ff14310eda10
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm install --ignore-scripts --no-audit --no-fund
+
+      - name: Load immutable benchmark sources into runner only
+        shell: bash
+        run: |
+          set -euo pipefail
+          load_file() {
+            path="$1"; ref="$2"
+            mkdir -p "$(dirname "$path")"
+            curl -fsSL -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${GITHUB_REPOSITORY}/contents/${path}?ref=${ref}" \
+              | jq -r '.content' | tr -d '\n' | base64 -d > "$path"
+          }
+          load_file benchmarks/semantic-retrieval-v2.js "$SEMANTIC_V2_SOURCE_SHA"
+          load_file benchmarks/semantic-v2-gcp-proxy.js "$SEMANTIC_V2_PROXY_SHA"
+          load_file benchmarks/Dockerfile.semantic-v2-gcp-proxy "$SEMANTIC_V2_PROXY_SHA"
+
+      - name: Patch retrieval proof to corpus-blind multilingual query projection
+        shell: bash
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const fs = require('node:fs');
+          const path = 'benchmarks/semantic-retrieval-v2.js';
+          let source = fs.readFileSync(path, 'utf8');
+          function replaceOnce(label, from, to) {
+            if (!source.includes(from)) throw new Error(`patch marker not found: ${label}`);
+            source = source.replace(from, to);
+          }
+
+          replaceOnce(
+            'projector import',
+            "import { createVertexEmbeddingClient } from '../adapters/providers/vertex-embedding.js';",
+            "import { createVertexEmbeddingClient } from '../adapters/providers/vertex-embedding.js';\nimport { createProviderSemanticProjector } from '../core/context/provider-semantic-projector.js';"
+          );
+          replaceOnce(
+            'retrieval-only environment',
+            `const required = {
+              AZURE_OPENAI_ENDPOINT: process.env.AZURE_OPENAI_ENDPOINT,
+              AZURE_OPENAI_DEPLOYMENT: process.env.AZURE_OPENAI_DEPLOYMENT,
+              AZURE_OPENAI_API_KEY: process.env.AZURE_OPENAI_API_KEY,
+              AZURE_FOUNDRY_ENDPOINT: process.env.AZURE_FOUNDRY_ENDPOINT,
+              AZURE_FOUNDRY_API_KEY: process.env.AZURE_FOUNDRY_API_KEY,
+              AZURE_FOUNDRY_GROK: process.env.AZURE_FOUNDRY_GROK,
+              AZURE_FOUNDRY_DEEPSEEK: process.env.AZURE_FOUNDRY_DEEPSEEK,
+              AZURE_FOUNDRY_LLAMA: process.env.AZURE_FOUNDRY_LLAMA,
+              AZURE_FOUNDRY_MISTRAL: process.env.AZURE_FOUNDRY_MISTRAL,
+              AZURE_FOUNDRY_KIMI: process.env.AZURE_FOUNDRY_KIMI,
+              GCP_PROJECT_ID: gcpProjectId,
+              VERTEX_API_ENDPOINT: proxyEndpoint,
+              GCP_ACCESS_TOKEN: proxyToken
+            };`,
+            `const required = {
+              GCP_PROJECT_ID: gcpProjectId,
+              VERTEX_API_ENDPOINT: proxyEndpoint,
+              GCP_ACCESS_TOKEN: proxyToken
+            };`
+          );
+          replaceOnce(
+            'router construction',
+            '  const semanticRouter = createSemanticContextRouterV2({ embedder });',
+            `  const semanticProvider = createVertexGeminiProvider({
+              projectId:gcpProjectId,
+              location:geminiLocation,
+              model:geminiModel,
+              endpoint:proxyEndpoint,
+              accessTokenProvider:async () => proxyToken,
+              capabilities:['reasoning.general']
+            });
+            const semanticProjector = createProviderSemanticProjector({
+              provider:semanticProvider,
+              name:'gemini-multilingual-query-projector',
+              providerOptions:{ thinkingBudget:0 },
+              repairAttempts:1
+            });
+            const semanticRouter = createSemanticContextRouterV2({
+              embedder,
+              queryProjector:semanticProjector,
+              candidateK:64
+            });`
+          );
+          replaceOnce('query concurrency', '  const concurrency = 4;', '  const concurrency = 2;');
+          replaceOnce(
+            'router stats report',
+            '    embedding:embedder.stats(),\n    methodology:{',
+            `    embedding:embedder.stats(),
+            semanticRouterStats:semanticRouter.stats(),
+            methodology:{`
+          );
+          replaceOnce(
+            'methodology projection',
+            "      topK:1,\n      blockIdsInRequesterQueries:false,",
+            "      topK:1,\n      queryProjection:'corpus-blind EN/ZH/TR semantic-equivalent projections from natural-language requester query',\n      denseScore:'max cosine across original + projected query vectors',\n      candidateK:64,\n      reranker:false,\n      blockIdsInRequesterQueries:false,"
+          );
+          replaceOnce(
+            'retrieval-only return',
+            '  if (!retrievalOnlyPassed) {',
+            `  if (retrievalOnlyPassed) {
+              const semanticGate = {
+                thresholds:gate,
+                checks:{ retrievalOnlyPassed },
+                passed:true
+              };
+              await writeFile(outputPath, JSON.stringify({ ...reportBase, status:'retrieval_only_pass', semanticGate, retrievalResults }, null, 2));
+              console.log(JSON.stringify({ ...reportBase, status:'retrieval_only_pass', semanticGate }, null, 2));
+              return;
+            }
+
+            if (!retrievalOnlyPassed) {`
+          );
+          fs.writeFileSync(path, source);
+          NODE
+          node --check benchmarks/semantic-retrieval-v2.js
+
+      - name: Validate code before cloud spend
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t tests < <(find tests -maxdepth 1 -name '*.test.js' ! -name 'public-repository.test.js' -print | sort)
+          node --test "${tests[@]}"
+          git diff --check -- core adapters node tests
+
+      - name: Authenticate GCP deployer using WIF
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID_VALUE }}
+          workload_identity_provider: ${{ env.GCP_WIF_PROVIDER_VALUE }}
+          service_account: ${{ env.GCP_DEPLOYER_SA_VALUE }}
+          create_credentials_file: true
+          export_environment_variables: true
+
+      - uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID_VALUE }}
+
+      - name: Prepare isolated Vertex proxy
+        shell: bash
+        run: |
+          set -euo pipefail
+          token="$(openssl rand -hex 32)"
+          echo "::add-mask::$token"
+          registry="${GCP_PROXY_REGION}-docker.pkg.dev"
+          image="${registry}/${GCP_PROJECT_ID_VALUE}/${GCP_AR_REPO}/semanticv2-projection:${GITHUB_SHA}"
+          gcloud auth configure-docker "$registry" --quiet
+          docker build -f benchmarks/Dockerfile.semantic-v2-gcp-proxy -t "$image" .
+          docker push "$image" >/dev/null
+          gcloud run deploy "$GCP_PROXY_SERVICE" \
+            --project="$GCP_PROJECT_ID_VALUE" \
+            --region="$GCP_PROXY_REGION" \
+            --image="$image" \
+            --service-account="$GCP_RUNTIME_SA_VALUE" \
+            --port=8080 --min=0 --max=4 --cpu=1 --memory=512Mi \
+            --set-env-vars="BENCHMARK_PROXY_TOKEN=${token}" \
+            --no-invoker-iam-check --quiet >/dev/null
+          url="$(gcloud run services describe "$GCP_PROXY_SERVICE" --project="$GCP_PROJECT_ID_VALUE" --region="$GCP_PROXY_REGION" --format='value(status.url)')"
+          for attempt in $(seq 1 30); do
+            if curl -fsS -H "Authorization: Bearer ${token}" "${url}/health" | jq -e '.ok == true' >/dev/null; then break; fi
+            [[ "$attempt" -lt 30 ]] || exit 1
+            sleep 2
+          done
+          echo "VERTEX_API_ENDPOINT=$url" >> "$GITHUB_ENV"
+          echo "GCP_ACCESS_TOKEN=$token" >> "$GITHUB_ENV"
+          echo "GCP_PROJECT_ID=$GCP_PROJECT_ID_VALUE" >> "$GITHUB_ENV"
+
+      - name: Preflight multilingual embedding model
+        shell: bash
+        run: |
+          set -euo pipefail
+          path="/v1/projects/${GCP_PROJECT_ID}/locations/${VERTEX_EMBEDDING_LOCATION}/publishers/google/models/${VERTEX_EMBEDDING_MODEL}:predict"
+          body='{"instances":[{"task_type":"RETRIEVAL_QUERY","content":"multilingual semantic retrieval preflight"}],"parameters":{"autoTruncate":true,"outputDimensionality":768}}'
+          curl -fsS -H "Authorization: Bearer ${GCP_ACCESS_TOKEN}" -H 'Content-Type: application/json' -d "$body" "${VERTEX_API_ENDPOINT}${path}" | jq -e '.predictions[0].embeddings.values | length > 0' >/dev/null
+
+      - name: Run retrieval-only projection proof
+        run: node benchmarks/semantic-retrieval-v2.js
+
+      - name: Print retrieval proof
+        if: ${{ always() && hashFiles('semantic-retrieval-v2-projection.json') != '' }}
+        run: jq '{status,corpus,retrieval,semanticRouterStats,embedding,semanticGate,methodology}' semantic-retrieval-v2-projection.json
+
+      - name: Upload evidence
+        if: ${{ always() && hashFiles('semantic-retrieval-v2-projection.json') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: truyn-semantic-v2-projection-${{ github.run_id }}
+          path: semantic-retrieval-v2-projection.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Enforce retrieval gate
+        if: ${{ hashFiles('semantic-retrieval-v2-projection.json') != '' }}
+        run: jq -e '.semanticGate.passed == true' semantic-retrieval-v2-projection.json >/dev/null
+
+      - name: Delete isolated Vertex proxy
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          gcloud run services delete "$GCP_PROXY_SERVICE" --project="$GCP_PROJECT_ID_VALUE" --region="$GCP_PROXY_REGION" --quiet >/dev/null 2>&1 || true
