@@ -47,17 +47,33 @@ function normalizeRerankedIds(result) {
   return [];
 }
 
+function uniqueStrings(values) {
+  const seen = new Set();
+  const result = [];
+  for (const value of values || []) {
+    const text = typeof value === 'string' ? value.trim() : '';
+    if (text && !seen.has(text)) {
+      seen.add(text);
+      result.push(text);
+    }
+  }
+  return result;
+}
+
 /**
- * Two-stage semantic router:
- *   1. multilingual dense candidate retrieval over immutable content blocks;
- *   2. optional semantic reranker over only the dense candidate set.
+ * Semantic router v2:
+ *   1. optional multilingual query projection without corpus visibility;
+ *   2. multilingual dense candidate retrieval over immutable content blocks;
+ *   3. optional semantic reranker over only the dense candidate set.
  *
- * The manifest/CID chain remains the provenance source of truth. Vector and
- * reranker state are ephemeral indexes and cannot alter a block's identity.
+ * The manifest/CID chain and the hash of the ORIGINAL requester query remain
+ * the provenance source of truth. Projection/vector/reranker state is an
+ * ephemeral index and cannot alter a block's immutable identity.
  */
 export function createSemanticContextRouterV2({
   embedder,
   reranker = null,
+  queryProjector = null,
   candidateK = 64,
   lexicalTieBreakWeight = 0
 } = {}) {
@@ -65,11 +81,13 @@ export function createSemanticContextRouterV2({
     throw new Error('semantic router v2 requires embedder.embedMany(texts, options)');
   }
   if (reranker && typeof reranker.rerank !== 'function') throw new Error('semantic reranker must expose rerank(query, candidates, options)');
+  if (queryProjector && typeof queryProjector.project !== 'function') throw new Error('semantic query projector must expose project(query)');
   if (!Number.isInteger(candidateK) || candidateK < 1 || candidateK > 128) throw new Error('semantic candidateK must be 1..128');
 
   const documents = new Map();
   const vectorCache = new Map();
-  const queryCache = new Map();
+  const queryVectorCache = new Map();
+  const projectionCache = new Map();
   const resultCache = new Map();
 
   async function indexDocument(document) {
@@ -80,13 +98,31 @@ export function createSemanticContextRouterV2({
     for (let index = 0; index < missing.length; index += 1) vectorCache.set(missing[index].cid, vectors[index]);
   }
 
-  async function queryVector(query) {
-    const hash = contextQueryHash(query);
-    if (queryCache.has(hash)) return queryCache.get(hash);
-    const vectors = await embedder.embedMany([query], { taskType: 'RETRIEVAL_QUERY' });
-    assertVectors(vectors, 1);
-    queryCache.set(hash, vectors[0]);
-    return vectors[0];
+  async function projectQuery(query) {
+    const originalHash = contextQueryHash(query);
+    if (projectionCache.has(originalHash)) return projectionCache.get(originalHash);
+    const projection = queryProjector
+      ? await queryProjector.project(query)
+      : { variants:[query], metadata:null };
+    const variants = uniqueStrings([query, ...(projection?.variants || [])]);
+    if (variants.length === 0) throw new Error('semantic query projection produced no usable variants');
+    const normalized = {
+      variants,
+      rerankerQuery:variants.map((text, index) => `SEMANTIC_QUERY_VARIANT_${index + 1}: ${text}`).join('\n'),
+      metadata:projection?.metadata || null
+    };
+    projectionCache.set(originalHash, normalized);
+    return normalized;
+  }
+
+  async function queryVectors(texts) {
+    const missing = uniqueStrings(texts).filter((text) => !queryVectorCache.has(contextQueryHash(text)));
+    if (missing.length > 0) {
+      const vectors = await embedder.embedMany(missing, { taskType:'RETRIEVAL_QUERY' });
+      assertVectors(vectors, missing.length);
+      for (let index = 0; index < missing.length; index += 1) queryVectorCache.set(contextQueryHash(missing[index]), vectors[index]);
+    }
+    return texts.map((text) => queryVectorCache.get(contextQueryHash(text)));
   }
 
   function putContext(blocks, metadata = {}) {
@@ -118,11 +154,12 @@ export function createSemanticContextRouterV2({
     if (!document) throw new Error('context_not_found');
 
     const queryHash = contextQueryHash(query);
-    const cacheKey = `${cid}:${queryHash}:${topK}:${candidateK}:${reranker ? 'rerank' : 'dense'}`;
+    const cacheKey = `${cid}:${queryHash}:${topK}:${candidateK}:${queryProjector ? queryProjector.name || 'project' : 'raw'}:${reranker ? 'rerank' : 'dense'}`;
     if (resultCache.has(cacheKey)) return structuredClone(resultCache.get(cacheKey));
 
     await indexDocument(document);
-    const q = await queryVector(query);
+    const projection = await projectQuery(query);
+    const qVectors = await queryVectors(projection.variants);
 
     const lexicalBonus = new Map();
     if (lexicalTieBreakWeight > 0) {
@@ -133,14 +170,18 @@ export function createSemanticContextRouterV2({
     }
 
     const dense = document.blocks.map((block) => {
-      const semanticScore = cosine(q, vectorCache.get(block.cid));
+      const blockVector = vectorCache.get(block.cid);
+      const variantScores = qVectors.map((q) => cosine(q, blockVector));
+      const semanticScore = Math.max(...variantScores);
+      const bestProjectionIndex = variantScores.indexOf(semanticScore);
       return {
         id: block.id,
         cid: block.cid,
         text: block.text,
         bytes: block.bytes,
         score: round(semanticScore + (lexicalBonus.get(block.id) || 0)),
-        semanticScore: round(semanticScore)
+        semanticScore: round(semanticScore),
+        bestProjectionIndex
       };
     }).sort((left, right) => right.score - left.score || right.semanticScore - left.semanticScore || left.id.localeCompare(right.id));
 
@@ -149,13 +190,14 @@ export function createSemanticContextRouterV2({
     let reranked = false;
     let rerankerMetadata = null;
     if (reranker) {
-      const rerankResult = await reranker.rerank(query, candidates.map(({ id, text, cid: blockCid, score, semanticScore }, index) => ({
+      const rerankResult = await reranker.rerank(projection.rerankerQuery, candidates.map(({ id, text, cid: blockCid, score, semanticScore, bestProjectionIndex }, index) => ({
         id,
         cid: blockCid,
         text,
         denseRank: index + 1,
         denseScore: score,
-        semanticScore
+        semanticScore,
+        bestProjectionIndex
       })), { topK });
       const ids = normalizeRerankedIds(rerankResult);
       const candidateById = new Map(candidates.map((candidate) => [candidate.id, candidate]));
@@ -189,6 +231,10 @@ export function createSemanticContextRouterV2({
         topK,
         corpusBlocks: document.blocks.length,
         candidateK: candidates.length,
+        queryProjected:Boolean(queryProjector),
+        queryProjector:queryProjector?.name || null,
+        queryProjectionCount:projection.variants.length,
+        projectorMetadata:projection.metadata,
         reranked,
         reranker: reranker?.name || null,
         rerankerMetadata,
@@ -197,15 +243,17 @@ export function createSemanticContextRouterV2({
           cid: candidate.cid,
           rank: index + 1,
           score: candidate.score,
-          semanticScore: candidate.semanticScore
+          semanticScore: candidate.semanticScore,
+          bestProjectionIndex:candidate.bestProjectionIndex
         })),
-        selected: selected.map(({ id, cid: blockCid, score, semanticScore, rank }) => ({
+        selected: selected.map(({ id, cid: blockCid, score, semanticScore, rank, bestProjectionIndex }) => ({
           id,
           cid: blockCid,
           score,
           semanticScore,
           rank,
-          denseRank: denseRankById.get(id) || null
+          denseRank: denseRankById.get(id) || null,
+          bestProjectionIndex
         }))
       }
     };
@@ -222,9 +270,12 @@ export function createSemanticContextRouterV2({
       return {
         contexts: documents.size,
         cachedBlockVectors: vectorCache.size,
-        cachedQueryVectors: queryCache.size,
+        cachedQueryVectors: queryVectorCache.size,
+        cachedQueryProjections:projectionCache.size,
         cachedResults: resultCache.size,
         candidateK,
+        queryProjector:queryProjector?.name || null,
+        queryProjectorStats:typeof queryProjector?.stats === 'function' ? queryProjector.stats() : null,
         reranker: reranker?.name || null,
         rerankerStats: typeof reranker?.stats === 'function' ? reranker.stats() : null
       };
