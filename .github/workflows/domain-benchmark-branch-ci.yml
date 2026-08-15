@@ -1,0 +1,43 @@
+name: Domain Benchmark Branch CI
+
+on:
+  push:
+    branches:
+      - infra/truyn-domain-benchmark-ab
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm test
+      - run: node --check benchmarks/cross-cloud-ab.js
+      - name: Discover eastus GPT-4.1-mini Azure retail meters
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json, urllib.parse, urllib.request
+          filt = "productName eq 'Azure OpenAI' and armRegionName eq 'eastus'"
+          url = 'https://prices.azure.com/api/retail/prices?' + urllib.parse.urlencode({'$filter': filt})
+          items=[]
+          while url and len(items) < 5000:
+              with urllib.request.urlopen(url, timeout=30) as r:
+                  body=json.load(r)
+              items.extend(body.get('Items', []))
+              url=body.get('NextPageLink')
+          matches=[]
+          for x in items:
+              hay=' '.join(str(x.get(k,'')) for k in ('skuName','meterName','productName')).lower()
+              if '4.1' in hay and 'mini' in hay:
+                  matches.append({k:x.get(k) for k in ('skuName','meterName','retailPrice','unitPrice','unitOfMeasure','armRegionName','type','effectiveStartDate','isPrimaryMeterRegion')})
+          print(json.dumps(matches, indent=2))
+          if not matches:
+              raise SystemExit('No GPT-4.1-mini eastus Azure OpenAI meters found')
+          PY
