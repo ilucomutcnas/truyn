@@ -1,0 +1,36 @@
+name: TRUYN Video Providers Smoke
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/smoke-video-providers.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: truyn-video-provider-smoke
+  cancel-in-progress: false
+
+jobs:
+  video-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm install --no-audit --no-fund
+      - run: mkdir -p smoke-artifacts/video
+      - name: Upload video-only smoke evidence
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: truyn-video-provider-smoke-${{ github.run_id }}
+          path: smoke-artifacts/video
+          if-no-files-found: warn
+          retention-days: 30
