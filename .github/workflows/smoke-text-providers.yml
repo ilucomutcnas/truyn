@@ -97,7 +97,7 @@ jobs:
               smoke-artifacts/text/azure-deployments.json > "$tmp" && mv "$tmp" smoke-artifacts/text/azure-deployments.json
           }
 
-          deploy_one truyn-grok 'grok-4.1-fast-non-reasoning' xai grok
+          deploy_one truyn-grok 'grok-4-1-fast-non-reasoning' xai grok
           deploy_one truyn-deepseek 'DeepSeek-V3.2' deepseek deepseek
           deploy_one truyn-llama 'Llama-3.3-70B-Instruct' meta llama
           deploy_one truyn-mistral 'Mistral-Large-3' mistral mistral
