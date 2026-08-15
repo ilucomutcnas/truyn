@@ -1,4 +1,4 @@
-# Controlled trigger: WebSocket backchannel 8x benchmark, 2026-08-15
+# Controlled trigger: relay trace 8x benchmark round 3, 2026-08-15
 name: Cloud PoC Cross-Cloud A/B Benchmark
 
 on:
@@ -164,7 +164,7 @@ jobs:
         if: ${{ success() }}
         shell: bash
         run: |
-          jq '{benchmark,status,generatedAt,relayUrl,methodology,pricing,optimizationGate,aggregate,claims}' cross-cloud-ab.json
+          jq '{benchmark,status,generatedAt,relayUrl,methodology,pricing,optimizationGate,diagnostics,aggregate,claims}' cross-cloud-ab.json
 
       - name: Upload benchmark evidence
         if: ${{ always() && hashFiles('cross-cloud-ab.json') != '' }}
