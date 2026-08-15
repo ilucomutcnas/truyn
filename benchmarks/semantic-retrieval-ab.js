@@ -261,7 +261,7 @@ async function directRun(index) {
   const review = await directGemini.execute({
     capability: 'review',
     input: { task: reviewTaskFor(question), candidate: research.output, context: fullContext },
-    policy: { benchmark: 'semantic-retrieval-gate-direct-control' }
+    policy: { benchmark: 'semantic-retrieval-gate-direct-control', providerOptions: { thinkingBudget: 0 } }
   });
   const azure = azureUsage(research.metadata);
   const gemini = geminiUsage(review.metadata);
@@ -296,7 +296,7 @@ async function truynRun(index) {
     {
       capability: 'review',
       inputTemplate: { task: reviewTaskFor(question), candidate: { $previous: 'output' }, context: ref },
-      policy: { benchmark: 'semantic-retrieval-gate' }
+      policy: { benchmark: 'semantic-retrieval-gate', providerOptions: { thinkingBudget: 0 } }
     }
   ];
   const serialized = JSON.stringify(stages);
@@ -466,6 +466,8 @@ const report = {
     provenance: 'Requester-side retrieval suite verifies root CID, manifest CID, normalized question hash, selected block CID and rank. Provider-side live samples must report one retrieval and one verified provenance reference per stage.',
     quality: 'Retrieval correctness is measured independently from model answer correctness. Live answer samples must contain the authoritative current RESTORE_VALUE after a signed delta changed the measured target blocks.',
     models: { azure: azureModel, gemini: geminiModel },
+    geminiThinkingBudget: 0,
+    thinkingControl: 'Gemini 2.5 Flash thinking is disabled symmetrically in direct and TRUYN review arms because this benchmark is deterministic extraction/verification; retrieval itself remains model-free.',
     pricingSnapshot: rates,
     retryEvents,
     limitations: 'This gate measures TRUYN hybrid lexical/fuzzy retrieval on entity-anchored heterogeneous records. It does not claim embedding-level synonym-only retrieval or general open-domain RAG quality.'
