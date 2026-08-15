@@ -2,10 +2,10 @@ import { createHash, randomBytes, randomUUID, sign as cryptoSign, verify as cryp
 
 export const PROTOCOL = 'TRUYN/1';
 export const MVP_TYPES = Object.freeze(['IDENTITY', 'OFFER', 'NEED', 'RESULT', 'REVOKE']);
-export const COMPACT_TYPES = Object.freeze(['NEED', 'RESULT']);
+export const COMPACT_TYPES = Object.freeze(['NEED', 'RESULT', 'CHAIN']);
 
-const COMPACT_TYPE_CODES = Object.freeze({ NEED: 'N', RESULT: 'R' });
-const COMPACT_CODE_TYPES = Object.freeze({ N: 'NEED', R: 'RESULT' });
+const COMPACT_TYPE_CODES = Object.freeze({ NEED: 'N', RESULT: 'R', CHAIN: 'C' });
+const COMPACT_CODE_TYPES = Object.freeze({ N: 'NEED', R: 'RESULT', C: 'CHAIN' });
 
 function normalize(value) {
   if (Array.isArray(value)) return value.map(normalize);
@@ -94,6 +94,12 @@ export function compactRequestId() {
   return randomBytes(12).toString('base64url');
 }
 
+export function compactStageRequestId(chainId, stageIndex) {
+  if (!chainId || typeof chainId !== 'string') throw new Error('chainId is required');
+  if (!Number.isInteger(stageIndex) || stageIndex < 0 || stageIndex > 35) throw new Error('stageIndex must be an integer between 0 and 35');
+  return `${chainId.slice(0, 15)}${stageIndex.toString(36)}`;
+}
+
 export function compactType(frame) {
   return COMPACT_CODE_TYPES[frame?.t] || null;
 }
@@ -117,8 +123,6 @@ export function createCompactFrame({ type, payload, privateKeyPem, id = compactR
     privateKeyPem
   ).toString('base64url');
 
-  // Hot-path identity is session-bound. Public key, node ID, protocol version and
-  // timestamps stay in the registered identity/session and are not repeated here.
   return { t: code, i: id, s: signature };
 }
 
