@@ -18,7 +18,7 @@ test('protected provider requires M2M proof for registration, session requests a
   const ordinaryIdentity = createIdentity();
   const relay = createRelay({
     allowedNodeIds: [protectedIdentity.nodeId, ordinaryIdentity.nodeId],
-    trustedRequesterNodeIds: [ordinaryIdentity.nodeId]
+    allowPublicDispatch: true
   });
   const relayUrl = await relay.listen({ host: '127.0.0.1', port: 0 });
   t.after(() => relay.close());
