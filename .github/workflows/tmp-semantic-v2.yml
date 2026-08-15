@@ -38,7 +38,7 @@ jobs:
       SEMANTIC_V2_OUTPUT: semantic-retrieval-v2.json
       SEMANTIC_V2_SOURCE_SHA: 6f2ddf743e83ad1704a831a7058a93ad668c6a69
       SEMANTIC_V2_PROXY_SHA: c1ea39a3f5a0408035fea7f00604ff14310eda10
-      SEMANTIC_V2_ATTEMPT: '6'
+      SEMANTIC_V2_ATTEMPT: '7'
       GH_TOKEN: ${{ github.token }}
 
     steps:
@@ -67,7 +67,7 @@ jobs:
           test -s benchmarks/semantic-retrieval-v2.js
           test -s benchmarks/semantic-v2-gcp-proxy.js
 
-      - name: Upgrade ephemeral benchmark to dense shortlist plus semantic reranker
+      - name: Upgrade ephemeral benchmark to hierarchical semantic reranking
         shell: bash
         run: |
           set -euo pipefail
@@ -86,9 +86,9 @@ jobs:
             "import { createVertexEmbeddingClient } from '../adapters/providers/vertex-embedding.js';\nimport { createProviderSemanticReranker } from '../core/context/provider-semantic-reranker.js';"
           );
           replaceOnce(
-            'dense recall gate',
+            'retrieval gates',
             '  retrievalAccuracyPercentMin: 99,',
-            '  retrievalAccuracyPercentMin: 99,\n  denseCandidateRecallPercentMin: 99,'
+            '  retrievalAccuracyPercentMin: 99,\n  denseCandidateRecallPercentMin: 99,\n  semanticShortlistRecallPercentMin: 99,'
           );
           replaceOnce(
             'router construction',
@@ -114,31 +114,40 @@ jobs:
             });`
           );
           replaceOnce(
+            'query concurrency',
+            '  const concurrency = 4;',
+            '  const concurrency = 2;'
+          );
+          replaceOnce(
             'retrieval diagnostics',
             '        semanticScore:top?.semanticScore ?? null,\n        lexicalV1SelectedId:lexicalSelectedId,',
             `        semanticScore:top?.semanticScore ?? null,
             denseCandidateRecall:(retrieved.retrieval?.denseCandidates || []).some((candidate) => candidate.id === item.id),
             denseRank:(retrieved.retrieval?.denseCandidates || []).find((candidate) => candidate.id === item.id)?.rank || null,
+            semanticShortlistRecall:Array.isArray(retrieved.retrieval?.rerankerMetadata?.shortlistIds)
+              && retrieved.retrieval.rerankerMetadata.shortlistIds.includes(item.id),
+            semanticShortlistIds:retrieved.retrieval?.rerankerMetadata?.shortlistIds || [],
             rerankerUsage:retrieved.retrieval?.rerankerMetadata?.usage || { input:0, output:0, total:0 },
             rerankerProviderRequestBodyBytes:retrieved.retrieval?.rerankerMetadata?.providerRequestBodyBytes || 0,
             rerankerProviderLatencyMs:retrieved.retrieval?.rerankerMetadata?.providerLatencyMs || null,
             lexicalV1SelectedId:lexicalSelectedId,`
           );
           replaceOnce(
-            'dense recall aggregate',
+            'retrieval aggregate diagnostics',
             "  const lexicalV1Accuracy = percent(retrievalResults.filter((item) => item.lexicalV1Correct).length, retrievalResults.length);",
             `  const lexicalV1Accuracy = percent(retrievalResults.filter((item) => item.lexicalV1Correct).length, retrievalResults.length);
-            const denseCandidateRecallPercent = percent(retrievalResults.filter((item) => item.denseCandidateRecall).length, retrievalResults.length);`
+            const denseCandidateRecallPercent = percent(retrievalResults.filter((item) => item.denseCandidateRecall).length, retrievalResults.length);
+            const semanticShortlistRecallPercent = percent(retrievalResults.filter((item) => item.semanticShortlistRecall).length, retrievalResults.length);`
           );
           replaceOnce(
             'retrieval-only gate',
             '  const retrievalOnlyPassed = retrievalAccuracy >= gate.retrievalAccuracyPercentMin\n    && provenancePercent >= gate.provenancePassPercentMin',
-            '  const retrievalOnlyPassed = retrievalAccuracy >= gate.retrievalAccuracyPercentMin\n    && denseCandidateRecallPercent >= gate.denseCandidateRecallPercentMin\n    && provenancePercent >= gate.provenancePassPercentMin'
+            '  const retrievalOnlyPassed = retrievalAccuracy >= gate.retrievalAccuracyPercentMin\n    && denseCandidateRecallPercent >= gate.denseCandidateRecallPercentMin\n    && semanticShortlistRecallPercent >= gate.semanticShortlistRecallPercentMin\n    && provenancePercent >= gate.provenancePassPercentMin'
           );
           replaceOnce(
-            'retrieval report dense recall',
+            'retrieval report diagnostics',
             '      accuracyPercent:retrievalAccuracy,\n      provenancePercent,',
-            '      accuracyPercent:retrievalAccuracy,\n      denseCandidateRecallPercent,\n      provenancePercent,'
+            '      accuracyPercent:retrievalAccuracy,\n      denseCandidateRecallPercent,\n      semanticShortlistRecallPercent,\n      provenancePercent,'
           );
           replaceOnce(
             'router stats report',
@@ -150,7 +159,7 @@ jobs:
           replaceOnce(
             'methodology reranker',
             "      topK:1,\n      blockIdsInRequesterQueries:false,",
-            "      topK:1,\n      denseCandidateK:64,\n      semanticShortlistK:8,\n      semanticReranker:'Gemini hierarchical 64 -> 8 -> 1; only final verified block is materialized to actors',\n      blockIdsInRequesterQueries:false,"
+            "      topK:1,\n      denseCandidateK:64,\n      semanticShortlistK:8,\n      queryConcurrency:2,\n      semanticReranker:'Gemini hierarchical 64 -> 8 -> 1; only final verified block is materialized to actors',\n      blockIdsInRequesterQueries:false,"
           );
           replaceOnce(
             'live retrieval metric map',
@@ -196,9 +205,9 @@ jobs:
             const truynProviderRequestBodyBytes = truynActorProviderRequestBodyBytes + retrievalRerankerProviderRequestBodyBytes;`
           );
           replaceOnce(
-            'final dense recall check',
+            'final retrieval diagnostics checks',
             '      retrievalAccuracy:retrievalAccuracy >= gate.retrievalAccuracyPercentMin,\n      perLanguageAccuracy:',
-            '      retrievalAccuracy:retrievalAccuracy >= gate.retrievalAccuracyPercentMin,\n      denseCandidateRecall:denseCandidateRecallPercent >= gate.denseCandidateRecallPercentMin,\n      perLanguageAccuracy:'
+            '      retrievalAccuracy:retrievalAccuracy >= gate.retrievalAccuracyPercentMin,\n      denseCandidateRecall:denseCandidateRecallPercent >= gate.denseCandidateRecallPercentMin,\n      semanticShortlistRecall:semanticShortlistRecallPercent >= gate.semanticShortlistRecallPercentMin,\n      perLanguageAccuracy:'
           );
           replaceOnce(
             'live report accounting',
