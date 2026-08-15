@@ -5,10 +5,11 @@ on:
     branches: [main]
     paths:
       - '.github/workflows/owner-identity-bootstrap.yml'
+      - 'config/owner-benchmark.json'
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
   id-token: write
 
 concurrency:
@@ -87,30 +88,20 @@ jobs:
           echo "OWNER_BENCHMARK_IDENTITY=$state"
           echo "OWNER_BENCHMARK_NODE_ID=$node_id"
 
-      - name: Publish only the safe requester node id
+      - name: Verify public allowlist id matches private identity
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p config
-          cat > config/owner-benchmark.json <<JSON
-          {
-            "schema": 1,
-            "purpose": "owner-benchmark-requester",
-            "nodeId": "${OWNER_BENCHMARK_NODE_ID}",
-            "access": "owner-only"
+          configured="$(jq -r '.nodeId // empty' config/owner-benchmark.json)"
+          [[ "$configured" == "$OWNER_BENCHMARK_NODE_ID" ]] || {
+            echo 'OWNER_BENCHMARK_CONFIG=mismatch'
+            exit 1
           }
-          JSON
-
-          if [[ -z "$(git status --porcelain -- config/owner-benchmark.json)" ]]; then
-            echo 'OWNER_BENCHMARK_CONFIG=unchanged'
-            exit 0
-          fi
-          git config user.name 'TRUYN Automation'
-          git config user.email 'actions@truyn.org'
-          git add config/owner-benchmark.json
-          git commit -m 'Record owner benchmark requester id'
-          git push origin HEAD:main
-          echo 'OWNER_BENCHMARK_CONFIG=published'
+          [[ "$(jq -r '.access // empty' config/owner-benchmark.json)" == 'owner-only' ]] || {
+            echo 'OWNER_BENCHMARK_ACCESS=invalid'
+            exit 1
+          }
+          echo 'OWNER_BENCHMARK_CONFIG=verified'
 
       - name: Verify secret can be re-read
         shell: bash
