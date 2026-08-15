@@ -136,6 +136,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          [[ -n "${TRUYN_RELAY_ORIGIN_URL:-}" ]] || { echo 'TRUYN_RELAY_ORIGIN_URL=missing'; exit 1; }
           if az containerapp show -g "$AZURE_RG" -n "$AZURE_PROVIDER_APP" >/dev/null 2>&1; then
             az containerapp update -g "$AZURE_RG" -n "$AZURE_PROVIDER_APP" \
               --image "$AZURE_IMAGE" \
@@ -143,7 +144,7 @@ jobs:
                 TRUYN_ROLE=provider \
                 TRUYN_PROVIDER=azure-openai \
                 TRUYN_CAPABILITIES=research \
-                TRUYN_RELAY="$TRUYN_PUBLIC_RELAY" \
+                TRUYN_RELAY="$TRUYN_RELAY_ORIGIN_URL" \
                 AZURE_OPENAI_ENDPOINT="$AZURE_OPENAI_ENDPOINT" \
                 AZURE_OPENAI_DEPLOYMENT="$AZURE_OPENAI_DEPLOYMENT" \
                 AZURE_CLIENT_ID="$AZURE_RUNTIME_CLIENT_ID" \
@@ -162,10 +163,11 @@ jobs:
                 TRUYN_ROLE=provider \
                 TRUYN_PROVIDER=azure-openai \
                 TRUYN_CAPABILITIES=research \
-                TRUYN_RELAY="$TRUYN_PUBLIC_RELAY" \
+                TRUYN_RELAY="$TRUYN_RELAY_ORIGIN_URL" \
                 AZURE_OPENAI_ENDPOINT="$AZURE_OPENAI_ENDPOINT" \
                 AZURE_OPENAI_DEPLOYMENT="$AZURE_OPENAI_DEPLOYMENT" \
                 AZURE_CLIENT_ID="$AZURE_RUNTIME_CLIENT_ID" >/dev/null
           fi
-          echo "AZURE_GPT_RELAY=${TRUYN_PUBLIC_RELAY}"
+          echo "AZURE_GPT_PUBLIC_RELAY=${TRUYN_PUBLIC_RELAY}"
+          echo "AZURE_GPT_BACKCHANNEL_RELAY=${TRUYN_RELAY_ORIGIN_URL}"
           echo 'AZURE_GPT_NODE_DEPLOY=success'
