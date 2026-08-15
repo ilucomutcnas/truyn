@@ -1,6 +1,6 @@
 import http from 'node:http';
 import { randomBytes } from 'node:crypto';
-import { verifyCompactFrame, verifyEnvelope } from '../../core/protocol/index.js';
+import { compactStageRequestId, verifyCompactFrame, verifyEnvelope } from '../../core/protocol/index.js';
 import { trustabilityLite } from '../../core/trust/index.js';
 
 function json(res, status, body) {
@@ -32,6 +32,10 @@ function boundedWaitMs(url, fallback = 0, max = 120_000) {
   return Number.isFinite(value) ? Math.max(0, Math.min(max, Math.floor(value))) : fallback;
 }
 
+function capabilityName(stage) {
+  return stage?.capability?.name || stage?.capability || null;
+}
+
 export function createRelay({ nodeFreshnessMs = 15_000 } = {}) {
   const nodes = new Map();
   const sessions = new Map();
@@ -41,6 +45,7 @@ export function createRelay({ nodeFreshnessMs = 15_000 } = {}) {
   const fastWaiters = new Map();
   const resultWaiters = new Map();
   const requests = new Map();
+  const chains = new Map();
   const stats = new Map();
 
   function touch(nodeId) {
@@ -155,6 +160,57 @@ export function createRelay({ nodeFreshnessMs = 15_000 } = {}) {
     return trustFor(providerNodeId);
   }
 
+  function closeChain(chain, status, body) {
+    if (chain.timer) clearTimeout(chain.timer);
+    chain.status = status === 200 ? 'completed' : 'failed';
+    chain.completedAt = new Date().toISOString();
+    if (!chain.res.writableEnded) json(chain.res, status, body);
+  }
+
+  function dispatchChainStage(chain, stageIndex) {
+    const stage = chain.payload.stages[stageIndex];
+    const capability = capabilityName(stage);
+    if (!capability || typeof capability !== 'string') {
+      closeChain(chain, 400, { ok: false, error: 'invalid_chain_capability', stageIndex });
+      return false;
+    }
+
+    const match = matchingOffers({ capability, requesterNodeId: chain.requester })[0];
+    if (!match) {
+      closeChain(chain, 404, { ok: false, error: 'no_matching_provider', capability, stageIndex });
+      return false;
+    }
+
+    const requestId = compactStageRequestId(chain.frame.i, stageIndex);
+    const request = {
+      needId: requestId,
+      requester: chain.requester,
+      provider: match.envelope.from,
+      capability,
+      createdAt: new Date().toISOString(),
+      status: 'matched',
+      mode: 'chain-stage',
+      chainId: chain.frame.i,
+      stageIndex
+    };
+    requests.set(requestId, request);
+    chain.providers[stageIndex] = match.envelope.from;
+    chain.providerTrust[stageIndex] = trustFor(match.envelope.from);
+    chain.currentStage = stageIndex;
+
+    queueFast(match.envelope.from, {
+      kind: 'CHAIN_STAGE',
+      signedType: 'CHAIN',
+      frame: chain.frame,
+      payload: chain.payload,
+      from: chain.requester,
+      stageIndex,
+      requestId,
+      priorResult: stageIndex > 0 ? chain.results[stageIndex - 1] : null
+    });
+    return true;
+  }
+
   const server = http.createServer(async (req, res) => {
     try {
       const url = new URL(req.url, 'http://relay.local');
@@ -166,7 +222,9 @@ export function createRelay({ nodeFreshnessMs = 15_000 } = {}) {
           nodes: nodes.size,
           offers: offers.size,
           pendingRequests: [...requests.values()].filter((request) => request.status !== 'completed').length,
-          fastPath: true
+          pendingChains: [...chains.values()].filter((chain) => chain.status === 'running').length,
+          fastPath: true,
+          chainPath: true
         });
       }
 
@@ -226,6 +284,52 @@ export function createRelay({ nodeFreshnessMs = 15_000 } = {}) {
             trust: trustFor(offer.envelope.from)
           }));
         return json(res, 200, { ok: true, offers: matches });
+      }
+
+      if (req.method === 'POST' && url.pathname === '/v1/fast/chains') {
+        const requesterNodeId = authenticatedNodeId(req);
+        if (!requesterNodeId) return json(res, 401, { ok: false, error: 'unauthorized' });
+        const requester = nodes.get(requesterNodeId);
+        const { frame, payload } = await readJson(req);
+        const verification = verifyCompactFrame(frame, payload, requester.publicKey, { allowedTypes: ['CHAIN'] });
+        if (!verification.ok) return json(res, 400, { ok: false, error: verification.reason });
+        if (chains.has(frame.i)) return json(res, 409, { ok: false, error: 'duplicate_chain' });
+        if (!Array.isArray(payload?.stages) || payload.stages.length < 2 || payload.stages.length > 8) {
+          return json(res, 400, { ok: false, error: 'invalid_chain_stages' });
+        }
+        for (let index = 0; index < payload.stages.length; index += 1) {
+          const capability = capabilityName(payload.stages[index]);
+          if (!capability || typeof capability !== 'string') {
+            return json(res, 400, { ok: false, error: 'invalid_chain_capability', stageIndex: index });
+          }
+          if (!matchingOffers({ capability, requesterNodeId })[0]) {
+            return json(res, 404, { ok: false, error: 'no_matching_provider', capability, stageIndex: index });
+          }
+        }
+
+        const waitMs = boundedWaitMs(url, 120_000);
+        const chain = {
+          chainId: frame.i,
+          requester: requesterNodeId,
+          frame,
+          payload,
+          res,
+          timer: null,
+          createdAt: new Date().toISOString(),
+          status: 'running',
+          currentStage: -1,
+          providers: [],
+          providerTrust: [],
+          results: []
+        };
+        chain.timer = setTimeout(() => {
+          if (chain.status !== 'running') return;
+          closeChain(chain, 504, { ok: false, error: 'chain_wait_timeout', chainId: frame.i });
+        }, waitMs || 120_000);
+        chains.set(frame.i, chain);
+        touch(requesterNodeId);
+        dispatchChainStage(chain, 0);
+        return;
       }
 
       if (req.method === 'POST' && url.pathname === '/v1/fast/needs') {
@@ -289,6 +393,34 @@ export function createRelay({ nodeFreshnessMs = 15_000 } = {}) {
 
         const trust = completeRequest(request, providerNodeId);
         const event = { kind: 'RESULT', frame, payload, from: providerNodeId, trust };
+
+        if (request.mode === 'chain-stage') {
+          const chain = chains.get(request.chainId);
+          if (!chain || chain.status !== 'running') return json(res, 409, { ok: false, error: 'chain_not_running' });
+          chain.results[request.stageIndex] = event;
+          if (payload?.metadata?.failed) {
+            closeChain(chain, 200, {
+              ok: true,
+              chainId: chain.chainId,
+              results: chain.results,
+              providers: chain.providers,
+              providerTrust: chain.providerTrust,
+              failedStage: request.stageIndex
+            });
+          } else if (request.stageIndex + 1 < chain.payload.stages.length) {
+            dispatchChainStage(chain, request.stageIndex + 1);
+          } else {
+            closeChain(chain, 200, {
+              ok: true,
+              chainId: chain.chainId,
+              results: chain.results,
+              providers: chain.providers,
+              providerTrust: chain.providerTrust
+            });
+          }
+          return json(res, 200, { ok: true, requestId: frame.i, chainId: request.chainId });
+        }
+
         const waiter = resultWaiters.get(frame.i);
         if (waiter && !waiter.res.writableEnded) {
           resultWaiters.delete(frame.i);
@@ -393,7 +525,7 @@ export function createRelay({ nodeFreshnessMs = 15_000 } = {}) {
 
   return {
     server,
-    state: { nodes, sessions, offers, events, fastEvents, requests, stats },
+    state: { nodes, sessions, offers, events, fastEvents, requests, chains, stats },
     async listen({ port = 8787, host = '127.0.0.1' } = {}) {
       await new Promise((resolve) => server.listen(port, host, resolve));
       const address = server.address();
@@ -410,6 +542,9 @@ export function createRelay({ nodeFreshnessMs = 15_000 } = {}) {
         json(waiter.res, 503, { ok: false, error: 'relay_closing' });
       }
       resultWaiters.clear();
+      for (const chain of chains.values()) {
+        if (chain.status === 'running') closeChain(chain, 503, { ok: false, error: 'relay_closing', chainId: chain.chainId });
+      }
       if (!server.listening) return;
       await new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
     }

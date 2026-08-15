@@ -1,5 +1,5 @@
 name: Cloud PoC GCP Gemini Runtime
-# deployment revision: 4 — provider backchannel bypasses public Front Door
+# deployment revision: 5 — east-coast runtime + direct relay backchannel
 
 on:
   push:
@@ -7,6 +7,10 @@ on:
       - main
     paths:
       - 'runtime/**'
+      - 'node/**'
+      - 'core/**'
+      - 'network/**'
+      - 'adapters/sdk/**'
       - 'adapters/providers/vertex-gemini.js'
       - 'adapters/providers/index.js'
       - 'Dockerfile'
@@ -29,6 +33,7 @@ jobs:
       GCP_DEPLOYER_SA_VALUE: ${{ vars.GCP_DEPLOYER_SERVICE_ACCOUNT_EMAIL || secrets.GCP_DEPLOYER_SERVICE_ACCOUNT_EMAIL }}
       GCP_RUNTIME_SA_VALUE: ${{ vars.GCP_RUNTIME_SERVICE_ACCOUNT_EMAIL || secrets.GCP_RUNTIME_SERVICE_ACCOUNT_EMAIL }}
       GCP_REGION_CONFIGURED: ${{ vars.GCP_REGION || secrets.GCP_REGION }}
+      GCP_RUNTIME_REGION: us-east4
       GCP_AR_REPO: truyn-poc
       GCP_SERVICE: truyn-gemini
       TRUYN_PUBLIC_RELAY: https://relay.truyn.org
@@ -36,13 +41,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Normalize GCP region
+      - name: Normalize previous GCP region
         shell: bash
         run: |
           set -euo pipefail
-          region="$(printf '%s' "$GCP_REGION_CONFIGURED" | grep -oE '[a-z]+-[a-z0-9]+[0-9]' | head -n1 || true)"
-          [[ -n "$region" ]] || { echo 'GCP_REGION_FORMAT=invalid'; exit 1; }
-          echo "GCP_REGION_VALUE=$region" >> "$GITHUB_ENV"
+          previous="$(printf '%s' "$GCP_REGION_CONFIGURED" | grep -oE '[a-z]+-[a-z0-9]+[0-9]' | head -n1 || true)"
+          [[ -n "$previous" ]] || { echo 'GCP_REGION_FORMAT=invalid'; exit 1; }
+          echo "GCP_PREVIOUS_REGION=$previous" >> "$GITHUB_ENV"
+          echo "GCP_RUNTIME_REGION=$GCP_RUNTIME_REGION"
 
       - name: Authenticate to Google Cloud using WIF
         uses: google-github-actions/auth@v3
@@ -72,20 +78,20 @@ jobs:
           echo 'GCP_PROVIDER_RELAY_ORIGIN=failed'
           exit 1
 
-      - name: Create Artifact Registry repository if absent
+      - name: Create east-coast Artifact Registry repository if absent
         shell: bash
         run: |
           set -euo pipefail
           if gcloud artifacts repositories describe "$GCP_AR_REPO" \
             --project="$GCP_PROJECT_ID_VALUE" \
-            --location="$GCP_REGION_VALUE" >/dev/null 2>&1; then
+            --location="$GCP_RUNTIME_REGION" >/dev/null 2>&1; then
             echo 'GCP_ARTIFACT_REPOSITORY=existing'
           else
             gcloud artifacts repositories create "$GCP_AR_REPO" \
               --project="$GCP_PROJECT_ID_VALUE" \
-              --location="$GCP_REGION_VALUE" \
+              --location="$GCP_RUNTIME_REGION" \
               --repository-format=docker \
-              --description='TRUYN cross-cloud PoC runtime images' \
+              --description='TRUYN east-coast runtime images' \
               --quiet
             echo 'GCP_ARTIFACT_REPOSITORY=created'
           fi
@@ -94,7 +100,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          registry="${GCP_REGION_VALUE}-docker.pkg.dev"
+          registry="${GCP_RUNTIME_REGION}-docker.pkg.dev"
           image="${registry}/${GCP_PROJECT_ID_VALUE}/${GCP_AR_REPO}/truyn:${GITHUB_SHA}"
           gcloud auth configure-docker "$registry" --quiet
           docker build -t "$image" .
@@ -102,13 +108,13 @@ jobs:
           echo "GCP_IMAGE=$image" >> "$GITHUB_ENV"
           echo 'GCP_IMAGE_PUSH=success'
 
-      - name: Deploy Gemini TRUYN worker
+      - name: Deploy Gemini TRUYN worker near relay
         shell: bash
         run: |
           set -euo pipefail
           gcloud run deploy "$GCP_SERVICE" \
             --project="$GCP_PROJECT_ID_VALUE" \
-            --region="$GCP_REGION_VALUE" \
+            --region="$GCP_RUNTIME_REGION" \
             --image="$GCP_IMAGE" \
             --service-account="$GCP_RUNTIME_SA_VALUE" \
             --port=8080 \
@@ -119,11 +125,26 @@ jobs:
             --memory=512Mi \
             --set-env-vars="TRUYN_ROLE=provider,TRUYN_PROVIDER=vertex-gemini,TRUYN_CAPABILITIES=review,TRUYN_RELAY=${TRUYN_PROVIDER_RELAY_ORIGIN},GCP_PROJECT_ID=${GCP_PROJECT_ID_VALUE},GOOGLE_CLOUD_LOCATION=global,GEMINI_MODEL=gemini-2.5-flash" \
             --quiet
-          url="$(gcloud run services describe "$GCP_SERVICE" --project="$GCP_PROJECT_ID_VALUE" --region="$GCP_REGION_VALUE" --format='value(status.url)')"
-          revision="$(gcloud run services describe "$GCP_SERVICE" --project="$GCP_PROJECT_ID_VALUE" --region="$GCP_REGION_VALUE" --format='value(status.latestReadyRevisionName)')"
+          url="$(gcloud run services describe "$GCP_SERVICE" --project="$GCP_PROJECT_ID_VALUE" --region="$GCP_RUNTIME_REGION" --format='value(status.url)')"
+          revision="$(gcloud run services describe "$GCP_SERVICE" --project="$GCP_PROJECT_ID_VALUE" --region="$GCP_RUNTIME_REGION" --format='value(status.latestReadyRevisionName)')"
           [[ -n "$url" && -n "$revision" ]] || { echo 'GCP_CLOUD_RUN_READY=false'; exit 1; }
           echo "GCP_CLOUD_RUN_URL=$url"
           echo "GCP_CLOUD_RUN_REVISION=$revision"
+          echo "GCP_GEMINI_RUNTIME_REGION=$GCP_RUNTIME_REGION"
           echo "GCP_GEMINI_PUBLIC_RELAY=${TRUYN_PUBLIC_RELAY}"
           echo "GCP_GEMINI_BACKCHANNEL_RELAY=${TRUYN_PROVIDER_RELAY_ORIGIN}"
           echo 'GCP_CLOUD_RUN_READY=true'
+
+      - name: Remove old-region Gemini worker after cutover
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$GCP_PREVIOUS_REGION" != "$GCP_RUNTIME_REGION" ]]; then
+            gcloud run services delete "$GCP_SERVICE" \
+              --project="$GCP_PROJECT_ID_VALUE" \
+              --region="$GCP_PREVIOUS_REGION" \
+              --quiet >/dev/null 2>&1 || true
+            echo "GCP_OLD_RUNTIME_REMOVED=$GCP_PREVIOUS_REGION"
+          else
+            echo 'GCP_OLD_RUNTIME_REMOVED=not_needed'
+          fi
