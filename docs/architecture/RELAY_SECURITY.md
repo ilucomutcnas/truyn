@@ -1,6 +1,6 @@
 # TRUYN Relay Security Architecture
 
-**Status:** approved target architecture; not an implementation-complete security claim.
+**Status:** relay/provider authorization core, an optional reference origin guard, and a generic Cloudflare edge proxy are implemented; deployment-specific edge/origin activation remains operational work.
 
 ## Public relay, private intelligence
 
@@ -12,41 +12,41 @@ The relay is a routing and coordination surface. It is not a shared credential b
 
 ## Security boundary
 
-The target dispatch path is:
+The implemented dispatch boundary is:
 
 ```text
 public requester
       ↓
 relay authentication / session validation
       ↓
-central authorization decision
+provider visibility + authorization-aware matching
       ↓
-visibility + ownership + billing + quota checks
+provider-host access decision
       ↓
-only eligible provider routes
-      ↓
-private/authenticated provider backchannel
+provider-host billing decision
       ↓
 provider execution
 ```
 
-No provider invocation may occur before authorization succeeds.
+No provider invocation occurs before the provider-host access and billing decisions succeed. Private offers are filtered before dispatch, and provider-host authorization remains an independent second check before adapter execution.
+
+Additional account-level tenancy, durable distributed quota/accounting and commercial entitlement resolution remain later layers and must preserve this fail-closed order.
 
 ## Discovery boundary
 
-Discovery is authorization-aware. A requester should receive only:
+Discovery is authorization-aware. A requester receives only:
 
 - its own private/BYOK providers;
-- providers explicitly shared with it;
-- providers intentionally published for network-wide use.
+- private providers whose provider-signed requester policy authorizes it;
+- providers intentionally published for network-wide use when public dispatch is explicitly enabled.
 
-Owner-private providers should not appear in foreign discovery responses. Hiding them is defense in depth; authorization remains mandatory even if a provider ID becomes known.
+Owner-private providers do not appear as usable foreign discovery matches. Hiding them is defense in depth; authorization remains mandatory even if a provider ID becomes known.
 
 ## Provider backchannel
 
-Provider runtimes should connect through an authenticated machine-to-machine path that is distinct from an unauthenticated public invocation endpoint.
+Provider runtimes connect to the relay using signed TRUYN identity, a session bound to that node identity, and the same authorization-aware fast/legacy paths used by the relay core. Provider execution is additionally protected by provider-host access and billing checks.
 
-The concrete transport may be WebSocket, QUIC, private HTTP, service-to-service identity, Cloudflare Access/service tokens, cloud-native identity or another mechanism. Perimeter controls are additive; they do not replace TRUYN provider authorization.
+A separate deployment perimeter is still useful for owner infrastructure. The concrete edge/backchannel mechanism may be service-to-service identity, Cloudflare Access/service tokens, cloud-native network controls or another mechanism. Perimeter controls are additive; they do not replace TRUYN provider authorization.
 
 ## Public edge vs control plane
 
@@ -57,6 +57,41 @@ The architecture distinguishes:
 - **provider backchannel** — authenticated task delivery to provider runtimes.
 
 The owner control plane SHOULD NOT share the same trust assumptions as the public protocol surface.
+
+## Reference origin guard
+
+The reference runtime contains an optional origin-guard layer for deployments that expose the relay through a trusted edge.
+
+When enabled:
+
+1. the actual TRUYN relay binds only to a loopback address on an internal ephemeral port;
+2. the outer origin guard owns the configured external host/port;
+3. HTTP data-plane requests and WebSocket upgrades require a deployment-supplied edge-to-origin secret;
+4. unauthorized data-plane requests are rejected before reaching the inner relay;
+5. unauthenticated `/health` returns only a minimal protocol-health response and does not proxy inner relay diagnostics;
+6. the edge-to-origin secret is stripped before a request is forwarded to the inner relay;
+7. partial origin-guard configuration fails closed at runtime startup.
+
+The comparison is constant-time for equal-length tokens. The regression suite covers HTTP denial, WebSocket denial, secret stripping, minimal health output and runtime loopback wiring.
+
+This is an **implementation capability**, not a claim that a particular production origin is already protected. Edge configuration, token provisioning/rotation, firewall/tunnel policy and direct-origin denial remain deployment-specific operational controls and must be verified separately.
+
+## Reference Cloudflare edge proxy
+
+The public reference code also contains a generic Cloudflare Worker-compatible proxy that pairs with the origin guard without making the origin secret a TRUYN client credential.
+
+Its fail-closed behavior is:
+
+- the origin URL and origin-guard token must both be supplied through Worker bindings;
+- only an HTTPS origin without embedded credentials or path/query configuration is accepted;
+- any origin-proof header supplied by the public requester is discarded and replaced with the Worker secret;
+- request path, query, method, body, requester authorization and WebSocket upgrade headers are preserved for the origin;
+- redirects are handled manually so the origin proof is not automatically forwarded to a redirect target;
+- proxy failures return a sanitized error without binding values or upstream exception details.
+
+Cloudflare Workers supports secrets through the request `env` binding and supports upstream WebSocket establishment through `fetch` with an Upgrade request. The TRUYN implementation deliberately reads bindings per request so secret rotation is not hidden behind cached module-global configuration.
+
+No concrete Worker name, route, origin hostname or secret value belongs in the public repository. Deployment and proof that the production DNS path actually traverses the Worker remain private operational steps.
 
 ## Legacy-route rule
 
@@ -72,15 +107,17 @@ Failure of an abuse-control subsystem must not silently change an unauthorized r
 
 ## Kill switches
 
-The architecture reserves explicit operational kill switches for owner-funded external access and owner-provider network visibility. Their safe default is disabled/false. Exact variable names, values, thresholds and production policy state are operational/private information.
+The architecture reserves explicit operational kill switches for owner-funded external access and owner-provider network visibility. Their safe default is disabled/false. Exact values, thresholds and production policy state are operational/private information.
 
 ## Origin protection
 
-Where a public domain is fronted by an edge provider, the origin should be protected against direct bypass. Exact origin hostnames, edge application IDs, service tokens, firewall rules and bypass configuration are private operational data and are not documented here.
+Where a public domain is fronted by an edge provider, the origin should be protected against direct bypass. The optional reference origin guard plus edge proxy make edge-authenticated origin access possible without turning the edge token into a TRUYN user credential.
+
+Exact origin hostnames, edge application IDs, secret values, firewall rules and bypass configuration are private operational data and are not documented here.
 
 ## Acceptance invariant
 
-The relay security gate is complete only when negative testing proves:
+The relay/provider security invariant remains:
 
 ```text
 anonymous/foreign requester
@@ -88,4 +125,11 @@ anonymous/foreign requester
 + known private provider ID
 + arbitrary custom client
 = zero owner-funded upstream calls
+```
+
+For an origin-guarded deployment, a second deployment-specific invariant must also be proven:
+
+```text
+direct origin request without trusted edge proof
+= zero inner-relay data-plane requests
 ```
