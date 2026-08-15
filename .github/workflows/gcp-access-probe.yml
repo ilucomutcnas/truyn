@@ -82,16 +82,12 @@ jobs:
 
           token="$(gcloud auth print-access-token)"
 
-          curl -fsS \
-            -H "Authorization: Bearer ${token}" \
-            "https://run.googleapis.com/v2/projects/${project}/locations/${region}/services?pageSize=1" \
-            >/dev/null
+          curl -fsS -H "Authorization: Bearer ${token}" \
+            "https://run.googleapis.com/v2/projects/${project}/locations/${region}/services?pageSize=1" >/dev/null
           echo "CLOUD_RUN_READ=ok"
 
-          curl -fsS \
-            -H "Authorization: Bearer ${token}" \
-            "https://artifactregistry.googleapis.com/v1/projects/${project}/locations/${region}/repositories?pageSize=1" \
-            >/dev/null
+          curl -fsS -H "Authorization: Bearer ${token}" \
+            "https://artifactregistry.googleapis.com/v1/projects/${project}/locations/${region}/repositories?pageSize=1" >/dev/null
           echo "ARTIFACT_REGISTRY_READ=ok"
 
           gcloud iam service-accounts describe "$runtime_sa" --project="$project" --format='value(email)' >/dev/null
@@ -102,25 +98,34 @@ jobs:
             -H 'Content-Type: application/json' \
             "https://iam.googleapis.com/v1/projects/-/serviceAccounts/${runtime_sa}:testIamPermissions" \
             -d '{"permissions":["iam.serviceAccounts.actAs","iam.serviceAccounts.get"]}')"
-          if ! jq -e '.permissions | index("iam.serviceAccounts.actAs")' <<<"$perms_json" >/dev/null; then
+          if jq -e '.permissions | index("iam.serviceAccounts.actAs")' <<<"$perms_json" >/dev/null; then
+            echo "RUNTIME_SERVICE_ACCOUNT_ACTAS=ok"
+            echo "GCP_ACTAS_OK=true" >> "$GITHUB_ENV"
+          else
             echo "RUNTIME_SERVICE_ACCOUNT_ACTAS=missing"
-            exit 1
+            echo "GCP_ACTAS_OK=false" >> "$GITHUB_ENV"
           fi
-          echo "RUNTIME_SERVICE_ACCOUNT_ACTAS=ok"
 
           project_perms="$(curl -fsS -X POST \
             -H "Authorization: Bearer ${token}" \
             -H 'Content-Type: application/json' \
             "https://cloudresourcemanager.googleapis.com/v1/projects/${project}:testIamPermissions" \
             -d '{"permissions":["run.services.create","run.services.update","artifactregistry.repositories.create","artifactregistry.repositories.delete"]}')"
+
+          missing=0
           for permission in run.services.create run.services.update artifactregistry.repositories.create artifactregistry.repositories.delete; do
             if ! jq -e --arg p "$permission" '.permissions | index($p)' <<<"$project_perms" >/dev/null; then
               echo "PROJECT_PERMISSION_${permission}=missing"
-              exit 1
+              missing=1
             fi
           done
-          echo "CLOUD_RUN_WRITE_PERMISSION=ok"
-          echo "ARTIFACT_REGISTRY_WRITE_PERMISSION=ok"
+          if [[ "$missing" == "0" ]]; then
+            echo "CLOUD_RUN_WRITE_PERMISSION=ok"
+            echo "ARTIFACT_REGISTRY_WRITE_PERMISSION=ok"
+            echo "GCP_PROJECT_WRITE_OK=true" >> "$GITHUB_ENV"
+          else
+            echo "GCP_PROJECT_WRITE_OK=false" >> "$GITHUB_ENV"
+          fi
 
       - name: Verify safe create/delete in Artifact Registry
         shell: bash
@@ -146,3 +151,13 @@ jobs:
           gcloud artifacts repositories delete "$repo" --project="$project" --location="$region" --quiet >/dev/null
           trap - EXIT
           echo "ARTIFACT_REGISTRY_DELETE=ok"
+          echo "GCP_ARTIFACT_WRITE_OK=true" >> "$GITHUB_ENV"
+
+      - name: Final access verdict
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "${GCP_PROJECT_WRITE_OK:-false}" == "true" ]] || { echo "PROJECT_WRITE_ACCESS=incomplete"; exit 1; }
+          [[ "${GCP_ARTIFACT_WRITE_OK:-false}" == "true" ]] || { echo "ARTIFACT_WRITE_ACCESS=incomplete"; exit 1; }
+          [[ "${GCP_ACTAS_OK:-false}" == "true" ]] || { echo "RUNTIME_ACTAS_ACCESS=incomplete"; exit 1; }
+          echo "GCP_DEPLOYMENT_ACCESS=complete"
