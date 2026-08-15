@@ -24,12 +24,13 @@ jobs:
           tenant-id: ${{ vars.AZURE_TENANT_ID || secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Inspect effective access
+      - name: Inspect effective access and role scopes
         shell: bash
         run: |
           set -euo pipefail
           subscription_id="$(az account show --query id -o tsv)"
           principal_object_id="4845be35-9952-4436-abfa-8a9aa3eb2639"
+          subscription_scope="/subscriptions/${subscription_id}"
           az account get-access-token --resource https://management.azure.com/ --query accessToken -o tsv >/dev/null
 
           echo "AZURE_LOGIN=ok"
@@ -38,17 +39,34 @@ jobs:
           echo "VISIBLE_RESOURCE_GROUPS=$(az group list --query 'length(@)' -o tsv)"
           echo "VISIBLE_RESOURCES=$(az resource list --query 'length(@)' -o tsv)"
 
-          role_count="$(az role assignment list --all --query "length([?principalId=='${principal_object_id}'])" -o tsv)"
-          role_names="$(az role assignment list --all --query "[?principalId=='${principal_object_id}'].roleDefinitionName" -o tsv | sort -u | paste -sd, -)"
+          assignments="$(az role assignment list --all --query "[?principalId=='${principal_object_id}'].[roleDefinitionName,scope]" -o tsv)"
+          role_count="$(printf '%s\n' "$assignments" | sed '/^$/d' | wc -l | tr -d ' ')"
           echo "EFFECTIVE_ROLE_ASSIGNMENTS=${role_count}"
-          echo "EFFECTIVE_ROLE_NAMES=${role_names:-none}"
+
+          while IFS=$'\t' read -r role scope; do
+            [[ -z "${role:-}" ]] && continue
+            if [[ "$scope" == "$subscription_scope" ]]; then
+              scope_class="subscription"
+            elif [[ "$scope" == "$subscription_scope/resourceGroups/"* ]]; then
+              remainder="${scope#${subscription_scope}/resourceGroups/}"
+              if [[ "$remainder" == */providers/* ]]; then
+                scope_class="resource"
+              else
+                scope_class="resource-group"
+              fi
+            else
+              scope_class="other"
+            fi
+            safe_role="$(printf '%s' "$role" | tr '[:lower:] ' '[:upper:]_' | tr -cd 'A-Z0-9_-')"
+            echo "ROLE_SCOPE_${safe_role}=${scope_class}"
+          done <<< "$assignments"
 
           for ns in Microsoft.Resources Microsoft.App Microsoft.CognitiveServices Microsoft.ContainerRegistry Microsoft.ManagedIdentity Microsoft.Authorization Microsoft.OperationalInsights; do
             state="$(az provider show --namespace "$ns" --query registrationState -o tsv 2>/dev/null || echo inaccessible)"
             echo "PROVIDER_${ns//./_}=${state}"
           done
 
-          az role assignment list --scope "/subscriptions/${subscription_id}" --query 'length(@)' -o tsv >/dev/null
+          az role assignment list --scope "$subscription_scope" --query 'length(@)' -o tsv >/dev/null
           echo "RBAC_READ=ok"
 
       - name: Verify resource-group write access
