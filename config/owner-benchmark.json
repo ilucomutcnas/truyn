@@ -1,0 +1,6 @@
+{
+  "schema": 1,
+  "purpose": "owner-benchmark-requester",
+  "nodeId": "truyn:node:2e8ef84889ff0ae3ffb4756cd08f7ad5374002fe31db50a7d68f2bfe06e1f3b2",
+  "access": "owner-only"
+}
