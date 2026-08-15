@@ -48,18 +48,22 @@ export function createVertexGeminiProvider({
 
       const token = await accessTokenProvider({ fetchImpl });
       const modelPath = `projects/${projectId}/locations/${location}/publishers/google/models/${model}`;
+      const requestBody = JSON.stringify({
+        contents: [{ role: 'user', parts: [{ text: prompt }] }]
+      });
       const response = await fetchImpl(`${endpoint.replace(/\/$/, '')}/v1/${modelPath}:generateContent`, {
         method: 'POST',
         headers: {
           authorization: `Bearer ${token}`,
           'content-type': 'application/json'
         },
-        body: JSON.stringify({
-          contents: [{ role: 'user', parts: [{ text: prompt }] }]
-        })
+        body: requestBody
       });
       const body = await response.json();
       if (!response.ok) throw new Error(body?.error?.message || `Vertex AI HTTP ${response.status}`);
+
+      const providerRequestBodyBytes = Buffer.byteLength(requestBody);
+      const providerResponseBodyBytes = Buffer.byteLength(JSON.stringify(body));
 
       return {
         output: extractText(body),
@@ -68,6 +72,9 @@ export function createVertexGeminiProvider({
           model,
           providerRequestId: response.headers?.get?.('x-request-id') || null,
           providerLatencyMs: Date.now() - startedAt,
+          providerRequestBodyBytes,
+          providerResponseBodyBytes,
+          providerBodyBytes: providerRequestBodyBytes + providerResponseBodyBytes,
           usage: body.usageMetadata || null
         }
       };
