@@ -1,0 +1,114 @@
+name: TRUYN Protected Owner Provider Fleet
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/deploy-protected-owner-fleet.yml'
+      - 'config/owner-benchmark.json'
+      - 'scripts/deploy/azure-owner-fleet.sh'
+      - 'scripts/deploy/gcp-owner-gemini.sh'
+      - 'scripts/prove-owner-fleet.js'
+      - 'runtime/**'
+      - 'node/**'
+      - 'network/**'
+      - 'core/**'
+      - 'adapters/sdk/**'
+      - 'adapters/providers/**'
+      - 'Dockerfile'
+      - 'package.json'
+      - 'package-lock.json'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: truyn-protected-owner-provider-fleet
+  cancel-in-progress: false
+
+jobs:
+  deploy-and-prove:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      AZURE_CLIENT_ID_VALUE: ${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID_VALUE: ${{ vars.AZURE_TENANT_ID || secrets.AZURE_TENANT_ID }}
+      AZURE_SUBSCRIPTION_ID_VALUE: ${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}
+      GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID || secrets.GCP_PROJECT_ID }}
+      GCP_REGION_CONFIGURED: ${{ vars.GCP_REGION || secrets.GCP_REGION }}
+      GCP_WIF_PROVIDER_VALUE: ${{ vars.GCP_WIF_PROVIDER || secrets.GCP_WIF_PROVIDER }}
+      GCP_DEPLOYER_SERVICE_ACCOUNT_EMAIL: ${{ vars.GCP_DEPLOYER_SERVICE_ACCOUNT_EMAIL || secrets.GCP_DEPLOYER_SERVICE_ACCOUNT_EMAIL }}
+      GCP_RUNTIME_SERVICE_ACCOUNT_EMAIL: ${{ vars.GCP_RUNTIME_SERVICE_ACCOUNT_EMAIL || secrets.GCP_RUNTIME_SERVICE_ACCOUNT_EMAIL }}
+      TRUYN_OWNER_FLEET_PROOF_OUTPUT: artifacts/owner-fleet-proof.json
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies without lifecycle scripts
+        run: npm install --ignore-scripts --no-audit --no-fund
+
+      - name: Validate deployment scripts
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n scripts/deploy/azure-owner-fleet.sh
+          bash -n scripts/deploy/gcp-owner-gemini.sh
+          node --check scripts/prove-owner-fleet.js
+          jq -e '.schema == 1 and .access == "owner-only" and (.nodeId | startswith("truyn:node:"))' config/owner-benchmark.json >/dev/null
+
+      - name: Azure login with OIDC
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID_VALUE }}
+          tenant-id: ${{ env.AZURE_TENANT_ID_VALUE }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID_VALUE }}
+
+      - name: Ensure Container Apps CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          az extension add --name containerapp --upgrade --yes >/dev/null
+
+      - name: Deploy protected Azure owner fleet and relay ACL
+        shell: bash
+        run: bash scripts/deploy/azure-owner-fleet.sh
+
+      - name: Authenticate GCP deployer using WIF
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ env.GCP_WIF_PROVIDER_VALUE }}
+          service_account: ${{ env.GCP_DEPLOYER_SERVICE_ACCOUNT_EMAIL }}
+          create_credentials_file: true
+          export_environment_variables: true
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID }}
+
+      - name: Deploy protected Gemini owner node
+        shell: bash
+        run: bash scripts/deploy/gcp-owner-gemini.sh
+
+      - name: Prove relay deny gate and protected text network paths
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/prove-owner-fleet.js
+
+      - name: Upload sanitized owner fleet proof
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: truyn-protected-owner-fleet-${{ github.run_id }}
+          path: artifacts/owner-fleet-proof.json
+          if-no-files-found: warn
+          retention-days: 30
