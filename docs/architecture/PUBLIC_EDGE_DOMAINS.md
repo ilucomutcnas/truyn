@@ -2,28 +2,30 @@
 
 Status: implemented infrastructure reservation for the current Azure/Cloudflare PoC edge.
 
-This document records the public HTTPS hostnames that have already completed DNS ownership validation in Azure Front Door so future service activation does not unnecessarily repeat the custom-domain approval cycle.
+This document records the public HTTPS hostnames and Azure Front Door routes that have already been provisioned so future service activation does not unnecessarily repeat DNS ownership validation, managed-certificate setup, or initial route creation.
 
 ## Canonical live relay
 
-- `relay.truyn.org` — canonical public TRUYN relay HTTP endpoint for the current PoC.
+- `relay.truyn.org` → `relay-route` — canonical public TRUYN relay HTTP endpoint for the current PoC.
 
-`relay.truyn.org` is attached to the Azure Front Door route `relay-route` in profile `truyn-frontdoor` and resolves through Cloudflare DNS to the Front Door endpoint.
+`relay.truyn.org` resolves through Cloudflare DNS to the Front Door endpoint. The route remains attached to the current relay origin group.
 
-## Prewarmed HTTPS hostnames
+## Prewarmed HTTPS surfaces
 
-The following hostnames are reserved and pre-provisioned as Azure Front Door managed-certificate custom domains:
+The following hostnames are reserved, Azure-approved managed-certificate custom domains and have dedicated Front Door route objects:
 
-- `api.truyn.org` — future public HTTP API surface.
-- `discovery.truyn.org` — future HTTP discovery/bootstrap compatibility surface; this does not redefine the native TRUYN QUIC/UDP discovery transport.
-- `gateway.truyn.org` — future HTTP/REST/webhook compatibility gateway.
-- `mcp.truyn.org` — future MCP interoperability surface.
-- `trust.truyn.org` — future Trustability HTTP service surface.
-- `status.truyn.org` — future public status/health surface.
+- `api.truyn.org` → `api-route` — future public HTTP API surface.
+- `discovery.truyn.org` → `discovery-route` — future HTTP discovery/bootstrap compatibility surface; this does not redefine the native TRUYN QUIC/UDP discovery transport.
+- `gateway.truyn.org` → `gateway-route` — future HTTP/REST/webhook compatibility gateway.
+- `mcp.truyn.org` → `mcp-route` — future MCP interoperability surface.
+- `trust.truyn.org` → `trust-route` — future Trustability HTTP service surface.
+- `status.truyn.org` → `status-route` — future public status/health surface.
 
-For each hostname, Cloudflare contains the Azure Front Door ownership-validation TXT record and a DNS-only CNAME to the shared Front Door endpoint. Azure Front Door reports the custom domain as approved with managed TLS configured.
+For every hostname, Cloudflare contains the Azure Front Door ownership-validation TXT record and a DNS-only CNAME to the shared Front Door endpoint. Azure Front Door reports each custom domain as approved with managed TLS configured.
 
-These hostnames are currently associated with `relay-route` only to complete/prewarm the edge lifecycle. That association is **not** a declaration that the future API, discovery, gateway, MCP, trust, or status services share relay ownership or implementation. When a dedicated service exists, move the already-approved hostname to its dedicated Front Door route/origin group while preserving the custom-domain resource and DNS records wherever possible.
+Each future hostname owns exactly one dedicated route. For pre-provisioning only, those routes currently target the existing `relay-origin-group` as a placeholder. This is **not** a declaration that the future API, discovery, gateway, MCP, trust, or status services share relay ownership or implementation. When a dedicated service exists, preserve the approved hostname and route and replace the route's origin group/backend with the service-specific origin group.
+
+The canonical `relay-route` owns only `relay.truyn.org`; future hostnames are not attached to it.
 
 ## Native network transport boundary
 
@@ -31,7 +33,8 @@ Do not pre-provision `bootstrap`, `testnet`, or `mainnet` hostnames as Azure Fro
 
 ## Infrastructure source of truth
 
-- `.github/workflows/cloud-poc-domain-prewarm.yml` — idempotent reservation, Cloudflare DNS, Azure validation, and route prewarming for future HTTPS hostnames.
+- `.github/workflows/cloud-poc-domain-prewarm.yml` — idempotent reservation, Cloudflare DNS, Azure validation, and managed-TLS prewarming for future HTTPS hostnames.
+- `.github/workflows/cloud-poc-public-edge-routes.yml` — idempotent provisioning and verification of one Front Door route per public hostname.
 - `.github/workflows/cloud-poc-domain-diagnostic.yml` — DNS, Azure custom-domain, route-association, and HTTPS diagnostics for the canonical relay and all prewarmed names.
 - `.github/workflows/cloud-poc-domain-associate.yml` — canonical `relay.truyn.org` route association helper.
 
@@ -40,9 +43,9 @@ Current PoC edge resources:
 - Azure resource group: `truyn`
 - Azure Front Door profile: `truyn-frontdoor`
 - Azure Front Door endpoint: `truyn-edge-1334540181`
-- Current shared route: `relay-route`
+- Placeholder origin group for prewarmed routes: `relay-origin-group`
 - DNS zone: `truyn.org` in Cloudflare
 
 ## Change rule
 
-Do not delete and recreate an approved Front Door custom-domain resource as part of a normal backend migration. Prefer changing route/origin association. Recreating a custom domain can reintroduce DNS validation and managed-certificate propagation delay that this prewarming stage is specifically intended to avoid.
+Do not delete and recreate an approved Front Door custom-domain resource or its dedicated route as part of a normal backend migration. Prefer changing the route's origin group/backend. Recreating a custom domain can reintroduce DNS validation and managed-certificate propagation delay that this prewarming stage is specifically intended to avoid.
