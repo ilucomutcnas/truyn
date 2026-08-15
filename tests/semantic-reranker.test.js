@@ -25,7 +25,47 @@ test('provider semantic reranker returns only a candidate id and tracks usage', 
   ]);
   assert.equal(result.id, 'candidate-b');
   assert.deepEqual(result.metadata.usage, { input:21, output:5, total:26 });
+  assert.equal(result.metadata.repairAttemptsUsed, 0);
   assert.equal(reranker.stats().requests, 1);
+  assert.equal(reranker.stats().repairs, 0);
+});
+
+test('provider semantic reranker repairs placeholder or invented ids and counts both calls', async () => {
+  let calls = 0;
+  const provider = {
+    async execute() {
+      calls += 1;
+      return calls === 1
+        ? {
+            output:'{"id":"<candidate id>"}',
+            metadata:{
+              usage:{ promptTokenCount:10, candidatesTokenCount:3, totalTokenCount:13 },
+              providerRequestBodyBytes:100,
+              providerLatencyMs:7
+            }
+          }
+        : {
+            output:'{"id":"candidate-b"}',
+            metadata:{
+              usage:{ promptTokenCount:11, candidatesTokenCount:2, totalTokenCount:13 },
+              providerRequestBodyBytes:110,
+              providerLatencyMs:8
+            }
+          };
+    }
+  };
+  const reranker = createProviderSemanticReranker({ provider, repairAttempts:1 });
+  const result = await reranker.rerank('after approval?', [
+    { id:'candidate-a', text:'before approval' },
+    { id:'candidate-b', text:'after approval' }
+  ]);
+  assert.equal(result.id, 'candidate-b');
+  assert.equal(result.metadata.repairAttemptsUsed, 1);
+  assert.deepEqual(result.metadata.usage, { input:21, output:5, total:26 });
+  assert.equal(result.metadata.providerRequestBodyBytes, 210);
+  assert.equal(result.metadata.providerLatencyMs, 15);
+  assert.equal(reranker.stats().requests, 2);
+  assert.equal(reranker.stats().repairs, 1);
 });
 
 test('semantic router reranks only dense candidates and preserves selected block provenance', async () => {
