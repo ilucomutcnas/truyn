@@ -16,6 +16,8 @@ tests/public-repository.test.js @ilucomutcnas
 tests/security-boundary.test.js @ilucomutcnas
 tests/provider-access.test.js @ilucomutcnas
 tests/runtime-security.test.js @ilucomutcnas
+tests/billing-attribution.test.js @ilucomutcnas
+tests/billing-attribution-integration.test.js @ilucomutcnas
 
 docs/architecture/PROVIDER_OWNERSHIP.md @ilucomutcnas
 docs/architecture/AUTHORIZATION_MODEL.md @ilucomutcnas
