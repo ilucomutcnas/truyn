@@ -33,6 +33,13 @@ if (providerName === 'vertex-image') {
     model: process.env.AZURE_IMAGE_DEPLOYMENT,
     apiKey: process.env.AZURE_IMAGE_API_KEY
   };
+} else if (providerName === 'azure-flux') {
+  options = {
+    ...options,
+    endpoint: process.env.AZURE_FLUX_ENDPOINT,
+    model: process.env.AZURE_FLUX_DEPLOYMENT,
+    apiKey: process.env.AZURE_FLUX_API_KEY
+  };
 }
 
 const provider = createProviderAdapter(providerName, options);
@@ -42,7 +49,7 @@ const result = await provider.execute({
   input: 'A single solid blue circle centered on a plain white background. No text, no watermark.',
   policy: providerName === 'azure-openai-image'
     ? { providerOptions: { size: '1024x1024', quality: 'low', outputFormat: 'png' } }
-    : {}
+    : { providerOptions: { size: '1024x1024' } }
 });
 
 const artifact = result.output?.artifacts?.[0];
@@ -51,6 +58,8 @@ const summary = {
   ok: true,
   modality: 'image',
   provider: providerName,
+  vendor: result.metadata?.vendor || null,
+  family: result.metadata?.modelFamily || null,
   model: result.metadata?.model || null,
   latencyMs: Date.now() - startedAt,
   providerLatencyMs: result.metadata?.providerLatencyMs || null,
