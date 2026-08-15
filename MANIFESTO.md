@@ -45,12 +45,21 @@ We believe computation should move toward information, not endlessly drag inform
 
 We believe no corporation, cloud, model provider or government should own the intelligence layer of the Internet.
 
+We also believe openness must never be confused with taking someone else's resources.
+
+**An open intelligence network is not an open billing account.**
+
+Your identity is yours. Your intelligence provider is yours. Your credentials are yours. Your decision to share capability is yours.
+
+TRUYN should make cooperation easier without turning private provider quota into a commons by accident.
+
 This is our fight:
 
 Against unnecessary centralization.
 Against blind trust.
 Against synthetic noise.
 Against duplicated computation.
+Against hidden ownership and ambiguous cost.
 Against networks that can deliver information perfectly while knowing nothing about whether it deserves to be believed.
 
 We are not trying to make today's Internet slightly faster.
@@ -62,6 +71,7 @@ From requests to intent.
 From documents to state.
 From repetition to verification.
 From assumed trust to measurable trustability.
+From accidental sharing to explicit ownership.
 From machine-to-machine to intelligence-to-intelligence.
 
 The cables can remain.
