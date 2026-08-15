@@ -1,11 +1,17 @@
 name: Cloud PoC GCP Gemini Runtime
-# deployment revision: 2
+# deployment revision: 3
 
 on:
   push:
     branches:
       - main
     paths:
+      - 'runtime/**'
+      - 'adapters/providers/vertex-gemini.js'
+      - 'adapters/providers/index.js'
+      - 'Dockerfile'
+      - 'package.json'
+      - 'package-lock.json'
       - '.github/workflows/cloud-poc-gcp-runtime.yml'
   workflow_dispatch:
 
@@ -25,6 +31,7 @@ jobs:
       GCP_REGION_CONFIGURED: ${{ vars.GCP_REGION || secrets.GCP_REGION }}
       GCP_AR_REPO: truyn-poc
       GCP_SERVICE: truyn-gemini
+      TRUYN_PUBLIC_RELAY: https://relay.truyn.org
     steps:
       - uses: actions/checkout@v4
 
@@ -95,11 +102,12 @@ jobs:
             --no-cpu-throttling \
             --cpu=1 \
             --memory=512Mi \
-            --set-env-vars="TRUYN_ROLE=provider,TRUYN_PROVIDER=vertex-gemini,TRUYN_CAPABILITIES=review,TRUYN_RELAY=https://relay.invalid,GCP_PROJECT_ID=${GCP_PROJECT_ID_VALUE},GOOGLE_CLOUD_LOCATION=global,GEMINI_MODEL=gemini-2.5-flash" \
+            --set-env-vars="TRUYN_ROLE=provider,TRUYN_PROVIDER=vertex-gemini,TRUYN_CAPABILITIES=review,TRUYN_RELAY=${TRUYN_PUBLIC_RELAY},GCP_PROJECT_ID=${GCP_PROJECT_ID_VALUE},GOOGLE_CLOUD_LOCATION=global,GEMINI_MODEL=gemini-2.5-flash" \
             --quiet
           url="$(gcloud run services describe "$GCP_SERVICE" --project="$GCP_PROJECT_ID_VALUE" --region="$GCP_REGION_VALUE" --format='value(status.url)')"
           revision="$(gcloud run services describe "$GCP_SERVICE" --project="$GCP_PROJECT_ID_VALUE" --region="$GCP_REGION_VALUE" --format='value(status.latestReadyRevisionName)')"
           [[ -n "$url" && -n "$revision" ]] || { echo 'GCP_CLOUD_RUN_READY=false'; exit 1; }
           echo "GCP_CLOUD_RUN_URL=$url"
           echo "GCP_CLOUD_RUN_REVISION=$revision"
+          echo "GCP_GEMINI_RELAY=${TRUYN_PUBLIC_RELAY}"
           echo 'GCP_CLOUD_RUN_READY=true'
