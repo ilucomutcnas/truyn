@@ -1,0 +1,66 @@
+name: Semantic Provider Diagnostic Once
+
+on:
+  push:
+    paths:
+      - .github/workflows/semantic-diagnostic-once.yml
+
+permissions:
+  contents: read
+
+jobs:
+  diagnostic:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      TRUYN_RELAY: https://relay.truyn.org
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm install --no-audit --no-fund
+      - name: Isolate semantic provider and chain paths
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import { TruynNode } from './node/client.js';
+          const relayUrl = process.env.TRUYN_RELAY;
+          const node = new TruynNode({ relayUrl });
+          await node.register({ name: 'semantic-production-diagnostic' });
+          const research = await node.find('research');
+          const review = await node.find('review');
+          const researchProvider = research.offers?.find((offer) => offer.payload?.metadata?.fastPath)?.from || research.offers?.[0]?.from;
+          const reviewProvider = review.offers?.find((offer) => offer.payload?.metadata?.fastPath)?.from || review.offers?.[0]?.from;
+          console.log(JSON.stringify({ researchProvider, reviewProvider, researchOffers: research.offers?.length || 0, reviewOffers: review.offers?.length || 0 }));
+          if (!researchProvider || !reviewProvider) throw new Error('providers_missing');
+          const context = await node.putContext([
+            { id: 'alpha', text: 'Helios Observatory 9001 current authoritative restoration objective is RESTORE_VALUE=HEL-9001-CURRENT.' },
+            { id: 'beta', text: 'Boreal Ledger 9002 current settlement objective is SETTLE_VALUE=BOR-9002-T2.' },
+            { id: 'gamma', text: 'Cygnus Clinic 9003 current temperature objective is TEMP_VALUE=CYG-9003-18C.' }
+          ], { readers: [researchProvider, reviewProvider], metadata: { diagnostic: true } });
+          const question = 'What is the current authoritative restoration objective for Helios Observatory 9001?';
+          const ref = { $context: { cid: context.cid, query: question, topK: 1 } };
+          const selfRetrieved = await node.retrieveContext(context.cid, question, { topK: 1 });
+          console.log(JSON.stringify({ step: 'self-retrieve', selected: selfRetrieved.blocks?.[0]?.id, provenance: selfRetrieved.provenanceVerified }));
+
+          const researchResult = await node.compactNeed('research', { task: `${question} Return only RESTORE_VALUE.`, context: ref }, { diagnostic: true }, { waitMs: 60000 });
+          console.log(JSON.stringify({ step: 'research-need', provider: researchResult.provider, output: researchResult.output, metadata: researchResult.metadata }));
+
+          const reviewResult = await node.compactNeed('review', { task: `${question} Return only RESTORE_VALUE.`, context: ref }, { diagnostic: true }, { waitMs: 60000 });
+          console.log(JSON.stringify({ step: 'review-need', provider: reviewResult.provider, output: reviewResult.output, metadata: reviewResult.metadata }));
+
+          await node.ensureFastSocket();
+          try {
+            const chain = await node.compactChain([
+              { capability: 'research', input: { task: `${question} Return only RESTORE_VALUE.`, context: ref }, policy: { diagnostic: true } },
+              { capability: 'review', inputTemplate: { task: `${question} Return only RESTORE_VALUE.`, candidate: { $previous: 'output' }, context: ref }, policy: { diagnostic: true } }
+            ], { waitMs: 60000 });
+            console.log(JSON.stringify({ step: 'chain', transport: chain.requesterTransport, providers: chain.providers, results: chain.results.map((event) => ({ from: event.from, output: event.payload?.output, metadata: event.payload?.metadata })) }));
+          } catch (error) {
+            console.log(JSON.stringify({ step: 'chain-error', error: error.message }));
+            throw error;
+          } finally {
+            node.closeFastSocket();
+          }
+          NODE
