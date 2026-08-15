@@ -1,6 +1,6 @@
 # TRUYN BYOK Architecture
 
-**Status:** official CLI BYOK onboarding, private-provider isolation, local OpenAI-compatible runtime profiles and generic custom HTTP provider profiles implemented; custom MCP provider onboarding and secure-secret integrations remain future work.
+**Status:** official CLI BYOK onboarding, private-provider isolation, local OpenAI-compatible runtimes, generic custom HTTP providers and stateless MCP HTTP tool providers implemented; secure-secret-store integrations remain future work.
 
 ## Definition
 
@@ -20,11 +20,10 @@ Vertex Gemini
 OpenAI-compatible endpoint
 local OpenAI-compatible runtime
 custom HTTP JSON provider
+custom stateless MCP HTTP tool provider
 ```
 
 The profile records non-secret provider configuration and, when authentication is required, the **name** of the environment variable that supplies a credential. `truyn setup --test` performs a minimal real provider call and only then marks the profile verified.
-
-A generic custom MCP provider profile is not yet implemented in `truyn setup`. MCP remains an existing TRUYN interoperability/requester surface and a separate future provider-onboarding slice.
 
 ## Separate requester and provider identities
 
@@ -65,6 +64,7 @@ The current local profile contains data such as:
 provider type
 model
 endpoint/base URL where applicable
+MCP tool name where applicable
 auth mode
 credential environment-variable name where applicable
 capabilities
@@ -155,14 +155,40 @@ Authentication is `none` by default. Optional bearer authentication is enabled o
 
 Because this endpoint executes from the user's private provider runtime rather than from the central relay, endpoint reachability remains part of the user's own runtime trust boundary.
 
-## Future custom-provider paths
+## Custom MCP provider path
 
-Future profile types may add:
+The `custom-mcp` profile adapts one explicitly configured MCP HTTP tool into a private TRUYN capability. It uses the stateless `2026-07-28` MCP HTTP request form:
 
 ```text
-custom MCP provider
+MCP-Protocol-Version: 2026-07-28
+Mcp-Method: tools/call
+Mcp-Name: configured tool
+```
+
+The JSON-RPC `tools/call` arguments are:
+
+```json
+{
+  "capability": "...",
+  "input": "...",
+  "policy": {}
+}
+```
+
+The request carries MCP client identity metadata and does not create a legacy MCP session. The adapter accepts `structuredContent` or MCP content blocks and normalizes them into the TRUYN provider result.
+
+Authentication is no-auth by default. A bearer token is used only when the user explicitly names a credential environment variable; the token is resolved at provider runtime and is not persisted or returned in result metadata.
+
+This path intentionally targets stateless MCP HTTP tool endpoints. Legacy stateful MCP initialization/session negotiation is not part of this provider adapter.
+
+## Future hardening paths
+
+Future work may add:
+
+```text
 OS credential/key-store integration
 universal desktop Google ADC/login flow
+additional MCP transport compatibility where justified
 ```
 
 These are not claimed as implemented today.
