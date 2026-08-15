@@ -8,6 +8,27 @@ function extractText(response) {
   return parts.join('\n');
 }
 
+function safeBodyExcerpt(value, max = 200) {
+  return String(value || '').replace(/\s+/g, ' ').trim().slice(0, max);
+}
+
+async function readResponseBody(response) {
+  if (typeof response?.text === 'function') {
+    const raw = await response.text();
+    if (!raw) return { raw:'', json:null };
+    try {
+      return { raw, json:JSON.parse(raw) };
+    } catch {
+      return { raw, json:null };
+    }
+  }
+  if (typeof response?.json === 'function') {
+    const json = await response.json();
+    return { raw:JSON.stringify(json), json };
+  }
+  return { raw:'', json:null };
+}
+
 async function googleMetadataAccessToken({ fetchImpl = fetch } = {}) {
   const host = process.env.GCE_METADATA_HOST || 'metadata.google.internal';
   const response = await fetchImpl(`http://${host}/computeMetadata/v1/instance/service-accounts/default/token`, {
@@ -66,11 +87,17 @@ export function createVertexGeminiProvider({
         },
         body: requestBody
       });
-      const body = await response.json();
-      if (!response.ok) throw new Error(body?.error?.message || `Vertex AI HTTP ${response.status}`);
+      const { raw, json:body } = await readResponseBody(response);
+      if (!response.ok) {
+        const detail = body?.error?.message || safeBodyExcerpt(raw);
+        throw new Error(`Vertex AI HTTP ${response.status}${detail ? `: ${detail}` : ''}`);
+      }
+      if (!body || typeof body !== 'object') {
+        throw new Error(`Vertex AI HTTP ${response.status}: invalid non-JSON response${raw ? ` (${safeBodyExcerpt(raw)})` : ''}`);
+      }
 
       const providerRequestBodyBytes = Buffer.byteLength(requestBody);
-      const providerResponseBodyBytes = Buffer.byteLength(JSON.stringify(body));
+      const providerResponseBodyBytes = Buffer.byteLength(raw || JSON.stringify(body));
 
       return {
         output: extractText(body),
