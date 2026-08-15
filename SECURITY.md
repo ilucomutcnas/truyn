@@ -26,9 +26,15 @@ TRUYN is pre-1.0 experimental software. The public reference runtime is intentio
 - runtime provider processes default to `owner-only`; an empty requester allowlist denies access;
 - provider-host authorization is evaluated before `adapter.execute()`, and the regression suite asserts zero adapter executions for a denied requester;
 - switching a runtime provider to public mode requires both `TRUYN_PROVIDER_ACCESS_MODE=public` and the separate `TRUYN_ALLOW_PUBLIC_PROVIDER=1` opt-in;
-- the user-facing CLI can start only a loopback local-development relay; it cannot expose the permissive local mode on a non-loopback interface.
+- the user-facing CLI can start only a loopback local-development relay; it cannot expose the permissive local mode on a non-loopback interface;
+- the reference relay runtime includes an optional fail-closed origin guard: when enabled, the actual relay binds only to loopback while an outer proxy gates HTTP data-plane requests and WebSocket upgrades using deployment-supplied edge proof;
+- unauthorized origin-guard health checks receive only a minimal protocol-health response, and the edge proof is stripped before forwarding to the inner relay;
+- incomplete origin-guard configuration fails startup rather than silently exposing the inner relay;
+- the reference code also includes a generic Cloudflare Worker-compatible edge proxy that requires an HTTPS origin plus Worker secret binding, overwrites any client-supplied origin proof, preserves normal requester/session and WebSocket headers, and uses manual redirect handling;
+- the edge proxy refuses same-host origin configuration, including alternate ports, so a public Worker route cannot be accidentally configured to recursively fetch itself;
+- edge-proxy failures are sanitized and do not return Worker secret bindings or upstream exception details.
 
-This implements the first provider ownership/BYOK enforcement boundary. Rich account/tenant ownership, commercial entitlements, sponsored access, durable quota accounting and billing attribution remain later layers and must preserve these fail-closed invariants.
+This implements the first provider ownership/BYOK enforcement boundary plus reference edge-to-origin defense-in-depth components. Rich account/tenant ownership, commercial entitlements, sponsored access, durable quota accounting and billing attribution remain later layers and must preserve these fail-closed invariants. Deployment-specific edge configuration, secret rotation, firewall/tunnel policy and direct-origin denial still require separate operational verification.
 
 ## Core principles
 
@@ -38,7 +44,7 @@ TRUYN source code and protocol can be public while individual AI providers remai
 
 ### BYOK by default
 
-Normal users Bring Their Own Intelligence / Bring Their Own Provider. Raw upstream credentials stay with the user's/provider runtime and do not belong in TRUYN envelopes or relay state.
+Normal users Bring Their Own Intelligence / Bring Your Own Provider. Raw upstream credentials stay with the user's/provider runtime and do not belong in TRUYN envelopes or relay state.
 
 A private BYOK provider may authorize one or more requester node identities in its signed `OFFER`. The relay verifies the `OFFER` signature/session binding, derives provider ownership from the provider node identity, and applies the signed requester allowlist before discovery or dispatch.
 
@@ -117,9 +123,16 @@ The in-repository regression suite now proves at minimum:
 - oversized input: rejected before unbounded buffering;
 - trusted owner requester → explicitly authorized owner provider: allowed;
 - provider-host authorization remains a second independent check before adapter execution;
+- optional origin guard → unauthorized HTTP data-plane request: denied before inner relay;
+- optional origin guard → unauthorized WebSocket upgrade: denied before inner relay;
+- optional origin guard → authorized proxying strips the edge proof before the inner relay;
+- Cloudflare edge proxy → missing/invalid bindings: denied before upstream fetch;
+- Cloudflare edge proxy → spoofed client proof: overwritten with the Worker binding;
+- Cloudflare edge proxy → same public/origin hostname, including alternate ports: denied before upstream fetch;
+- Cloudflare edge proxy → upstream exception: sanitized failure without secret or exception leakage;
 - protected benchmark evidence files remain present/substantial and are scanned for public-repository leakage rather than banned by path.
 
-Deployment-specific cloud/IAM/origin acceptance, durable billing/quota accounting and richer account-level tenancy remain separate from these in-repository tests.
+Deployment-specific cloud/IAM/edge activation, direct-origin production proof, durable billing/quota accounting and richer account-level tenancy remain separate from these in-repository tests.
 
 ## Related architecture
 
