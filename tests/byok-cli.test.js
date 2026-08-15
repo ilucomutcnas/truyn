@@ -37,13 +37,15 @@ test('BYOK profile stores credential reference but never credential value', () =
   const secretValue = 'DO_NOT_PERSIST_THIS_SECRET_VALUE';
   const serialized = JSON.stringify(profile);
 
+  assert.equal(profile.authMode, 'bearer');
   assert.equal(profile.credentialEnv, 'TEST_BYOK_SECRET');
   assert.equal(serialized.includes(secretValue), false);
   assert.deepEqual(providerAdapterOptions(profile, { TEST_BYOK_SECRET: secretValue }), {
     capabilities: ['reasoning.general'],
     apiKey: secretValue,
     model: 'test-model',
-    baseUrl: undefined
+    baseUrl: undefined,
+    allowNoAuth: false
   });
   assert.equal(validateByokEnvironment(profile, { TEST_BYOK_SECRET: secretValue }).ok, true);
 });
