@@ -1,11 +1,8 @@
 name: CI
 
 on:
-  push:
-    branches:
-      - main
-      - 'security/**'
-  pull_request:
+  push: {}
+  pull_request: {}
 
 permissions:
   contents: read
