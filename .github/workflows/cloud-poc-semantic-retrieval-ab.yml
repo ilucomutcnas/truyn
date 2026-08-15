@@ -1,4 +1,5 @@
 name: Cloud PoC Semantic Retrieval A/B
+# Production gate: question + root CID only; provider stages remain WebSocket fast-path.
 
 on:
   workflow_dispatch:
