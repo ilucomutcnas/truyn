@@ -1,0 +1,4 @@
+FROM node:20-alpine
+WORKDIR /app
+COPY scripts/smoke/vertex-runtime-proxy.js ./scripts/smoke/vertex-runtime-proxy.js
+CMD ["node", "scripts/smoke/vertex-runtime-proxy.js"]
