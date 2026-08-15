@@ -1,0 +1,106 @@
+name: Cloud PoC Azure AI Foundation
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/cloud-poc-azure-ai-foundation.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  provision-and-smoke-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      AZURE_RG: truyn
+      AZURE_LOCATION: eastus
+      AZURE_OPENAI_NAME: truyn-openai-1334540181
+      AZURE_OPENAI_DEPLOYMENT: truyn-gpt-4-1-mini
+      AZURE_OPENAI_MODEL: gpt-4.1-mini
+      AZURE_OPENAI_MODEL_VERSION: '2025-04-14'
+    steps:
+      - name: Azure login with OIDC
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID || secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Create Azure OpenAI account if absent
+        shell: bash
+        run: |
+          set -euo pipefail
+          if az cognitiveservices account show -g "$AZURE_RG" -n "$AZURE_OPENAI_NAME" >/dev/null 2>&1; then
+            echo 'AZURE_OPENAI_ACCOUNT=existing'
+          else
+            az cognitiveservices account create \
+              --resource-group "$AZURE_RG" \
+              --name "$AZURE_OPENAI_NAME" \
+              --location "$AZURE_LOCATION" \
+              --kind OpenAI \
+              --sku S0 \
+              --custom-domain "$AZURE_OPENAI_NAME" \
+              --yes \
+              >/dev/null
+            echo 'AZURE_OPENAI_ACCOUNT=created'
+          fi
+          endpoint="$(az cognitiveservices account show -g "$AZURE_RG" -n "$AZURE_OPENAI_NAME" --query properties.endpoint -o tsv)"
+          [[ -n "$endpoint" ]] || { echo 'AZURE_OPENAI_ENDPOINT=missing'; exit 1; }
+          echo "AZURE_OPENAI_ENDPOINT=$endpoint" >> "$GITHUB_ENV"
+          echo "AZURE_OPENAI_ENDPOINT=$endpoint"
+
+      - name: Deploy GPT model if absent
+        shell: bash
+        run: |
+          set -euo pipefail
+          if az cognitiveservices account deployment show \
+            -g "$AZURE_RG" \
+            -n "$AZURE_OPENAI_NAME" \
+            --deployment-name "$AZURE_OPENAI_DEPLOYMENT" \
+            >/dev/null 2>&1; then
+            echo 'AZURE_OPENAI_DEPLOYMENT=existing'
+          else
+            az cognitiveservices account deployment create \
+              -g "$AZURE_RG" \
+              -n "$AZURE_OPENAI_NAME" \
+              --deployment-name "$AZURE_OPENAI_DEPLOYMENT" \
+              --model-name "$AZURE_OPENAI_MODEL" \
+              --model-version "$AZURE_OPENAI_MODEL_VERSION" \
+              --model-format OpenAI \
+              --sku-name Standard \
+              --sku-capacity 1 \
+              >/dev/null
+            echo 'AZURE_OPENAI_DEPLOYMENT=created'
+          fi
+          az cognitiveservices account deployment show \
+            -g "$AZURE_RG" \
+            -n "$AZURE_OPENAI_NAME" \
+            --deployment-name "$AZURE_OPENAI_DEPLOYMENT" \
+            --query '{deployment:name,model:properties.model.name,version:properties.model.version,sku:sku.name,capacity:sku.capacity,provisioningState:properties.provisioningState}' \
+            -o table
+
+      - name: Smoke-test Azure OpenAI Responses API
+        shell: bash
+        run: |
+          set -euo pipefail
+          key="$(az cognitiveservices account keys list -g "$AZURE_RG" -n "$AZURE_OPENAI_NAME" --query key1 -o tsv)"
+          response_file="$(mktemp)"
+          status="$(curl -sS -o "$response_file" -w '%{http_code}' \
+            -X POST "${AZURE_OPENAI_ENDPOINT%/}/openai/v1/responses" \
+            -H 'Content-Type: application/json' \
+            -H "api-key: $key" \
+            -d "{\"model\":\"$AZURE_OPENAI_DEPLOYMENT\",\"input\":\"Return exactly: TRUYN_AZURE_OK\",\"store\":false}")"
+          if [[ "$status" != 2* ]]; then
+            echo "AZURE_OPENAI_SMOKE_HTTP=$status"
+            jq '{error: .error}' "$response_file" || cat "$response_file"
+            exit 1
+          fi
+          jq '{id,model,output_text,usage}' "$response_file"
+          text="$(jq -r '[.output[]? | select(.type=="message") | .content[]? | select(.type=="output_text") | .text] | join("\n")' "$response_file")"
+          [[ "$text" == *TRUYN_AZURE_OK* ]] || { echo 'AZURE_OPENAI_SMOKE=result_mismatch'; exit 1; }
+          echo 'AZURE_OPENAI_SMOKE=success'
