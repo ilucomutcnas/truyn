@@ -1,0 +1,68 @@
+name: Azure Main Access Probe
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/azure-main-access-probe.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Azure login with OIDC
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID || secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Probe Azure read access
+        shell: bash
+        run: |
+          set -euo pipefail
+          az account show >/dev/null
+          az account get-access-token --resource https://management.azure.com/ --query accessToken -o tsv >/dev/null
+
+          echo "AZURE_LOGIN=ok"
+          echo "ARM_TOKEN=ok"
+          echo "ENABLED_SUBSCRIPTIONS=$(az account list --query \"length([?state=='Enabled'])\" -o tsv)"
+          echo "VISIBLE_RESOURCE_GROUPS=$(az group list --query 'length(@)' -o tsv)"
+          echo "VISIBLE_RESOURCES=$(az resource list --query 'length(@)' -o tsv)"
+          echo "VISIBLE_CONTAINER_APPS=$(az resource list --resource-type Microsoft.App/containerApps --query 'length(@)' -o tsv)"
+          echo "VISIBLE_COGNITIVE_ACCOUNTS=$(az resource list --resource-type Microsoft.CognitiveServices/accounts --query 'length(@)' -o tsv)"
+          echo "VISIBLE_ACR_REGISTRIES=$(az acr list --query 'length(@)' -o tsv 2>/dev/null || echo unavailable)"
+
+          for ns in Microsoft.App Microsoft.CognitiveServices Microsoft.ContainerRegistry Microsoft.OperationalInsights; do
+            state="$(az provider show --namespace "$ns" --query registrationState -o tsv 2>/dev/null || echo inaccessible)"
+            echo "PROVIDER_${ns//./_}=${state}"
+          done
+
+          if az role assignment list --scope "/subscriptions/$(az account show --query id -o tsv)" --query 'length(@)' -o tsv >/dev/null 2>&1; then
+            echo "RBAC_READ=ok"
+          else
+            echo "RBAC_READ=denied"
+          fi
+
+      - name: Probe Azure write access
+        shell: bash
+        run: |
+          set -euo pipefail
+          probe_rg="truyn-access-probe-${GITHUB_RUN_ID}"
+          cleanup() {
+            az group delete --name "$probe_rg" --yes >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+
+          az group create --name "$probe_rg" --location eastus --tags purpose=truyn-access-probe ephemeral=true >/dev/null
+          echo "RESOURCE_GROUP_CREATE=ok"
+          az group delete --name "$probe_rg" --yes >/dev/null
+          trap - EXIT
+          echo "RESOURCE_GROUP_DELETE=ok"
