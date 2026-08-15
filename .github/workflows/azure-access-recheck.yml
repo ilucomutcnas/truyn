@@ -26,11 +26,10 @@ jobs:
 
       - name: Inspect effective access
         shell: bash
-        env:
-          AZURE_CLIENT_ID_VALUE: ${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }}
         run: |
           set -euo pipefail
           subscription_id="$(az account show --query id -o tsv)"
+          principal_object_id="4845be35-9952-4436-abfa-8a9aa3eb2639"
           az account get-access-token --resource https://management.azure.com/ --query accessToken -o tsv >/dev/null
 
           echo "AZURE_LOGIN=ok"
@@ -39,21 +38,18 @@ jobs:
           echo "VISIBLE_RESOURCE_GROUPS=$(az group list --query 'length(@)' -o tsv)"
           echo "VISIBLE_RESOURCES=$(az resource list --query 'length(@)' -o tsv)"
 
-          object_id="$(az ad sp show --id "$AZURE_CLIENT_ID_VALUE" --query id -o tsv 2>/dev/null || true)"
-          if [[ -n "$object_id" ]]; then
-            echo "SERVICE_PRINCIPAL_RESOLUTION=ok"
-            roles="$(az role assignment list --all --query "[?principalId=='${object_id}'].roleDefinitionName" -o tsv | sort -u | paste -sd, -)"
-            count="$(az role assignment list --all --query "length([?principalId=='${object_id}'])" -o tsv)"
-            echo "EFFECTIVE_ROLE_ASSIGNMENTS=${count}"
-            echo "EFFECTIVE_ROLE_NAMES=${roles:-none}"
-          else
-            echo "SERVICE_PRINCIPAL_RESOLUTION=unavailable"
-          fi
+          role_count="$(az role assignment list --all --query "length([?principalId=='${principal_object_id}'])" -o tsv)"
+          role_names="$(az role assignment list --all --query "[?principalId=='${principal_object_id}'].roleDefinitionName" -o tsv | sort -u | paste -sd, -)"
+          echo "EFFECTIVE_ROLE_ASSIGNMENTS=${role_count}"
+          echo "EFFECTIVE_ROLE_NAMES=${role_names:-none}"
 
           for ns in Microsoft.Resources Microsoft.App Microsoft.CognitiveServices Microsoft.ContainerRegistry Microsoft.ManagedIdentity Microsoft.Authorization Microsoft.OperationalInsights; do
             state="$(az provider show --namespace "$ns" --query registrationState -o tsv 2>/dev/null || echo inaccessible)"
             echo "PROVIDER_${ns//./_}=${state}"
           done
+
+          az role assignment list --scope "/subscriptions/${subscription_id}" --query 'length(@)' -o tsv >/dev/null
+          echo "RBAC_READ=ok"
 
       - name: Verify resource-group write access
         shell: bash
