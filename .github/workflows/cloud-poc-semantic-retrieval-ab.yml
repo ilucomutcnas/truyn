@@ -9,6 +9,10 @@ on:
       - '.github/workflows/cloud-poc-semantic-retrieval-ab.yml'
       - 'benchmarks/semantic-retrieval-ab.js'
 
+concurrency:
+  group: truyn-semantic-retrieval-gate
+  cancel-in-progress: true
+
 permissions:
   contents: read
   id-token: write
@@ -28,7 +32,7 @@ jobs:
       GCP_RUNTIME_SA_VALUE: ${{ vars.GCP_RUNTIME_SERVICE_ACCOUNT_EMAIL || secrets.GCP_RUNTIME_SERVICE_ACCOUNT_EMAIL }}
       GCP_BENCHMARK_REGION: us-east4
       GCP_AR_REPO: truyn-poc
-      GCP_PROXY_SERVICE: truyn-benchmark-gemini-direct
+      GCP_PROXY_SERVICE: truyn-semantic-${{ github.run_id }}
       GOOGLE_CLOUD_LOCATION: global
       GEMINI_MODEL: gemini-2.5-flash
       SEMANTIC_LIVE_PAIRS: '8'
