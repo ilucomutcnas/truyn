@@ -1,6 +1,6 @@
 # TRUYN Billing Boundary
 
-**Status:** first provider-runtime billing gate implemented; durable commercial entitlements/accounting remain future work.
+**Status:** provider-runtime billing gate and normalized billing-attribution receipt implemented; durable commercial entitlements/accounting remain future work.
 
 ## Principle
 
@@ -12,7 +12,7 @@ If billing responsibility is ambiguous, execution fails closed.
 
 ## Implemented reference gate
 
-The production provider runtime now evaluates execution in this order:
+The production provider runtime evaluates execution in this order:
 
 ```text
 provider access authorization
@@ -22,6 +22,8 @@ provider billing authorization
 adapter.execute()
         ↓
 upstream provider call
+        ↓
+normalized billing attribution
 ```
 
 The billing gate is independent from relay/provider access authorization. This is deliberate defense in depth: even if a provider runtime were separately switched to public access mode, its default `owner-funded` billing policy refuses public execution before `adapter.execute()`.
@@ -72,7 +74,7 @@ The architecture may support sponsored/free allowances later, but their existenc
 
 ## Charge prevention order
 
-The effective reference path is now:
+The effective reference path is:
 
 ```text
 authentication
@@ -83,6 +85,7 @@ billing-owner/mode resolution
 entitlement/quota check
 adapter execution
 upstream provider call
+billing attribution receipt
 ```
 
 A relay or adapter MUST NOT optimistically call an upstream provider and decide authorization afterward.
@@ -99,31 +102,47 @@ The current sponsored quota implementation is intentionally conservative and in-
 
 Durable/distributed quota state, reconciliation, actual-provider-usage settlement and payment entitlements remain future work. The in-memory implementation exists to prove the fail-closed policy shape, not to serve as production billing storage.
 
-## Usage attribution
+## Implemented usage attribution
 
-Provider RESULT metadata now carries non-secret billing classification for runtime-gated calls:
-
-```text
-billingMode
-billingResponsibility
-```
-
-Relay/request state already binds requester and provider identities to the transaction. A future durable accounting layer can combine those identities with provider-native usage such as:
+`core/security/billing-attribution.js` defines `billing-attribution/1`, a normalized non-secret receipt. For a billing-authorized provider execution it records:
 
 ```text
+requestId
 requesterId
+requesterTenant       # nullable until authoritative tenant binding exists
 providerId
 providerOwnerId
-tenantId
+providerTenant        # nullable until authoritative tenant binding exists
 billingMode
-inputTokens
-outputTokens
-totalTokens
-providerLatency
-requestId
+billingResponsibility
+status
+usage.inputTokens
+usage.outputTokens
+usage.totalTokens
+usage.estimatedTokens
+usage.reservedTokens
+usage.requestBytes
+usage.responseBytes
+usage.artifactBytes
+latencyMs
+providerRequestId
+authorizationDecision
+quotaDecision
 ```
 
-Not all providers expose token counters, and media providers may use different units. The accounting layer should preserve provider-native usage while exposing normalized high-level metrics where meaningful.
+The current `AdapterHost` obtains `providerId` and `providerOwnerId` from the local cryptographic TRUYN node identity, not from provider/request payload metadata. Requester identity comes from the verified NEED. Unknown tenant fields remain `null`; the receipt does not invent account ownership.
+
+The receipt uses an allowlisted usage schema. Arbitrary provider metadata, API keys, authorization headers, tokens or other unknown fields are not copied into the receipt.
+
+For an execution that passed billing authorization:
+
+- successful provider execution emits a `status=success` receipt;
+- provider execution failure emits a `status=failed` receipt while preserving requester/provider/payer attribution;
+- a request denied by access or billing before `adapter.execute()` does not receive a misleading successful charge receipt and creates zero adapter executions.
+
+This receipt is an execution/audit primitive, not durable accounting storage. A future ledger may persist these receipts and enrich the nullable tenant fields through the authoritative provider-ownership/account layer.
+
+Not all providers expose token counters, and media providers may use different units. Missing usage values remain null rather than being estimated silently. Provider-native usage should be preserved where available.
 
 ## Gross vs net cost
 
