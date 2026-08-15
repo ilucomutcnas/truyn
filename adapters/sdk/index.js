@@ -68,7 +68,8 @@ export class TruynAdapterHost {
         fastPath: this.fastPath,
         chainPath: this.fastPath,
         socketPath: this.socketPath,
-        accessMode: this.accessPolicy.mode
+        accessMode: this.accessPolicy.mode,
+        allowedRequesterIds: this.accessPolicy.mode === 'owner-only' ? this.accessPolicy.allowedRequesterIds : []
       });
       this.offerIds.push(result.offerId);
     }
