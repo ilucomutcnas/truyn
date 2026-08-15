@@ -15,6 +15,7 @@ spec/protocol/v1/provider-policy.md @ilucomutcnas
 tests/public-repository.test.js @ilucomutcnas
 tests/security-boundary.test.js @ilucomutcnas
 tests/provider-access.test.js @ilucomutcnas
+tests/runtime-security.test.js @ilucomutcnas
 
 docs/architecture/PROVIDER_OWNERSHIP.md @ilucomutcnas
 docs/architecture/AUTHORIZATION_MODEL.md @ilucomutcnas
