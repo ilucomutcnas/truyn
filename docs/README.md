@@ -18,6 +18,7 @@ Human-facing documentation for TRUYN architecture, concepts, setup, operations, 
 ### Provider and edge architecture
 
 - [Multi-Cloud Provider Architecture](architecture/MULTI_CLOUD_PROVIDER_ARCHITECTURE.md) — public Google Cloud / Microsoft Azure reasoning, image and video provider target without private deployment identifiers.
+- [Multi-Cloud Provider Implementation Status](providers/MULTICLOUD_PROVIDER_IMPLEMENTATION_STATUS_2026-08-15.md) — implemented adapters and isolated live smoke evidence for text, image, and video providers.
 - [Public Edge Domains](architecture/PUBLIC_EDGE_DOMAINS.md) — intentionally public hostname roles and the public/control-plane separation; live origin/resource identifiers are deliberately excluded.
 - [Multimodal Provider Parity Benchmark](benchmarks/MULTIMODAL_PROVIDER_PARITY.md) — planned apples-to-apples methodology for reasoning, image and video comparisons.
 
@@ -44,7 +45,7 @@ Documents explicitly label whether they describe:
 - approved target architecture;
 - planned future work.
 
-An approved architecture document is **not** an implementation-complete security claim. Provider ownership, central authorization, BYOK onboarding, billing/quota enforcement, private provider backchannels and the negative security gate remain implementation work until code/tests prove them.
+An approved architecture document is **not** an implementation-complete security claim. A fail-closed requester allowlist gate is now implemented before provider execution, but the broader provider-ownership, tenant, BYOK onboarding, billing/quota, private-discovery, and marketplace policy model remains incremental implementation work until code/tests prove each layer.
 
 ## Public documentation rule
 
