@@ -14,6 +14,8 @@ const geminiModel = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
 const gcpAccessToken = process.env.GCP_ACCESS_TOKEN;
 const iterations = Number(process.env.BENCHMARK_ITERATIONS || 5);
 const warmups = Number(process.env.BENCHMARK_WARMUPS || 1);
+const pacingMs = Number(process.env.BENCHMARK_PACING_MS || 30000);
+const maxRateLimitRetries = Number(process.env.BENCHMARK_RATE_LIMIT_MAX_RETRIES || 4);
 const outputPath = process.env.BENCHMARK_OUTPUT || 'cross-cloud-ab.json';
 
 for (const [name, value] of Object.entries({
@@ -28,6 +30,8 @@ for (const [name, value] of Object.entries({
 }
 if (!Number.isInteger(iterations) || iterations < 1) throw new Error('BENCHMARK_ITERATIONS must be a positive integer');
 if (!Number.isInteger(warmups) || warmups < 0) throw new Error('BENCHMARK_WARMUPS must be a non-negative integer');
+if (!Number.isFinite(pacingMs) || pacingMs < 0) throw new Error('BENCHMARK_PACING_MS must be a non-negative number');
+if (!Number.isInteger(maxRateLimitRetries) || maxRateLimitRetries < 0) throw new Error('BENCHMARK_RATE_LIMIT_MAX_RETRIES must be a non-negative integer');
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const bytes = (value) => Buffer.byteLength(JSON.stringify(value));
@@ -311,21 +315,52 @@ function reductionPercent(baseline, candidate) {
   return round(((baseline - candidate) / baseline) * 100, 3);
 }
 
-console.error(`Warm-up pairs: ${warmups}; measured pairs: ${iterations}`);
+function isRateLimitError(error) {
+  return /rate limit|too many requests|\b429\b|exceeded rate limit/i.test(String(error?.message || error));
+}
+
+const rateLimitRetries = [];
+async function withRateLimitRetry(label, fn) {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await fn();
+    } catch (error) {
+      if (!isRateLimitError(error) || attempt >= maxRateLimitRetries) throw error;
+      const delayMs = pacingMs * (attempt + 1);
+      rateLimitRetries.push({ label, retry: attempt + 1, delayMs, error: String(error.message || error) });
+      console.error(`${label}: provider rate limit; retry ${attempt + 1}/${maxRateLimitRetries} after ${delayMs}ms`);
+      await sleep(delayMs);
+    }
+  }
+}
+
+const totalArmCalls = (warmups + iterations) * 2;
+let completedArmCalls = 0;
+async function runArm(label, fn) {
+  const result = await withRateLimitRetry(label, fn);
+  completedArmCalls += 1;
+  if (completedArmCalls < totalArmCalls && pacingMs > 0) {
+    console.error(`${label}: pacing ${pacingMs}ms before next arm`);
+    await sleep(pacingMs);
+  }
+  return result;
+}
+
+console.error(`Warm-up pairs: ${warmups}; measured pairs: ${iterations}; pacing: ${pacingMs}ms; max rate-limit retries: ${maxRateLimitRetries}`);
 for (let i = 0; i < warmups; i += 1) {
-  await directChain();
-  await truynChain();
+  await runArm(`warmup-${i + 1}-direct`, directChain);
+  await runArm(`warmup-${i + 1}-truyn`, truynChain);
 }
 
 const directSamples = [];
 const truynSamples = [];
 for (let i = 0; i < iterations; i += 1) {
   if (i % 2 === 0) {
-    directSamples.push(await directChain());
-    truynSamples.push(await truynChain());
+    directSamples.push(await runArm(`pair-${i + 1}-direct`, directChain));
+    truynSamples.push(await runArm(`pair-${i + 1}-truyn`, truynChain));
   } else {
-    truynSamples.push(await truynChain());
-    directSamples.push(await directChain());
+    truynSamples.push(await runArm(`pair-${i + 1}-truyn`, truynChain));
+    directSamples.push(await runArm(`pair-${i + 1}-direct`, directChain));
   }
   console.error(`Measured pair ${i + 1}/${iterations} complete`);
 }
@@ -347,6 +382,10 @@ const report = {
     alternatingOrder: true,
     warmups,
     measuredPairs: iterations,
+    pacingMs,
+    maxRateLimitRetries,
+    rateLimitRetryEvents: rateLimitRetries,
+    retryAccounting: 'Rate-limited attempts are not counted as measured samples. Pacing and retry sleep occur outside each successful arm latency timer.',
     byteMetric: 'Measured JSON application-body bytes only. Direct = provider request/response bodies. TRUYN = the same provider bodies plus signed NEED/RESULT envelope bodies. HTTP/TLS headers, polling, registration, OFFER discovery, TCP/IP and CDN framing are intentionally excluded.',
     costMetric: 'Estimated variable model inference cost from measured billable tokens and the price snapshot embedded by the workflow; infrastructure fixed costs are excluded.'
   },
@@ -375,5 +414,6 @@ console.log(JSON.stringify({
   direct: report.aggregate.direct,
   truyn: report.aggregate.truyn,
   claims: report.claims,
-  pricing: report.pricing
+  pricing: report.pricing,
+  rateLimitRetries: report.methodology.rateLimitRetryEvents.length
 }, null, 2));
