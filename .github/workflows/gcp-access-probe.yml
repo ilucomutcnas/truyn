@@ -20,23 +20,28 @@ jobs:
       GCP_PROJECT_ID_VALUE: ${{ vars.GCP_PROJECT_ID || secrets.GCP_PROJECT_ID }}
       GCP_PROJECT_NUMBER_VALUE: ${{ vars.GCP_PROJECT_NUMBER || secrets.GCP_PROJECT_NUMBER }}
       GCP_WIF_PROVIDER_VALUE: ${{ vars.GCP_WIF_PROVIDER || secrets.GCP_WIF_PROVIDER }}
-      GCP_DEPLOYER_SA_VALUE: ${{ vars.GCP_DEPLOYER_SERVICE_ACCOUNT || secrets.GCP_DEPLOYER_SERVICE_ACCOUNT }}
-      GCP_RUNTIME_SA_VALUE: ${{ vars.GCP_RUNTIME_SERVICE_ACCOUNT || secrets.GCP_RUNTIME_SERVICE_ACCOUNT }}
+      GCP_DEPLOYER_SA_CONFIGURED: ${{ vars.GCP_DEPLOYER_SERVICE_ACCOUNT || secrets.GCP_DEPLOYER_SERVICE_ACCOUNT || vars.GCP_DEPLOYER_SA || secrets.GCP_DEPLOYER_SA }}
+      GCP_RUNTIME_SA_CONFIGURED: ${{ vars.GCP_RUNTIME_SERVICE_ACCOUNT || secrets.GCP_RUNTIME_SERVICE_ACCOUNT || vars.GCP_RUNTIME_SA || secrets.GCP_RUNTIME_SA }}
       GCP_REGION_VALUE: ${{ vars.GCP_REGION || secrets.GCP_REGION }}
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Verify configuration is present
+      - name: Resolve and verify configuration
         shell: bash
         run: |
           set -euo pipefail
-          for key in GCP_PROJECT_ID_VALUE GCP_PROJECT_NUMBER_VALUE GCP_WIF_PROVIDER_VALUE GCP_DEPLOYER_SA_VALUE GCP_RUNTIME_SA_VALUE GCP_REGION_VALUE; do
+          for key in GCP_PROJECT_ID_VALUE GCP_PROJECT_NUMBER_VALUE GCP_WIF_PROVIDER_VALUE GCP_REGION_VALUE; do
             if [[ -z "${!key:-}" ]]; then
               echo "MISSING_${key}=true"
               exit 1
             fi
           done
+
+          deployer_sa="${GCP_DEPLOYER_SA_CONFIGURED:-truyn-github-deployer@${GCP_PROJECT_ID_VALUE}.iam.gserviceaccount.com}"
+          runtime_sa="${GCP_RUNTIME_SA_CONFIGURED:-truyn-gemini-runtime@${GCP_PROJECT_ID_VALUE}.iam.gserviceaccount.com}"
+          echo "GCP_DEPLOYER_SA_VALUE=${deployer_sa}" >> "$GITHUB_ENV"
+          echo "GCP_RUNTIME_SA_VALUE=${runtime_sa}" >> "$GITHUB_ENV"
           echo "GCP_CONFIG_PRESENT=ok"
 
       - id: auth
