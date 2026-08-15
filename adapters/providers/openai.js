@@ -14,9 +14,11 @@ export function createOpenAIProvider({
   apiKey = process.env.OPENAI_API_KEY,
   model = process.env.OPENAI_MODEL,
   baseUrl = process.env.OPENAI_BASE_URL || 'https://api.openai.com',
-  capabilities = ['research']
+  capabilities = ['research'],
+  allowNoAuth = false,
+  fetchImpl = fetch
 } = {}) {
-  if (!apiKey) throw new Error('OPENAI_API_KEY is required');
+  if (!apiKey && !allowNoAuth) throw new Error('OPENAI_API_KEY is required');
   if (!model) throw new Error('OPENAI_MODEL is required');
 
   return {
@@ -32,12 +34,11 @@ export function createOpenAIProvider({
         Object.keys(policy || {}).length ? `Request policy: ${JSON.stringify(policy)}` : null
       ].filter(Boolean).join('\n\n');
 
-      const response = await fetch(`${baseUrl.replace(/\/$/, '')}/v1/responses`, {
+      const headers = { 'content-type': 'application/json' };
+      if (apiKey) headers.authorization = `Bearer ${apiKey}`;
+      const response = await fetchImpl(`${baseUrl.replace(/\/$/, '')}/v1/responses`, {
         method: 'POST',
-        headers: {
-          authorization: `Bearer ${apiKey}`,
-          'content-type': 'application/json'
-        },
+        headers,
         body: JSON.stringify({ model, input: prompt, store: false })
       });
       const body = await response.json();
