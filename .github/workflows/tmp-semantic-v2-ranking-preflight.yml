@@ -1,0 +1,92 @@
+name: Temporary Semantic v2 Ranking API Preflight
+
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/tmp-semantic-v2-ranking-preflight.yml']
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GCP_PROJECT_ID_VALUE: ${{ vars.GCP_PROJECT_ID || secrets.GCP_PROJECT_ID }}
+      GCP_WIF_PROVIDER_VALUE: ${{ vars.GCP_WIF_PROVIDER || secrets.GCP_WIF_PROVIDER }}
+      GCP_DEPLOYER_SA_VALUE: ${{ vars.GCP_DEPLOYER_SERVICE_ACCOUNT_EMAIL || secrets.GCP_DEPLOYER_SERVICE_ACCOUNT_EMAIL }}
+      GCP_RUNTIME_SA_VALUE: ${{ vars.GCP_RUNTIME_SERVICE_ACCOUNT_EMAIL || secrets.GCP_RUNTIME_SERVICE_ACCOUNT_EMAIL }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Authenticate GCP deployer using WIF
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID_VALUE }}
+          workload_identity_provider: ${{ env.GCP_WIF_PROVIDER_VALUE }}
+          service_account: ${{ env.GCP_DEPLOYER_SA_VALUE }}
+          create_credentials_file: true
+          export_environment_variables: true
+      - uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID_VALUE }}
+      - name: Confirm Discovery Engine API
+        shell: bash
+        run: |
+          set -euo pipefail
+          enabled="$(gcloud services list --enabled --project="$GCP_PROJECT_ID_VALUE" --filter='config.name:discoveryengine.googleapis.com' --format='value(config.name)')"
+          [[ "$enabled" == "discoveryengine.googleapis.com" ]] || exit 2
+          echo 'RANKING_API_STATE=api_enabled' | tee ranking-preflight.txt
+      - name: Obtain runtime identity token and rank two records
+        shell: bash
+        run: |
+          set -euo pipefail
+          token="$(gcloud auth print-access-token --impersonate-service-account="$GCP_RUNTIME_SA_VALUE" 2>impersonation-error.txt || true)"
+          if [[ -z "$token" ]]; then
+            echo 'RANKING_RUNTIME_IMPERSONATION=denied' | tee -a ranking-preflight.txt
+            cat impersonation-error.txt
+            exit 5
+          fi
+          echo 'RANKING_RUNTIME_IMPERSONATION=success' | tee -a ranking-preflight.txt
+          echo "::add-mask::$token"
+          endpoint="https://discoveryengine.googleapis.com/v1/projects/${GCP_PROJECT_ID_VALUE}/locations/global/rankingConfigs/default_ranking_config:rank"
+          cat > request.json <<'JSON'
+          {
+            "model":"semantic-ranker-default@latest",
+            "topN":2,
+            "query":"Which rule applies after formal approval?",
+            "records":[
+              {"id":"before","content":"This operating rule applies only before formal approval."},
+              {"id":"after","content":"This operating rule applies only after formal approval."}
+            ],
+            "ignoreRecordDetailsInResponse":true
+          }
+          JSON
+          http_code="$(curl -sS -o response.json -w '%{http_code}' \
+            -H "Authorization: Bearer ${token}" \
+            -H "X-Goog-User-Project: ${GCP_PROJECT_ID_VALUE}" \
+            -H 'Content-Type: application/json' \
+            --data-binary @request.json "$endpoint")"
+          jq -n --arg code "$http_code" --slurpfile response response.json '{httpCode:($code|tonumber),response:$response[0]}' > ranking-preflight.json
+          if [[ "$http_code" != "200" ]]; then
+            jq . ranking-preflight.json
+            exit 3
+          fi
+          top_id="$(jq -r '.response.records[0].id // empty' ranking-preflight.json)"
+          [[ "$top_id" == "after" ]] || { jq . ranking-preflight.json; exit 4; }
+          echo 'RANKING_API_PREFLIGHT=success' | tee -a ranking-preflight.txt
+          jq . ranking-preflight.json
+      - name: Upload preflight evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: truyn-semantic-v2-ranking-preflight-${{ github.run_id }}
+          path: |
+            ranking-preflight.txt
+            ranking-preflight.json
+            impersonation-error.txt
+          if-no-files-found: warn
+          retention-days: 7
