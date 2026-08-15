@@ -33,7 +33,7 @@ function writeJson(res, status, body) {
 async function runRelay() {
   const relay = createRelay();
   const url = await relay.listen({ host, port });
-  process.stdout.write(`${JSON.stringify({ ok: true, role: 'relay', url })}\n`);
+  process.stdout.write(`${JSON.stringify({ ok: true, role: 'relay', url, fastPath: true })}\n`);
 
   const shutdown = async () => {
     await relay.close();
@@ -56,9 +56,12 @@ async function runProvider() {
   const identity = loadRuntimeIdentity();
   const node = new TruynNode({ relayUrl, identity });
   const adapter = createProviderAdapter(providerName, { capabilities });
+  const fastPath = process.env.TRUYN_FAST_PATH !== '0';
   const adapterHost = new TruynAdapterHost({
     node,
     adapter,
+    fastPath,
+    longPollMs: Number(process.env.TRUYN_LONG_POLL_MS || 25_000),
     pollIntervalMs: Number(process.env.TRUYN_POLL_MS || 500)
   });
 
@@ -77,12 +80,13 @@ async function runProvider() {
         nodeId: identity.nodeId,
         capabilities,
         relayUrl,
+        fastPath,
         handled,
         lastError
       });
     }
     if (req.method === 'GET' && req.url === '/ready') {
-      return writeJson(res, ready ? 200 : 503, { ok: ready, lastError });
+      return writeJson(res, ready ? 200 : 503, { ok: ready, lastError, fastPath });
     }
     return writeJson(res, 404, { ok: false, error: 'not_found' });
   });
@@ -95,6 +99,7 @@ async function runProvider() {
     nodeId: identity.nodeId,
     capabilities,
     relayUrl,
+    fastPath,
     health: `http://${host}:${port}/health`
   })}\n`);
 
@@ -105,7 +110,8 @@ async function runProvider() {
         ready = true;
         lastError = null;
         handled += result.handled;
-        await sleep(adapterHost.pollIntervalMs);
+        // Compact providers keep a long-poll open, so there is no fixed sleep in the hot path.
+        if (!fastPath && adapterHost.pollIntervalMs > 0) await sleep(adapterHost.pollIntervalMs);
       } catch (error) {
         ready = false;
         lastError = error.message;
