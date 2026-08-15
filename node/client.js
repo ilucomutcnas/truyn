@@ -1,7 +1,7 @@
 import WebSocket from 'ws';
 import { compactFrameBytes, createCompactFrame, createEnvelope, verifyCompactFrame, verifyEnvelope } from '../core/protocol/index.js';
 import { createIdentity } from '../core/identity/index.js';
-import { renderContextSelection, verifyContextManifest, verifyContextSelection } from '../core/context/index.js';
+import { contextQueryHash, renderContextSelection, verifyContextManifest, verifyContextSelection } from '../core/context/index.js';
 
 async function requestJson(url, options = {}) {
   const response = await fetch(url, {
@@ -484,6 +484,43 @@ export class TruynNode {
     };
   }
 
+
+  async retrieveContext(cid, query, { topK = 1 } = {}) {
+    if (typeof query !== 'string' || query.trim().length < 3) throw new Error('Context retrieval requires a query');
+    const manifestResult = await this.contextManifest(cid);
+    const requestBody = { query, topK };
+    const result = await requestJson(`${this.relayUrl}/v1/contexts/${encodeURIComponent(cid)}/retrieve`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${this.sessionToken}` },
+      body: JSON.stringify(requestBody)
+    });
+    const verification = verifyContextSelection(manifestResult.manifest, result.blocks, cid);
+    if (!verification.ok) throw new Error(`Context retrieval verification failed: ${verification.reason}`);
+    const retrieval = result.retrieval || {};
+    if (retrieval.rootCid !== cid || retrieval.manifestCid !== cid) throw new Error('Context retrieval provenance root mismatch');
+    if (retrieval.queryHash !== contextQueryHash(query)) throw new Error('Context retrieval query hash mismatch');
+    const proof = Array.isArray(retrieval.selected) ? retrieval.selected : [];
+    if (proof.length !== (result.blocks || []).length) throw new Error('Context retrieval provenance selection mismatch');
+    for (let index = 0; index < proof.length; index += 1) {
+      const block = result.blocks[index];
+      if (proof[index].id !== block.id || proof[index].cid !== block.cid || proof[index].rank !== index + 1) {
+        throw new Error('Context retrieval provenance block mismatch');
+      }
+    }
+    const selectedContentBytes = (result.blocks || []).reduce((sum, block) => sum + Buffer.byteLength(block.text || ''), 0);
+    return {
+      cid,
+      blocks: result.blocks || [],
+      retrieval,
+      provenanceVerified: true,
+      manifestCacheHit: manifestResult.cacheHit,
+      manifestTransferBytes: manifestResult.transferBytes,
+      retrievalTransferBytes: bytes(requestBody) + bytes(result),
+      transferBytes: manifestResult.transferBytes + bytes(requestBody) + bytes(result),
+      selectedContentBytes
+    };
+  }
+
   async materializeContextRefs(value) {
     const emptyStats = () => ({
       contextRefs: 0,
@@ -491,7 +528,9 @@ export class TruynNode {
       selectedContentBytes: 0,
       manifestTransferBytes: 0,
       selectionTransferBytes: 0,
-      contextTransferBytes: 0
+      contextTransferBytes: 0,
+      retrievalQueries: 0,
+      provenanceVerifiedRefs: 0
     });
     const merge = (target, source) => {
       for (const key of Object.keys(target)) target[key] += source[key] || 0;
@@ -511,8 +550,19 @@ export class TruynNode {
       if (item && typeof item === 'object') {
         if (Object.keys(item).length === 1 && item.$context) {
           const ref = item.$context;
-          if (!ref.cid || !Array.isArray(ref.ids)) throw new Error('Invalid $context reference');
-          const selected = await this.selectContext(ref.cid, ref.ids);
+          if (!ref.cid) throw new Error('Invalid $context reference');
+          let selected;
+          let retrievalQueries = 0;
+          let provenanceVerifiedRefs = 0;
+          if (Array.isArray(ref.ids) && ref.ids.length > 0) {
+            selected = await this.selectContext(ref.cid, ref.ids);
+          } else if (typeof ref.query === 'string' && ref.query.trim()) {
+            selected = await this.retrieveContext(ref.cid, ref.query, { topK: ref.topK || 1 });
+            retrievalQueries = 1;
+            provenanceVerifiedRefs = selected.provenanceVerified ? 1 : 0;
+          } else {
+            throw new Error('Invalid $context reference');
+          }
           return {
             value: renderContextSelection(selected.blocks),
             stats: {
@@ -520,8 +570,10 @@ export class TruynNode {
               selectedBlocks: selected.blocks.length,
               selectedContentBytes: selected.selectedContentBytes,
               manifestTransferBytes: selected.manifestTransferBytes,
-              selectionTransferBytes: selected.selectionTransferBytes,
-              contextTransferBytes: selected.transferBytes
+              selectionTransferBytes: selected.selectionTransferBytes || selected.retrievalTransferBytes || 0,
+              contextTransferBytes: selected.transferBytes,
+              retrievalQueries,
+              provenanceVerifiedRefs
             }
           };
         }

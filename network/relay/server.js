@@ -4,7 +4,7 @@ import { performance } from 'node:perf_hooks';
 import { WebSocket, WebSocketServer } from 'ws';
 import { compactStageRequestId, verifyCompactFrame, verifyEnvelope } from '../../core/protocol/index.js';
 import { trustabilityLite } from '../../core/trust/index.js';
-import { applyContextDelta, buildContextDocument } from '../../core/context/index.js';
+import { applyContextDelta, buildContextDocument, retrieveContextBlocks } from '../../core/context/index.js';
 
 function json(res, status, body) {
   if (res.writableEnded) return;
@@ -433,6 +433,7 @@ export function createRelay({ nodeFreshnessMs = 15_000 } = {}) {
           pendingRequests: [...requests.values()].filter((request) => request.status !== 'completed').length,
           pendingChains: [...chains.values()].filter((chain) => chain.status === 'running').length,
           contexts: contexts.size,
+          semanticRetrieval: 'truyn-hybrid-bm25-chargram-v1',
           providerSockets: [...providerSockets.values()].filter((socket) => socket.readyState === WebSocket.OPEN).length,
           fastPath: true,
           chainPath: true,
@@ -524,7 +525,7 @@ export function createRelay({ nodeFreshnessMs = 15_000 } = {}) {
         });
       }
 
-      const contextRoute = url.pathname.match(/^\/v1\/contexts\/([^/]+)\/(manifest|select|delta)$/);
+      const contextRoute = url.pathname.match(/^\/v1\/contexts\/([^/]+)\/(manifest|select|retrieve|delta)$/);
       if (contextRoute) {
         const nodeId = authenticatedNodeId(req);
         if (!nodeId) return json(res, 401, { ok: false, error: 'unauthorized' });
@@ -554,6 +555,43 @@ export function createRelay({ nodeFreshnessMs = 15_000 } = {}) {
           }
           touch(nodeId);
           return json(res, 200, { ok: true, cid, blocks: selected });
+        }
+
+
+        if (req.method === 'POST' && action === 'retrieve') {
+          if (!canReadContext(record, nodeId)) return json(res, 403, { ok: false, error: 'context_forbidden' });
+          const { query, topK = 1 } = await readJson(req);
+          if (typeof query !== 'string' || query.trim().length < 3 || query.length > 4000) {
+            return json(res, 400, { ok: false, error: 'invalid_context_query' });
+          }
+          if (!Number.isInteger(topK) || topK < 1 || topK > 8) {
+            return json(res, 400, { ok: false, error: 'invalid_context_top_k' });
+          }
+          const retrieved = retrieveContextBlocks(record.blocks, query, { topK });
+          const selected = retrieved.blocks.map((block, index) => ({
+            id: block.id,
+            cid: block.cid,
+            text: block.text,
+            bytes: block.bytes,
+            score: block.score,
+            rank: index + 1
+          }));
+          touch(nodeId);
+          return json(res, 200, {
+            ok: true,
+            cid,
+            blocks: selected,
+            retrieval: {
+              version: 1,
+              algorithm: retrieved.algorithm,
+              rootCid: cid,
+              manifestCid: record.manifest.cid,
+              queryHash: retrieved.queryHash,
+              topK,
+              corpusBlocks: retrieved.corpusBlocks,
+              selected: selected.map(({ id, cid: blockCid, score, rank }) => ({ id, cid: blockCid, score, rank }))
+            }
+          });
         }
 
         if (req.method === 'POST' && action === 'delta') {
