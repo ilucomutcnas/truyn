@@ -1,6 +1,6 @@
 # TRUYN Billing Boundary
 
-**Status:** first provider-runtime billing gate implemented; durable commercial entitlements/accounting remain future work.
+**Status:** first provider-runtime billing gate plus explicit owner-runtime startup lock implemented; durable commercial entitlements/accounting remain future work.
 
 ## Principle
 
@@ -15,6 +15,8 @@ If billing responsibility is ambiguous, execution fails closed.
 The production provider runtime now evaluates execution in this order:
 
 ```text
+provider runtime configuration lock
+        ↓
 provider access authorization
         ↓
 provider billing authorization
@@ -36,6 +38,34 @@ free sponsored requests = 0
 free sponsored tokens = 0
 ```
 
+## Explicit owner-runtime lock
+
+An operator-funded cloud provider can now be marked explicitly with:
+
+```text
+TRUYN_OWNER_PROVIDER=1
+```
+
+For such a runtime, startup succeeds only when both of these already-resolved policies are true:
+
+```text
+provider access = owner-only
+billing mode = owner-funded
+```
+
+The runtime validates this **before provider adapter initialization**, so an invalid owner-provider configuration fails before provider SDK setup or any upstream inference path can begin.
+
+Two reserved emergency/entitlement switches are intentionally hard-disabled in the current implementation:
+
+```text
+OWNER_PAID_EXTERNAL_ACCESS=false
+OWNER_PROVIDER_NETWORK_VISIBILITY=false
+```
+
+Setting either switch true on an owner runtime fails startup. Supplying either switch without explicitly marking the runtime as an owner provider also fails startup. This prevents a configuration typo from silently converting owner-paid capacity into public/shared capacity.
+
+These switches are not a future sponsored-entitlement implementation. Enabling sponsored/prepaid/subscription access later requires its own explicit entitlement design and tests; the current owner-runtime lock remains fail-closed until that work exists.
+
 ## Billing modes
 
 The reference billing policy recognizes:
@@ -51,6 +81,7 @@ Current enforcement behavior:
 - `byok` is allowed only for a private/`owner-only` provider and an access-authorized requester;
 - `owner-funded` is allowed only for a private/`owner-only` provider and an access-authorized requester;
 - `owner-funded` + public provider access is denied with no adapter execution;
+- an explicitly marked owner runtime additionally refuses to start unless it is `owner-only + owner-funded`;
 - `prepaid` and `subscription` are denied until an entitlement resolver exists;
 - `sponsored` is denied unless explicitly enabled and both request/token quotas are positive;
 - sponsored execution additionally requires an explicit positive token reservation (`policy.billing.maxTokens`) before the call can be created.
@@ -75,6 +106,7 @@ The architecture may support sponsored/free allowances later, but their existenc
 The effective reference path is now:
 
 ```text
+runtime owner configuration validation
 authentication
 authorization
 provider selection / relay policy filter
