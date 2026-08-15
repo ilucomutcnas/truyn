@@ -18,13 +18,17 @@ concurrency:
 jobs:
   image-smoke:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     env:
       AZURE_RG: truyn
       AZURE_IMAGE_LOCATION: eastus2
       GCP_PROJECT_ID_VALUE: ${{ vars.GCP_PROJECT_ID || secrets.GCP_PROJECT_ID }}
       GCP_WIF_PROVIDER_VALUE: ${{ vars.GCP_WIF_PROVIDER || secrets.GCP_WIF_PROVIDER }}
       GCP_DEPLOYER_SA_VALUE: ${{ vars.GCP_DEPLOYER_SERVICE_ACCOUNT_EMAIL || secrets.GCP_DEPLOYER_SERVICE_ACCOUNT_EMAIL }}
+      GCP_RUNTIME_SA_VALUE: ${{ vars.GCP_RUNTIME_SERVICE_ACCOUNT_EMAIL || secrets.GCP_RUNTIME_SERVICE_ACCOUNT_EMAIL }}
+      GCP_PROXY_REGION: us-east4
+      GCP_AR_REPO: truyn-poc
+      GCP_PROXY_SERVICE: truyn-image-smoke-${{ github.run_id }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -89,7 +93,7 @@ jobs:
           set -euo pipefail
           SMOKE_PROVIDER=azure-openai-image SMOKE_OUTPUT_DIR=smoke-artifacts/image AZURE_IMAGE_ENDPOINT="$AZURE_IMAGE_ENDPOINT" AZURE_IMAGE_DEPLOYMENT="$AZURE_IMAGE_DEPLOYMENT" AZURE_IMAGE_API_KEY="$AZURE_IMAGE_API_KEY" node scripts/smoke/image-provider.js | tee smoke-artifacts/image/azure-image.json
 
-      - name: Authenticate to Google Cloud using WIF
+      - name: Authenticate GCP deployer using WIF
         uses: google-github-actions/auth@v3
         with:
           project_id: ${{ env.GCP_PROJECT_ID_VALUE }}
@@ -103,13 +107,38 @@ jobs:
         with:
           project_id: ${{ env.GCP_PROJECT_ID_VALUE }}
 
+      - name: Prepare ephemeral runtime-identity Vertex proxy
+        shell: bash
+        run: |
+          set -euo pipefail
+          proxy_token="$(openssl rand -hex 32)"
+          echo "::add-mask::$proxy_token"
+          registry="${GCP_PROXY_REGION}-docker.pkg.dev"
+          image="${registry}/${GCP_PROJECT_ID_VALUE}/${GCP_AR_REPO}/image-smoke:${GITHUB_SHA}"
+          gcloud auth configure-docker "$registry" --quiet
+          docker build -f benchmarks/Dockerfile.gemini-proxy -t "$image" .
+          docker push "$image"
+          gcloud run deploy "$GCP_PROXY_SERVICE" \
+            --project="$GCP_PROJECT_ID_VALUE" --region="$GCP_PROXY_REGION" \
+            --image="$image" --service-account="$GCP_RUNTIME_SA_VALUE" \
+            --port=8080 --min=0 --max=1 --cpu=1 --memory=512Mi \
+            --set-env-vars="BENCHMARK_PROXY_TOKEN=${proxy_token}" \
+            --no-invoker-iam-check --quiet
+          proxy_url="$(gcloud run services describe "$GCP_PROXY_SERVICE" --project="$GCP_PROJECT_ID_VALUE" --region="$GCP_PROXY_REGION" --format='value(status.url)')"
+          for attempt in $(seq 1 30); do
+            if curl -fsS -H "Authorization: Bearer ${proxy_token}" "${proxy_url}/health" | jq -e '.ok == true' >/dev/null; then break; fi
+            [[ "$attempt" -lt 30 ]] || exit 1
+            sleep 2
+          done
+          echo "VERTEX_SMOKE_ENDPOINT=$proxy_url" >> "$GITHUB_ENV"
+          echo "::add-mask::$proxy_token"
+          echo "VERTEX_SMOKE_TOKEN=$proxy_token" >> "$GITHUB_ENV"
+
       - name: Smoke Google image only
         shell: bash
         run: |
           set -euo pipefail
-          token="$(gcloud auth print-access-token)"
-          echo "::add-mask::$token"
-          SMOKE_PROVIDER=vertex-image SMOKE_OUTPUT_DIR=smoke-artifacts/image GCP_PROJECT_ID="$GCP_PROJECT_ID_VALUE" GCP_IMAGE_REGION=global VERTEX_IMAGE_MODEL=gemini-2.5-flash-image GCP_ACCESS_TOKEN="$token" node scripts/smoke/image-provider.js | tee smoke-artifacts/image/google-image.json
+          SMOKE_PROVIDER=vertex-image SMOKE_OUTPUT_DIR=smoke-artifacts/image GCP_PROJECT_ID="$GCP_PROJECT_ID_VALUE" GCP_IMAGE_REGION=global VERTEX_IMAGE_MODEL=gemini-2.5-flash-image VERTEX_API_ENDPOINT="$VERTEX_SMOKE_ENDPOINT" GCP_ACCESS_TOKEN="$VERTEX_SMOKE_TOKEN" node scripts/smoke/image-provider.js | tee smoke-artifacts/image/google-image.json
 
       - name: Upload image-only smoke evidence
         uses: actions/upload-artifact@v4
@@ -119,3 +148,10 @@ jobs:
           path: smoke-artifacts/image
           if-no-files-found: error
           retention-days: 30
+
+      - name: Delete ephemeral Vertex proxy
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          gcloud run services delete "$GCP_PROXY_SERVICE" --project="$GCP_PROJECT_ID_VALUE" --region="$GCP_PROXY_REGION" --quiet >/dev/null 2>&1 || true
