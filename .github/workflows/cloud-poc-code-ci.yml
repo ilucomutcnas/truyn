@@ -45,6 +45,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
+      - run: npm install --no-audit --no-fund
       - run: npm test
       - name: Build runtime image
         run: docker build -t truyn-cloud-poc:${GITHUB_SHA} .

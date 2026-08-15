@@ -19,5 +19,8 @@
     "mcp": "node cli/index.js mcp",
     "bridge": "node cli/index.js bridge",
     "provider": "node cli/index.js provider"
+  },
+  "dependencies": {
+    "ws": "8.21.1"
   }
 }

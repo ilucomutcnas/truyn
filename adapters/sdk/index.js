@@ -33,13 +33,14 @@ export function createFunctionAdapter({ name = 'function-adapter', version = '0.
 }
 
 export class TruynAdapterHost {
-  constructor({ node, adapter, pollIntervalMs = 500, fastPath = false, longPollMs = 25_000 }) {
+  constructor({ node, adapter, pollIntervalMs = 500, fastPath = false, longPollMs = 25_000, socketPath = false }) {
     if (!node) throw new Error('node is required');
     this.node = node;
     this.adapter = validateAdapter(adapter);
     this.pollIntervalMs = pollIntervalMs;
     this.fastPath = fastPath;
     this.longPollMs = longPollMs;
+    this.socketPath = socketPath;
     this.running = false;
     this.registered = false;
     this.offerIds = [];
@@ -55,13 +56,15 @@ export class TruynAdapterHost {
   async publishCapabilities() {
     await this.ensureRegistered();
     if (this.offerIds.length > 0) return this.offerIds;
+    if (this.fastPath && this.socketPath) await this.node.ensureFastSocket();
     for (const capability of this.adapter.capabilities) {
       const result = await this.node.offer(capability.name, {
         adapter: this.adapter.name,
         adapterVersion: this.adapter.version,
         description: capability.description || null,
         fastPath: this.fastPath,
-        chainPath: this.fastPath
+        chainPath: this.fastPath,
+        socketPath: this.socketPath
       });
       this.offerIds.push(result.offerId);
     }
@@ -108,9 +111,14 @@ export class TruynAdapterHost {
 
   async runOnce() {
     await this.publishCapabilities();
-    const polled = this.fastPath
-      ? await this.node.pollCompact({ waitMs: this.longPollMs })
-      : await this.node.poll();
+    let polled;
+    if (this.fastPath && this.socketPath) {
+      polled = { events: [await this.node.nextCompactSocketEvent()] };
+    } else if (this.fastPath) {
+      polled = await this.node.pollCompact({ waitMs: this.longPollMs });
+    } else {
+      polled = await this.node.poll();
+    }
     let handled = 0;
 
     for (const event of polled.events) {
@@ -175,6 +183,9 @@ export class TruynAdapterHost {
 
   async stop() {
     this.running = false;
-    if (this.loopPromise) await this.loopPromise;
+    this.node.closeFastSocket?.();
+    if (this.loopPromise) {
+      try { await this.loopPromise; } catch {}
+    }
   }
 }
