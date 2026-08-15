@@ -1,0 +1,19 @@
+name: Trigger Final Semantic Retrieval Proof Once
+
+on:
+  push:
+    paths:
+      - .github/workflows/trigger-semantic-final-proof-once.yml
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dispatch semantic retrieval benchmark on latest main
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run cloud-poc-semantic-retrieval-ab.yml --repo inn-media/truyn --ref main
