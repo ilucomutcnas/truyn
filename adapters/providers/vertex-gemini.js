@@ -41,6 +41,51 @@ async function googleMetadataAccessToken({ fetchImpl = fetch } = {}) {
   return body.access_token;
 }
 
+function buildGenerationConfig(providerOptions) {
+  const config = {};
+  const thinkingBudget = providerOptions.thinkingBudget;
+  if (thinkingBudget != null) {
+    if (!Number.isInteger(thinkingBudget) || thinkingBudget < -1) {
+      throw new Error('Vertex Gemini thinkingBudget must be an integer >= -1');
+    }
+    config.thinkingConfig = { thinkingBudget };
+  }
+
+  const responseMimeType = providerOptions.responseMimeType;
+  if (responseMimeType != null) {
+    if (typeof responseMimeType !== 'string' || responseMimeType.trim().length === 0) {
+      throw new Error('Vertex Gemini responseMimeType must be a non-empty string');
+    }
+    config.responseMimeType = responseMimeType.trim();
+  }
+
+  const responseSchema = providerOptions.responseSchema;
+  if (responseSchema != null) {
+    if (!responseSchema || typeof responseSchema !== 'object' || Array.isArray(responseSchema)) {
+      throw new Error('Vertex Gemini responseSchema must be an object');
+    }
+    config.responseSchema = responseSchema;
+  }
+
+  const maxOutputTokens = providerOptions.maxOutputTokens;
+  if (maxOutputTokens != null) {
+    if (!Number.isInteger(maxOutputTokens) || maxOutputTokens < 1 || maxOutputTokens > 65_536) {
+      throw new Error('Vertex Gemini maxOutputTokens must be an integer from 1 to 65536');
+    }
+    config.maxOutputTokens = maxOutputTokens;
+  }
+
+  const temperature = providerOptions.temperature;
+  if (temperature != null) {
+    if (typeof temperature !== 'number' || !Number.isFinite(temperature) || temperature < 0 || temperature > 2) {
+      throw new Error('Vertex Gemini temperature must be a number from 0 to 2');
+    }
+    config.temperature = temperature;
+  }
+
+  return Object.keys(config).length ? config : null;
+}
+
 export function createVertexGeminiProvider({
   projectId = process.env.GCP_PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT,
   location = process.env.GCP_REGION || process.env.GOOGLE_CLOUD_LOCATION || 'global',
@@ -66,10 +111,7 @@ export function createVertexGeminiProvider({
       const startedAt = Date.now();
       const providerOptions = policy?.providerOptions && typeof policy.providerOptions === 'object' ? policy.providerOptions : {};
       const { providerOptions: _providerOptions, ...taskPolicy } = policy || {};
-      const thinkingBudget = providerOptions.thinkingBudget;
-      if (thinkingBudget != null && (!Number.isInteger(thinkingBudget) || thinkingBudget < -1)) {
-        throw new Error('Vertex Gemini thinkingBudget must be an integer >= -1');
-      }
+      const generationConfig = buildGenerationConfig(providerOptions);
       const prompt = [
         `You are a TRUYN provider for capability: ${capability}.`,
         'Return only the useful task result. Do not describe TRUYN internals unless asked.',
@@ -81,7 +123,7 @@ export function createVertexGeminiProvider({
       const modelPath = `projects/${projectId}/locations/${location}/publishers/google/models/${model}`;
       const requestBody = JSON.stringify({
         contents: [{ role: 'user', parts: [{ text: prompt }] }],
-        ...(thinkingBudget == null ? {} : { generationConfig: { thinkingConfig: { thinkingBudget } } })
+        ...(generationConfig ? { generationConfig } : {})
       });
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), requestTimeoutMs);
@@ -126,7 +168,9 @@ export function createVertexGeminiProvider({
           providerRequestBodyBytes,
           providerResponseBodyBytes,
           providerBodyBytes: providerRequestBodyBytes + providerResponseBodyBytes,
-          thinkingBudget: thinkingBudget ?? null,
+          thinkingBudget: providerOptions.thinkingBudget ?? null,
+          responseMimeType: providerOptions.responseMimeType ?? null,
+          maxOutputTokens: providerOptions.maxOutputTokens ?? null,
           requestTimeoutMs,
           usage: body.usageMetadata || null
         }
