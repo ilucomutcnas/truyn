@@ -1,11 +1,15 @@
 const VISIBILITIES = new Set(['private', 'self', 'shared', 'network']);
 const BILLING_MODES = new Set(['byok', 'owner-funded', 'prepaid', 'subscription', 'sponsored']);
 
-function normalizeStringSet(value) {
-  if (!value) return new Set();
-  if (value instanceof Set) return new Set([...value].map((item) => String(item).trim()).filter(Boolean));
-  if (Array.isArray(value)) return new Set(value.map((item) => String(item).trim()).filter(Boolean));
-  return new Set(String(value).split(',').map((item) => item.trim()).filter(Boolean));
+function normalizeStringList(value) {
+  const values = value instanceof Set
+    ? [...value]
+    : Array.isArray(value)
+      ? value
+      : value
+        ? String(value).split(',')
+        : [];
+  return Object.freeze([...new Set(values.map((item) => String(item).trim()).filter(Boolean))]);
 }
 
 function normalizeMap(value) {
@@ -30,10 +34,9 @@ function trustedPolicy(providerNodeId, tenantId, raw = {}) {
     tenantId: String(raw.tenantId || tenantId),
     visibility,
     billingMode,
-    allowedCallerIds: normalizeStringSet(raw.allowedCallerIds),
-    allowedTenantIds: normalizeStringSet(raw.allowedTenantIds),
+    allowedCallerIds: normalizeStringList(raw.allowedCallerIds),
+    allowedTenantIds: normalizeStringList(raw.allowedTenantIds),
     allowCrossTenant: raw.allowCrossTenant === true,
-    allowOwnerFundedExternal: raw.allowOwnerFundedExternal === true,
     source: 'trusted'
   });
 }
@@ -45,21 +48,29 @@ function derivedPolicy(providerNodeId, tenantId) {
     tenantId,
     visibility: 'self',
     billingMode: 'byok',
-    allowedCallerIds: new Set(),
-    allowedTenantIds: new Set(),
+    allowedCallerIds: Object.freeze([]),
+    allowedTenantIds: Object.freeze([]),
     allowCrossTenant: false,
-    allowOwnerFundedExternal: false,
     source: 'derived'
   });
 }
 
-export function createProviderOwnershipRegistry({ tenantBindings = {}, providerPolicies = {} } = {}) {
+export function createProviderOwnershipRegistry({
+  tenantBindings = {},
+  providerPolicies = {},
+  sponsoredAccessEnabled = false
+} = {}) {
   const tenantByNode = normalizeMap(tenantBindings);
-  const trustedByProvider = normalizeMap(providerPolicies);
+  const rawPolicies = normalizeMap(providerPolicies);
+  const trustedByProvider = new Map();
 
   function tenantForNode(nodeId) {
     if (!nodeId) return null;
     return String(tenantByNode.get(nodeId) || nodeId);
+  }
+
+  for (const [providerNodeId, raw] of rawPolicies.entries()) {
+    trustedByProvider.set(String(providerNodeId), trustedPolicy(String(providerNodeId), tenantForNode(providerNodeId), raw));
   }
 
   function requesterContext(nodeId) {
@@ -73,12 +84,7 @@ export function createProviderOwnershipRegistry({ tenantBindings = {}, providerP
   function resolveProviderPolicy(envelope) {
     const providerNodeId = envelope?.from ? String(envelope.from) : null;
     if (!providerNodeId) throw new Error('Provider OFFER requires an authenticated provider identity');
-
-    const tenantId = tenantForNode(providerNodeId);
-    const configured = trustedByProvider.get(providerNodeId);
-    if (!configured) return derivedPolicy(providerNodeId, tenantId);
-
-    return trustedPolicy(providerNodeId, tenantId, configured);
+    return trustedByProvider.get(providerNodeId) || derivedPolicy(providerNodeId, tenantForNode(providerNodeId));
   }
 
   function authorizeProvider({ requesterNodeId, providerPolicy }) {
@@ -91,19 +97,27 @@ export function createProviderOwnershipRegistry({ tenantBindings = {}, providerP
       return Object.freeze({ ok: true, reason: 'same_tenant' });
     }
 
-    if (providerPolicy.billingMode === 'owner-funded' && !providerPolicy.allowOwnerFundedExternal) {
+    if (providerPolicy.billingMode === 'byok') {
+      return Object.freeze({ ok: false, reason: 'byok_cross_tenant_forbidden' });
+    }
+
+    if (providerPolicy.billingMode === 'owner-funded') {
       return Object.freeze({ ok: false, reason: 'owner_funded_external_disabled' });
+    }
+
+    if (providerPolicy.billingMode === 'sponsored' && !sponsoredAccessEnabled) {
+      return Object.freeze({ ok: false, reason: 'sponsored_access_disabled' });
     }
 
     if (!providerPolicy.allowCrossTenant) {
       return Object.freeze({ ok: false, reason: 'cross_tenant_disabled' });
     }
 
-    if (providerPolicy.allowedCallerIds.has(requester.nodeId)) {
+    if (providerPolicy.allowedCallerIds.includes(requester.nodeId)) {
       return Object.freeze({ ok: true, reason: 'explicit_caller_grant' });
     }
 
-    if (providerPolicy.allowedTenantIds.has(requester.tenantId)) {
+    if (providerPolicy.allowedTenantIds.includes(requester.tenantId)) {
       return Object.freeze({ ok: true, reason: 'explicit_tenant_grant' });
     }
 
