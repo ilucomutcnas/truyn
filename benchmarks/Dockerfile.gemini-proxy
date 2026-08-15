@@ -1,6 +1,0 @@
-FROM node:20-alpine
-
-WORKDIR /app
-COPY benchmarks/gemini-direct-proxy.js ./benchmarks/gemini-direct-proxy.js
-
-CMD ["node", "benchmarks/gemini-direct-proxy.js"]
