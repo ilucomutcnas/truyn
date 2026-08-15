@@ -26,12 +26,12 @@ function parseIdList(output, allowedIds, requiredCount) {
     const values = Array.isArray(parsed?.ids) ? addUnique(parsed.ids) : [];
     if (values.length >= requiredCount) return values.slice(0, requiredCount);
   } catch {}
-  const orderedMatches = [];
-  const regex = /semantic-record-\d{3}/g;
-  for (const match of text.matchAll(regex)) {
-    const id = match[0];
-    if (allowedIds.includes(id) && !orderedMatches.includes(id)) orderedMatches.push(id);
-  }
+
+  const orderedMatches = allowedIds
+    .map((id) => ({ id, index:text.indexOf(id) }))
+    .filter((item) => item.index >= 0)
+    .sort((left, right) => left.index - right.index)
+    .map((item) => item.id);
   return orderedMatches.length >= requiredCount ? orderedMatches.slice(0, requiredCount) : null;
 }
 
