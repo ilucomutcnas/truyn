@@ -1,0 +1,21 @@
+name: Run requester socket benchmark
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/run-requester-socket-benchmark.yml'
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dispatch A/B benchmark
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run cloud-poc-benchmark-ab.yml --repo inn-media/truyn --ref main
