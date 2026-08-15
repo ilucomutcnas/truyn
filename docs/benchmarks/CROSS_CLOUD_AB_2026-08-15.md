@@ -4,6 +4,12 @@ Status: **completed, measured, evidence captured**.
 
 This document records the first successful paired A/B benchmark of the current TRUYN PoC against a direct Azure OpenAI → Vertex Gemini control path.
 
+## Security and disclosure scope
+
+This benchmark used project-authorized reference providers. Their participation in a public benchmark does **not** make the underlying provider accounts or quota available to public TRUYN users.
+
+The report preserves reproducible model families, measurements, GitHub evidence and the intentionally public relay hostname while omitting unnecessary private deployment/resource names and privileged cloud identity details.
+
 ## Evidence
 
 - GitHub Actions workflow: `Cloud PoC Cross-Cloud A/B Benchmark`
@@ -24,19 +30,19 @@ This document records the first successful paired A/B benchmark of the current T
 
 ### Direct control
 
-1. GitHub Actions runner → Azure OpenAI `truyn-gpt-4-1-mini`.
+1. GitHub Actions runner → Azure OpenAI GPT-4.1-mini reference provider.
 2. The resulting candidate is sent through an ephemeral Cloud Run raw-semantics proxy to Vertex AI Gemini `gemini-2.5-flash`.
-3. The proxy exists only to use the same GCP runtime service-account identity as the production `truyn-gemini` provider. It preserves the raw Vertex `generateContent` request/response and does not use TRUYN relay/envelopes.
+3. The proxy exists only to use the same GCP runtime identity class as the TRUYN Gemini reference provider. It preserves the raw Vertex `generateContent` request/response and does not use TRUYN relay/envelopes.
 4. The ephemeral proxy is deleted after the run.
 
 ### TRUYN
 
 1. GitHub requester → `relay.truyn.org`.
-2. Signed NEED → Azure provider → signed RESULT.
-3. Signed NEED → Gemini provider → signed RESULT.
+2. Signed NEED → Azure reference provider → signed RESULT.
+3. Signed NEED → Gemini reference provider → signed RESULT.
 4. Discovery, provider selection, signatures, trust metadata and relay orchestration are active.
 
-Both arms used the same models, semantic task, and provider adapter prompt framing.
+Both arms used the same public model families/versions, semantic task, and provider adapter prompt framing. Private cloud deployment resource names are intentionally not part of the public benchmark contract.
 
 ## Primary measured result
 
@@ -95,7 +101,7 @@ Therefore the observed variable inference cost was **6.776% higher through TRUYN
 
 The benchmark proves that the current cross-cloud network path can repeatedly execute one semantic chain across Azure OpenAI and Vertex Gemini while preserving TRUYN discovery, distinct provider identities, signed NEED/RESULT messages, provider selection, and trust metadata.
 
-The successful run also completed without any relay network retry. A previous transient Front Door read timeout led to a benchmark hardening change: safe discovery/poll reads now retry without replaying NEED/provider work.
+The successful run also completed without any relay network retry. A previous transient public-edge read timeout led to benchmark hardening: safe discovery/poll reads retry without replaying NEED/provider work.
 
 ### What is not yet optimized
 
@@ -104,6 +110,12 @@ The current protocol carries approximately 4.14 KB of signed envelope data for a
 The current E2E penalty is dominated by approximately 1.49 seconds of TRUYN orchestration rather than provider inference. Provider-only latency was lower in this run, but that difference must not be presented as a general TRUYN speed advantage because the direct and TRUYN arms have different network placement/topology.
 
 The token difference is mainly output-side model variability. Azure input tokens were exactly 87 in every sample of both arms, while Gemini input depended slightly on the generated Azure candidate. This benchmark therefore does not demonstrate a TRUYN token-compression benefit.
+
+## Provider-security interpretation
+
+This benchmark predates the completed implementation of the approved provider-ownership security gate. It proves cross-cloud interoperability/performance characteristics only. It does not prove that a public foreign requester is safely isolated from owner-funded provider quota.
+
+That claim requires the separate negative security matrix in `../architecture/THREAT_MODEL.md`.
 
 ## Engineering conclusion
 
@@ -115,7 +127,7 @@ The next optimization work should focus on:
 2. Reducing relay orchestration round trips and polling overhead.
 3. Introducing actual context/payload compaction before claiming token savings.
 4. Running larger-context workloads where TRUYN's intended semantic/context compression can be measured separately from stochastic model-output variance.
-5. Increasing Azure quota or using a benchmark-dedicated deployment so rate-limit pacing does not dominate wall-clock benchmark duration.
+5. Ensuring benchmark-specific provider capacity is sufficient so rate-limit pacing does not dominate wall-clock benchmark duration; exact production quota is operational/private data.
 6. Re-running the paired benchmark after each optimization and comparing against this immutable baseline.
 
-No token-reduction, cost-reduction, or E2E speedup claim should be made from this first baseline run.
+No token-reduction, cost-reduction, E2E speedup or public-provider-access claim should be made from this first baseline run.
