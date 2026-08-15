@@ -2,6 +2,7 @@ import http from 'node:http';
 import { createRelay } from '../network/relay/server.js';
 import { TruynNode } from '../node/client.js';
 import { createIdentity } from '../core/identity/index.js';
+import { createProviderAccessPolicy } from '../core/security/provider-access.js';
 import { TruynAdapterHost } from '../adapters/sdk/index.js';
 import { createProviderAdapter } from '../adapters/providers/index.js';
 
@@ -56,12 +57,17 @@ async function runProvider() {
   const identity = loadRuntimeIdentity();
   const node = new TruynNode({ relayUrl, identity });
   const adapter = createProviderAdapter(providerName, { capabilities });
+  const accessPolicy = createProviderAccessPolicy({
+    mode: process.env.TRUYN_PROVIDER_ACCESS_MODE || 'owner-only',
+    allowedRequesterIds: process.env.TRUYN_ALLOWED_REQUESTER_IDS || ''
+  });
   const fastPath = process.env.TRUYN_FAST_PATH !== '0';
   const socketPath = fastPath && process.env.TRUYN_SOCKET_PATH !== '0';
   const longPollMs = Number(process.env.TRUYN_LONG_POLL_MS || 10_000);
   const adapterHost = new TruynAdapterHost({
     node,
     adapter,
+    accessPolicy,
     fastPath,
     socketPath,
     longPollMs,
@@ -83,6 +89,8 @@ async function runProvider() {
         nodeId: identity.nodeId,
         capabilities,
         relayUrl,
+        accessMode: accessPolicy.mode,
+        allowedRequesterCount: accessPolicy.allowedRequesterIds.length,
         fastPath,
         socketPath,
         transport: socketPath ? 'websocket' : (fastPath ? 'long-poll' : 'legacy-poll'),
@@ -92,7 +100,15 @@ async function runProvider() {
       });
     }
     if (req.method === 'GET' && req.url === '/ready') {
-      return writeJson(res, ready ? 200 : 503, { ok: ready, lastError, fastPath, socketPath, longPollMs });
+      return writeJson(res, ready ? 200 : 503, {
+        ok: ready,
+        lastError,
+        accessMode: accessPolicy.mode,
+        allowedRequesterCount: accessPolicy.allowedRequesterIds.length,
+        fastPath,
+        socketPath,
+        longPollMs
+      });
     }
     return writeJson(res, 404, { ok: false, error: 'not_found' });
   });
@@ -105,6 +121,8 @@ async function runProvider() {
     nodeId: identity.nodeId,
     capabilities,
     relayUrl,
+    accessMode: accessPolicy.mode,
+    allowedRequesterCount: accessPolicy.allowedRequesterIds.length,
     fastPath,
     socketPath,
     longPollMs,
