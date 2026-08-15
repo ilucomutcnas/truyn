@@ -37,6 +37,7 @@ function writeJson(res, status, body) {
 
 async function runRelay() {
   const relay = createRelay({
+    allowedNodeIds: csvSet(process.env.TRUYN_ALLOWED_NODE_IDS),
     trustedRequesterNodeIds: csvSet(process.env.TRUYN_TRUSTED_REQUESTER_NODE_IDS),
     exposeDiagnostics: process.env.TRUYN_PRIVATE_DIAGNOSTICS === '1'
   });
@@ -78,7 +79,6 @@ async function runProvider() {
 
   let stopping = false;
   let ready = false;
-  let handled = 0;
 
   const server = http.createServer((req, res) => {
     if (req.method === 'GET' && (req.url === '/health' || req.url === '/')) {
@@ -96,9 +96,8 @@ async function runProvider() {
   const loop = (async () => {
     while (!stopping) {
       try {
-        const result = await adapterHost.runOnce();
+        await adapterHost.runOnce();
         ready = true;
-        handled += result.handled;
         if (!fastPath && adapterHost.pollIntervalMs > 0) await sleep(adapterHost.pollIntervalMs);
       } catch (error) {
         if (stopping) break;
