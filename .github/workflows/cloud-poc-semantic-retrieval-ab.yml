@@ -2,6 +2,11 @@ name: Cloud PoC Semantic Retrieval A/B
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/cloud-poc-semantic-retrieval-ab.yml'
+      - 'benchmarks/semantic-retrieval-ab.js'
 
 permissions:
   contents: read
@@ -28,6 +33,7 @@ jobs:
       SEMANTIC_LIVE_PAIRS: '8'
       SEMANTIC_PACING_MS: '30000'
       SEMANTIC_RATE_LIMIT_RETRIES: '4'
+      SEMANTIC_REQUESTER_TRANSPORT: 'http'
       SEMANTIC_BENCHMARK_OUTPUT: semantic-retrieval-ab.json
       SEMANTIC_GATE_RETRIEVAL_ACCURACY_PCT: '99'
       SEMANTIC_GATE_ANSWER_ACCURACY_PCT: '99'

@@ -15,6 +15,7 @@ const gcpAccessToken = process.env.GCP_ACCESS_TOKEN;
 const livePairs = Number(process.env.SEMANTIC_LIVE_PAIRS || 8);
 const pacingMs = Number(process.env.SEMANTIC_PACING_MS || 30000);
 const maxRetries = Number(process.env.SEMANTIC_RATE_LIMIT_RETRIES || 4);
+const requesterTransport = process.env.SEMANTIC_REQUESTER_TRANSPORT || 'http';
 const outputPath = process.env.SEMANTIC_BENCHMARK_OUTPUT || 'semantic-retrieval-ab.json';
 
 const gate = Object.freeze({
@@ -38,6 +39,7 @@ for (const [name, value] of Object.entries({
   if (!value) throw new Error(`${name} is required`);
 }
 if (!Number.isInteger(livePairs) || livePairs < 1 || livePairs > 12) throw new Error('SEMANTIC_LIVE_PAIRS must be 1..12');
+if (!['http', 'websocket'].includes(requesterTransport)) throw new Error('SEMANTIC_REQUESTER_TRANSPORT must be http or websocket');
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const bytes = (value) => Buffer.byteLength(typeof value === 'string' ? value : JSON.stringify(value));
@@ -301,9 +303,10 @@ async function truynRun(index) {
   ];
   const serialized = JSON.stringify(stages);
   const noBlockId = !question.includes(record.id) && !serialized.includes(record.id) && !serialized.includes('"ids"');
-  await requester.ensureFastSocket();
+  if (requesterTransport === 'websocket') await requester.ensureFastSocket();
+  else requester.closeFastSocket();
   const chain = await requester.compactChain(stages);
-  if (chain.requesterTransport !== 'websocket') throw new Error(`TRUYN requester transport fallback: ${chain.requesterTransport}`);
+  if (chain.requesterTransport !== requesterTransport) throw new Error(`TRUYN requester transport mismatch: expected ${requesterTransport}, got ${chain.requesterTransport}`);
   const trace = await fetchRelayChainTrace(chain.chainId);
   if (JSON.stringify(trace.stageTransport) !== JSON.stringify(['socket', 'socket'])) {
     throw new Error(`TRUYN provider transport fallback: ${JSON.stringify(trace.stageTransport)}`);
@@ -461,6 +464,7 @@ const report = {
     retrievalAlgorithm: 'truyn-hybrid-bm25-chargram-v1',
     retrievalCases: retrievalResults.length,
     livePairedChains: liveIndexes.length,
+    requesterTransport,
     direct: 'Question plus the complete updated corpus is sent to Azure, then the complete updated corpus is sent again to Gemini review.',
     truyn: 'The signed CHAIN contains the question and root context CID only. No block ID or ids array is present. Each provider independently retrieves top-1 context from the root CID, verifies manifest/block CID/query-hash provenance, and materializes only the selected block before inference.',
     provenance: 'Requester-side retrieval suite verifies root CID, manifest CID, normalized question hash, selected block CID and rank. Provider-side live samples must report one retrieval and one verified provenance reference per stage.',
