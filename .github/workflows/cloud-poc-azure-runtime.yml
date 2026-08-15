@@ -1,4 +1,5 @@
 name: Cloud PoC Azure Relay and GPT Node
+# Rebuild the deployed relay/provider image whenever runtime protocol code changes.
 
 on:
   push:
