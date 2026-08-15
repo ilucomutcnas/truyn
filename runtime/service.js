@@ -61,7 +61,7 @@ async function runProvider() {
   if (!providerName) throw new Error('TRUYN_PROVIDER is required for provider role');
 
   const capabilities = (process.env.TRUYN_CAPABILITIES || 'research')
-    .split(',')
+    .split(/[;,]/)
     .map((value) => value.trim())
     .filter(Boolean);
   const identity = loadRuntimeIdentity();
