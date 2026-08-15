@@ -11,8 +11,12 @@ Use GitHub private vulnerability reporting when available. Never place credentia
 TRUYN is pre-1.0 experimental software. The public reference runtime is intentionally conservative:
 
 - production-style relay registration is denied unless a node is explicitly enrolled;
-- provider execution is denied unless the requester is explicitly trusted;
-- untrusted requesters do not receive foreign provider offers from discovery;
+- provider dispatch is closed by default; wider authenticated-network dispatch requires explicit relay configuration;
+- provider discovery and matching apply provider authorization before returning or dispatching a foreign offer;
+- provider ownership is bound by the relay to the cryptographic sender of the signed `OFFER`; requester-controlled `ownerId` / `tenantId` metadata cannot grant ownership;
+- provider offers without an explicit recognized public mode fail closed to `owner-only`;
+- private/owner-only providers can publish a provider-signed requester allowlist, enabling a BYOK/private provider to authorize its own requester without globally trusting that requester at the relay;
+- unauthorized private providers are hidden from discovery and are filtered as `no_matching_provider` before legacy, compact or WebSocket-chain dispatch, so no provider event is queued;
 - legacy mutation/execution routes require an active bearer session bound to the signed node identity;
 - registration envelopes are freshness-checked and replay IDs are rejected;
 - sessions expire;
@@ -21,9 +25,10 @@ TRUYN is pre-1.0 experimental software. The public reference runtime is intentio
 - provider health endpoints do not expose node IDs, relay URLs, provider names, internal errors, or transport details;
 - runtime provider processes default to `owner-only`; an empty requester allowlist denies access;
 - provider-host authorization is evaluated before `adapter.execute()`, and the regression suite asserts zero adapter executions for a denied requester;
+- switching a runtime provider to public mode requires both `TRUYN_PROVIDER_ACCESS_MODE=public` and the separate `TRUYN_ALLOW_PUBLIC_PROVIDER=1` opt-in;
 - the user-facing CLI can start only a loopback local-development relay; it cannot expose the permissive local mode on a non-loopback interface.
 
-This immediate fail-closed baseline is not the final multi-tenant provider marketplace. Full provider owner/tenant/visibility/billing semantics still require the complete authorization and negative-test contracts in `docs/architecture/`.
+This implements the first provider ownership/BYOK enforcement boundary. Rich account/tenant ownership, commercial entitlements, sponsored access, durable quota accounting and billing attribution remain later layers and must preserve these fail-closed invariants.
 
 ## Core principles
 
@@ -34,6 +39,8 @@ TRUYN source code and protocol can be public while individual AI providers remai
 ### BYOK by default
 
 Normal users Bring Their Own Intelligence / Bring Their Own Provider. Raw upstream credentials stay with the user's/provider runtime and do not belong in TRUYN envelopes or relay state.
+
+A private BYOK provider may authorize one or more requester node identities in its signed `OFFER`. The relay verifies the `OFFER` signature/session binding, derives provider ownership from the provider node identity, and applies the signed requester allowlist before discovery or dispatch.
 
 ### Server-side authorization
 
@@ -77,19 +84,21 @@ Git hosting providers may retain unreachable objects, pull-request refs, caches,
 
 ## Security acceptance gate
 
-Before public users can coexist with owner-funded providers, automated/adversarial tests must prove at minimum:
+The in-repository regression suite now proves at minimum:
 
-- anonymous or non-enrolled node → registration/provider access: denied;
-- enrolled but untrusted requester → owner provider: denied, zero provider events/calls;
-- known/guessed provider ID: denied;
-- forged requester-controlled owner/tenant fields: denied;
-- legacy execution route: same denial policy and active-session binding;
+- non-enrolled node → production-style registration: denied;
+- registered external requester → private/owner-only provider: hidden from discovery and denied before dispatch;
+- known/guessed capability/provider path cannot bypass provider policy;
+- forged requester-controlled owner/tenant metadata does not change the server-bound provider owner;
+- private BYOK provider → provider-signed authorized requester: allowed;
+- same private BYOK provider → another registered requester: no match, zero provider events, zero adapter executions;
+- legacy NEED, compact NEED and WebSocket chain routing use the same provider matching/authorization filter;
 - replayed registration envelope: denied;
 - oversized input: rejected before unbounded buffering;
-- trusted owner requester → explicitly enrolled provider: allowed;
-- future user → own BYOK provider: allowed only after authoritative tenant/ownership binding exists.
+- trusted owner requester → explicitly authorized owner provider: allowed;
+- provider-host authorization remains a second independent check before adapter execution.
 
-The current regression suite covers the relay/provider-host deny boundary, legacy bearer/session enforcement, registration freshness/replay protection, payload bounds, and zero adapter execution on denied owner-only provider requests. Deployment-specific cloud/IAM/origin acceptance remains separate from these in-repository tests.
+Deployment-specific cloud/IAM/origin acceptance, durable billing/quota accounting and richer account-level tenancy remain separate from these in-repository tests.
 
 ## Related architecture
 
