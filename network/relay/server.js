@@ -4,6 +4,7 @@ import { performance } from 'node:perf_hooks';
 import { WebSocket, WebSocketServer } from 'ws';
 import { compactStageRequestId, verifyCompactFrame, verifyEnvelope } from '../../core/protocol/index.js';
 import { trustabilityLite } from '../../core/trust/index.js';
+import { applyContextDelta, buildContextDocument } from '../../core/context/index.js';
 
 function json(res, status, body) {
   if (res.writableEnded) return;
@@ -81,6 +82,7 @@ export function createRelay({ nodeFreshnessMs = 15_000 } = {}) {
   const resultWaiters = new Map();
   const requests = new Map();
   const chains = new Map();
+  const contexts = new Map();
   const stats = new Map();
 
   function touch(nodeId) {
@@ -170,6 +172,44 @@ export function createRelay({ nodeFreshnessMs = 15_000 } = {}) {
       ...(stats.get(nodeId) || {}),
       lastSeenAt: nodes.get(nodeId)?.lastSeenAt
     });
+  }
+
+
+
+  function contextReaders(value) {
+    if (value == null) return [];
+    if (!Array.isArray(value) || value.some((item) => typeof item !== 'string' || !item.length)) {
+      throw new Error('context readers must be node-id strings');
+    }
+    return [...new Set(value)];
+  }
+
+  function canReadContext(record, nodeId) {
+    return Boolean(record && (record.owners.has(nodeId) || record.readers.has(nodeId)));
+  }
+
+  function saveContext(ownerNodeId, document, { readers = [], metadata = {}, baseCid = null, deltaOps = null } = {}) {
+    const existing = contexts.get(document.cid);
+    if (existing) {
+      existing.owners.add(ownerNodeId);
+      for (const reader of contextReaders(readers)) existing.readers.add(reader);
+      return existing;
+    }
+    const record = {
+      cid: document.cid,
+      blocks: document.blocks,
+      manifest: document.manifest,
+      contentBytes: document.contentBytes,
+      serializedBytes: document.serializedBytes,
+      owners: new Set([ownerNodeId]),
+      readers: new Set(contextReaders(readers)),
+      metadata: metadata && typeof metadata === 'object' ? metadata : {},
+      baseCid,
+      deltaOps,
+      createdAt: new Date().toISOString()
+    };
+    contexts.set(record.cid, record);
+    return record;
   }
 
   function registerFastWaiter(req, res, nodeId, waitMs) {
@@ -392,6 +432,7 @@ export function createRelay({ nodeFreshnessMs = 15_000 } = {}) {
           offers: offers.size,
           pendingRequests: [...requests.values()].filter((request) => request.status !== 'completed').length,
           pendingChains: [...chains.values()].filter((chain) => chain.status === 'running').length,
+          contexts: contexts.size,
           providerSockets: [...providerSockets.values()].filter((socket) => socket.readyState === WebSocket.OPEN).length,
           fastPath: true,
           chainPath: true,
@@ -457,6 +498,92 @@ export function createRelay({ nodeFreshnessMs = 15_000 } = {}) {
         const matches = matchingOffers({ capability })
           .map((offer) => ({ ...offer.envelope, trust: trustFor(offer.envelope.from) }));
         return json(res, 200, { ok: true, offers: matches });
+      }
+
+
+
+      if (req.method === 'POST' && url.pathname === '/v1/contexts') {
+        const ownerNodeId = authenticatedNodeId(req);
+        if (!ownerNodeId) return json(res, 401, { ok: false, error: 'unauthorized' });
+        const owner = nodes.get(ownerNodeId);
+        const { frame, payload } = await readJson(req);
+        const verification = verifyCompactFrame(frame, payload, owner.publicKey, { allowedTypes: ['CONTEXT_PUT'] });
+        if (!verification.ok) return json(res, 400, { ok: false, error: verification.reason });
+        const document = buildContextDocument(payload?.blocks);
+        const record = saveContext(ownerNodeId, document, {
+          readers: payload?.readers || [],
+          metadata: payload?.metadata || {}
+        });
+        touch(ownerNodeId);
+        return json(res, 200, {
+          ok: true,
+          cid: record.cid,
+          manifest: record.manifest,
+          contentBytes: record.contentBytes,
+          serializedBytes: record.serializedBytes
+        });
+      }
+
+      const contextRoute = url.pathname.match(/^\/v1\/contexts\/([^/]+)\/(manifest|select|delta)$/);
+      if (contextRoute) {
+        const nodeId = authenticatedNodeId(req);
+        if (!nodeId) return json(res, 401, { ok: false, error: 'unauthorized' });
+        const cid = decodeURIComponent(contextRoute[1]);
+        const action = contextRoute[2];
+        const record = contexts.get(cid);
+        if (!record) return json(res, 404, { ok: false, error: 'context_not_found' });
+
+        if (req.method === 'GET' && action === 'manifest') {
+          if (!canReadContext(record, nodeId)) return json(res, 403, { ok: false, error: 'context_forbidden' });
+          touch(nodeId);
+          return json(res, 200, { ok: true, cid, manifest: record.manifest });
+        }
+
+        if (req.method === 'POST' && action === 'select') {
+          if (!canReadContext(record, nodeId)) return json(res, 403, { ok: false, error: 'context_forbidden' });
+          const { ids } = await readJson(req);
+          if (!Array.isArray(ids) || ids.length === 0 || ids.length > 32 || ids.some((id) => typeof id !== 'string')) {
+            return json(res, 400, { ok: false, error: 'invalid_context_selection' });
+          }
+          const byId = new Map(record.blocks.map((block) => [block.id, block]));
+          const selected = [];
+          for (const id of ids) {
+            const block = byId.get(id);
+            if (!block) return json(res, 404, { ok: false, error: 'context_block_not_found', blockId: id });
+            selected.push({ id: block.id, cid: block.cid, text: block.text, bytes: block.bytes });
+          }
+          touch(nodeId);
+          return json(res, 200, { ok: true, cid, blocks: selected });
+        }
+
+        if (req.method === 'POST' && action === 'delta') {
+          if (!record.owners.has(nodeId)) return json(res, 403, { ok: false, error: 'context_owner_required' });
+          const owner = nodes.get(nodeId);
+          const { frame, payload } = await readJson(req);
+          const verification = verifyCompactFrame(frame, payload, owner.publicKey, { allowedTypes: ['CONTEXT_DELTA'] });
+          if (!verification.ok) return json(res, 400, { ok: false, error: verification.reason });
+          if (payload?.baseCid !== cid) return json(res, 400, { ok: false, error: 'context_base_cid_mismatch' });
+          const nextBlocks = applyContextDelta(record.blocks, payload?.ops);
+          const document = buildContextDocument(nextBlocks);
+          const inheritedReaders = [...record.readers];
+          const readers = [...new Set([...inheritedReaders, ...contextReaders(payload?.readers || [])])];
+          const child = saveContext(nodeId, document, {
+            readers,
+            metadata: payload?.metadata || record.metadata,
+            baseCid: cid,
+            deltaOps: payload?.ops
+          });
+          touch(nodeId);
+          return json(res, 200, {
+            ok: true,
+            cid: child.cid,
+            baseCid: cid,
+            manifest: child.manifest,
+            contentBytes: child.contentBytes,
+            serializedBytes: child.serializedBytes,
+            deltaBytes: Buffer.byteLength(JSON.stringify(payload?.ops || []))
+          });
+        }
       }
 
       if (req.method === 'POST' && url.pathname === '/v1/fast/chains') {
@@ -738,7 +865,7 @@ export function createRelay({ nodeFreshnessMs = 15_000 } = {}) {
 
   return {
     server,
-    state: { nodes, sessions, offers, events, fastEvents, providerSockets, requests, chains, stats },
+    state: { nodes, sessions, offers, events, fastEvents, providerSockets, requests, chains, contexts, stats },
     async listen({ port = 8787, host = '127.0.0.1' } = {}) {
       await new Promise((resolve) => server.listen(port, host, resolve));
       const address = server.address();

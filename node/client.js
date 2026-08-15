@@ -1,6 +1,7 @@
 import WebSocket from 'ws';
 import { compactFrameBytes, createCompactFrame, createEnvelope, verifyCompactFrame, verifyEnvelope } from '../core/protocol/index.js';
 import { createIdentity } from '../core/identity/index.js';
+import { renderContextSelection, verifyContextManifest, verifyContextSelection } from '../core/context/index.js';
 
 async function requestJson(url, options = {}) {
   const response = await fetch(url, {
@@ -34,6 +35,7 @@ export class TruynNode {
     this.fastSocketQueue = [];
     this.fastSocketWaiters = [];
     this.fastSocketChainWaiters = new Map();
+    this.contextManifestCache = new Map();
   }
 
   envelope(type, payload, extra = {}) {
@@ -414,6 +416,127 @@ export class TruynNode {
       frameBytes: compactFrameBytes(frame),
       payloadBytes: bytes(payload)
     };
+  }
+
+
+  async putContext(blocks, { readers = [], metadata = {} } = {}) {
+    if (!this.sessionToken) throw new Error('Node must register before putting context');
+    const payload = { blocks, readers, metadata };
+    const frame = this.compactFrame('CONTEXT_PUT', payload);
+    const requestBody = { frame, payload };
+    const result = await requestJson(`${this.relayUrl}/v1/contexts`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${this.sessionToken}` },
+      body: JSON.stringify(requestBody)
+    });
+    if (result.manifest) this.contextManifestCache.set(result.cid, result.manifest);
+    return { ...result, frame, payload, transferBytes: bytes(requestBody) + bytes(result) };
+  }
+
+  async deltaContext(baseCid, ops, { readers = [], metadata = {} } = {}) {
+    if (!this.sessionToken) throw new Error('Node must register before updating context');
+    const payload = { baseCid, ops, readers, metadata };
+    const frame = this.compactFrame('CONTEXT_DELTA', payload);
+    const requestBody = { frame, payload };
+    const result = await requestJson(`${this.relayUrl}/v1/contexts/${encodeURIComponent(baseCid)}/delta`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${this.sessionToken}` },
+      body: JSON.stringify(requestBody)
+    });
+    if (result.manifest) this.contextManifestCache.set(result.cid, result.manifest);
+    return { ...result, frame, payload, transferBytes: bytes(requestBody) + bytes(result) };
+  }
+
+  async contextManifest(cid) {
+    if (!this.sessionToken) throw new Error('Node must register before reading context');
+    if (this.contextManifestCache.has(cid)) {
+      return { manifest: this.contextManifestCache.get(cid), cacheHit: true, transferBytes: 0 };
+    }
+    const result = await requestJson(`${this.relayUrl}/v1/contexts/${encodeURIComponent(cid)}/manifest`, {
+      headers: { authorization: `Bearer ${this.sessionToken}` }
+    });
+    const verification = verifyContextManifest(result.manifest, cid);
+    if (!verification.ok) throw new Error(`Context manifest verification failed: ${verification.reason}`);
+    this.contextManifestCache.set(cid, result.manifest);
+    return { manifest: result.manifest, cacheHit: false, transferBytes: bytes(result) };
+  }
+
+  async selectContext(cid, ids) {
+    if (!Array.isArray(ids) || ids.length === 0) throw new Error('Context selection requires block ids');
+    const manifestResult = await this.contextManifest(cid);
+    const requestBody = { ids };
+    const result = await requestJson(`${this.relayUrl}/v1/contexts/${encodeURIComponent(cid)}/select`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${this.sessionToken}` },
+      body: JSON.stringify(requestBody)
+    });
+    const verification = verifyContextSelection(manifestResult.manifest, result.blocks, cid);
+    if (!verification.ok) throw new Error(`Context selection verification failed: ${verification.reason}`);
+    const selectedContentBytes = (result.blocks || []).reduce((sum, block) => sum + Buffer.byteLength(block.text || ''), 0);
+    return {
+      cid,
+      blocks: result.blocks || [],
+      manifestCacheHit: manifestResult.cacheHit,
+      manifestTransferBytes: manifestResult.transferBytes,
+      selectionTransferBytes: bytes(requestBody) + bytes(result),
+      transferBytes: manifestResult.transferBytes + bytes(requestBody) + bytes(result),
+      selectedContentBytes
+    };
+  }
+
+  async materializeContextRefs(value) {
+    const emptyStats = () => ({
+      contextRefs: 0,
+      selectedBlocks: 0,
+      selectedContentBytes: 0,
+      manifestTransferBytes: 0,
+      selectionTransferBytes: 0,
+      contextTransferBytes: 0
+    });
+    const merge = (target, source) => {
+      for (const key of Object.keys(target)) target[key] += source[key] || 0;
+      return target;
+    };
+    const walk = async (item) => {
+      if (Array.isArray(item)) {
+        const stats = emptyStats();
+        const values = [];
+        for (const child of item) {
+          const resolved = await walk(child);
+          values.push(resolved.value);
+          merge(stats, resolved.stats);
+        }
+        return { value: values, stats };
+      }
+      if (item && typeof item === 'object') {
+        if (Object.keys(item).length === 1 && item.$context) {
+          const ref = item.$context;
+          if (!ref.cid || !Array.isArray(ref.ids)) throw new Error('Invalid $context reference');
+          const selected = await this.selectContext(ref.cid, ref.ids);
+          return {
+            value: renderContextSelection(selected.blocks),
+            stats: {
+              contextRefs: 1,
+              selectedBlocks: selected.blocks.length,
+              selectedContentBytes: selected.selectedContentBytes,
+              manifestTransferBytes: selected.manifestTransferBytes,
+              selectionTransferBytes: selected.selectionTransferBytes,
+              contextTransferBytes: selected.transferBytes
+            }
+          };
+        }
+        const stats = emptyStats();
+        const entries = [];
+        for (const [key, child] of Object.entries(item)) {
+          const resolved = await walk(child);
+          entries.push([key, resolved.value]);
+          merge(stats, resolved.stats);
+        }
+        return { value: Object.fromEntries(entries), stats };
+      }
+      return { value: item, stats: emptyStats() };
+    };
+    return walk(value);
   }
 
   async revoke(targetId, reason = 'revoked_by_owner') {
