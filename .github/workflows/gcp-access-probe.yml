@@ -38,8 +38,8 @@ jobs:
             fi
           done
 
-          region="$(printf '%s' "$GCP_REGION_CONFIGURED" | xargs)"
-          if [[ ! "$region" =~ ^[a-z]+-[a-z0-9]+[0-9]$ ]]; then
+          region="$(printf '%s' "$GCP_REGION_CONFIGURED" | grep -oE '[a-z]+-[a-z0-9]+[0-9]' | head -n1 || true)"
+          if [[ -z "$region" ]]; then
             echo "GCP_REGION_FORMAT=invalid"
             exit 1
           fi
