@@ -68,6 +68,43 @@ test('provider semantic reranker repairs placeholder or invented ids and counts 
   assert.equal(reranker.stats().repairs, 1);
 });
 
+test('provider semantic reranker can shortlist large candidate sets before final top-1', async () => {
+  let calls = 0;
+  const provider = {
+    async execute(request) {
+      calls += 1;
+      const context = JSON.parse(request.input.context);
+      if (calls === 1) {
+        assert.equal(context.length, 4);
+        return {
+          output:'{"ids":["candidate-c","candidate-b"]}',
+          metadata:{ usage:{ promptTokenCount:40, candidatesTokenCount:8, totalTokenCount:48 }, providerRequestBodyBytes:400, providerLatencyMs:20 }
+        };
+      }
+      assert.deepEqual(context.map((item) => item.id), ['candidate-c','candidate-b']);
+      return {
+        output:'{"id":"candidate-b"}',
+        metadata:{ usage:{ promptTokenCount:20, candidatesTokenCount:4, totalTokenCount:24 }, providerRequestBodyBytes:200, providerLatencyMs:10 }
+      };
+    }
+  };
+  const reranker = createProviderSemanticReranker({ provider, shortlistSize:2 });
+  const result = await reranker.rerank('pick the semantically correct rule', [
+    { id:'candidate-a', text:'a' },
+    { id:'candidate-b', text:'b target' },
+    { id:'candidate-c', text:'c near match' },
+    { id:'candidate-d', text:'d' }
+  ]);
+  assert.equal(result.id, 'candidate-b');
+  assert.deepEqual(result.metadata.shortlistIds, ['candidate-c','candidate-b']);
+  assert.equal(result.metadata.shortlistSize, 2);
+  assert.deepEqual(result.metadata.usage, { input:60, output:12, total:72 });
+  assert.equal(result.metadata.providerRequestBodyBytes, 600);
+  assert.equal(result.metadata.providerLatencyMs, 30);
+  assert.equal(reranker.stats().shortlistRequests, 1);
+  assert.equal(reranker.stats().finalRequests, 1);
+});
+
 test('semantic router reranks only dense candidates and preserves selected block provenance', async () => {
   const vectorByText = new Map([
     ['target passage', [1,0]],
