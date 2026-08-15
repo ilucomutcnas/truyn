@@ -92,10 +92,12 @@ jobs:
               fi
             fi
             tmp="$(mktemp)"
-            jq --arg alias "$alias" --arg requested "$requested" --arg actual "$actual" --arg vendor "$vendor" --arg family "$family" --arg status "$status" --arg errorClass "$error_class" '. + [{alias:$alias,requested:$requested,actual:$actual,vendor:$vendor,family:$family,status:$status,errorClass:($errorClass|select(length>0))}]' smoke-artifacts/text/azure-deployments.json > "$tmp" && mv "$tmp" smoke-artifacts/text/azure-deployments.json
+            jq --arg alias "$alias" --arg requested "$requested" --arg actual "$actual" --arg vendor "$vendor" --arg family "$family" --arg status "$status" --arg errorClass "$error_class" \
+              '. + [({alias:$alias,requested:$requested,actual:$actual,vendor:$vendor,family:$family,status:$status} + (if ($errorClass|length)>0 then {errorClass:$errorClass} else {} end))]' \
+              smoke-artifacts/text/azure-deployments.json > "$tmp" && mv "$tmp" smoke-artifacts/text/azure-deployments.json
           }
 
-          deploy_one truyn-grok 'grok-3-mini' xai grok
+          deploy_one truyn-grok 'grok-4.1-fast-non-reasoning' xai grok
           deploy_one truyn-deepseek 'DeepSeek-V3.2' deepseek deepseek
           deploy_one truyn-llama 'Llama-3.3-70B-Instruct' meta llama
           deploy_one truyn-mistral 'Mistral-Large-3' mistral mistral
