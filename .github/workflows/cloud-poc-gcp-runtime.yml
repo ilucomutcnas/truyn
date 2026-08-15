@@ -1,0 +1,104 @@
+name: Cloud PoC GCP Gemini Runtime
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/cloud-poc-gcp-runtime.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GCP_PROJECT_ID_VALUE: ${{ vars.GCP_PROJECT_ID || secrets.GCP_PROJECT_ID }}
+      GCP_WIF_PROVIDER_VALUE: ${{ vars.GCP_WIF_PROVIDER || secrets.GCP_WIF_PROVIDER }}
+      GCP_DEPLOYER_SA_VALUE: ${{ vars.GCP_DEPLOYER_SERVICE_ACCOUNT_EMAIL || secrets.GCP_DEPLOYER_SERVICE_ACCOUNT_EMAIL }}
+      GCP_RUNTIME_SA_VALUE: ${{ vars.GCP_RUNTIME_SERVICE_ACCOUNT_EMAIL || secrets.GCP_RUNTIME_SERVICE_ACCOUNT_EMAIL }}
+      GCP_REGION_CONFIGURED: ${{ vars.GCP_REGION || secrets.GCP_REGION }}
+      GCP_AR_REPO: truyn-poc
+      GCP_SERVICE: truyn-gemini
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Normalize GCP region
+        shell: bash
+        run: |
+          set -euo pipefail
+          region="$(printf '%s' "$GCP_REGION_CONFIGURED" | grep -oE '[a-z]+-[a-z0-9]+[0-9]' | head -n1 || true)"
+          [[ -n "$region" ]] || { echo 'GCP_REGION_FORMAT=invalid'; exit 1; }
+          echo "GCP_REGION_VALUE=$region" >> "$GITHUB_ENV"
+
+      - name: Authenticate to Google Cloud using WIF
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID_VALUE }}
+          workload_identity_provider: ${{ env.GCP_WIF_PROVIDER_VALUE }}
+          service_account: ${{ env.GCP_DEPLOYER_SA_VALUE }}
+          create_credentials_file: true
+          export_environment_variables: true
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID_VALUE }}
+
+      - name: Create Artifact Registry repository if absent
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gcloud artifacts repositories describe "$GCP_AR_REPO" \
+            --project="$GCP_PROJECT_ID_VALUE" \
+            --location="$GCP_REGION_VALUE" >/dev/null 2>&1; then
+            echo 'GCP_ARTIFACT_REPOSITORY=existing'
+          else
+            gcloud artifacts repositories create "$GCP_AR_REPO" \
+              --project="$GCP_PROJECT_ID_VALUE" \
+              --location="$GCP_REGION_VALUE" \
+              --repository-format=docker \
+              --description='TRUYN cross-cloud PoC runtime images' \
+              --quiet
+            echo 'GCP_ARTIFACT_REPOSITORY=created'
+          fi
+
+      - name: Build and push TRUYN runtime image
+        shell: bash
+        run: |
+          set -euo pipefail
+          registry="${GCP_REGION_VALUE}-docker.pkg.dev"
+          image="${registry}/${GCP_PROJECT_ID_VALUE}/${GCP_AR_REPO}/truyn:${GITHUB_SHA}"
+          gcloud auth configure-docker "$registry" --quiet
+          docker build -t "$image" .
+          docker push "$image"
+          echo "GCP_IMAGE=$image" >> "$GITHUB_ENV"
+          echo 'GCP_IMAGE_PUSH=success'
+
+      - name: Deploy Gemini TRUYN worker
+        shell: bash
+        run: |
+          set -euo pipefail
+          gcloud run deploy "$GCP_SERVICE" \
+            --project="$GCP_PROJECT_ID_VALUE" \
+            --region="$GCP_REGION_VALUE" \
+            --image="$GCP_IMAGE" \
+            --service-account="$GCP_RUNTIME_SA_VALUE" \
+            --port=8080 \
+            --min=1 \
+            --max=1 \
+            --no-cpu-throttling \
+            --cpu=1 \
+            --memory=512Mi \
+            --set-env-vars='TRUYN_ROLE=provider,TRUYN_PROVIDER=vertex-gemini,TRUYN_CAPABILITIES=review,TRUYN_RELAY=https://relay.invalid,GOOGLE_CLOUD_LOCATION=global,GEMINI_MODEL=gemini-2.5-flash' \
+            --quiet
+          url="$(gcloud run services describe "$GCP_SERVICE" --project="$GCP_PROJECT_ID_VALUE" --region="$GCP_REGION_VALUE" --format='value(status.url)')"
+          revision="$(gcloud run services describe "$GCP_SERVICE" --project="$GCP_PROJECT_ID_VALUE" --region="$GCP_REGION_VALUE" --format='value(status.latestReadyRevisionName)')"
+          [[ -n "$url" && -n "$revision" ]] || { echo 'GCP_CLOUD_RUN_READY=false'; exit 1; }
+          echo "GCP_CLOUD_RUN_URL=$url"
+          echo "GCP_CLOUD_RUN_REVISION=$revision"
+          echo 'GCP_CLOUD_RUN_READY=true'
