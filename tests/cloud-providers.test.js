@@ -9,6 +9,7 @@ test('Azure OpenAI provider uses managed identity bearer auth and reports usage'
   const provider = createAzureOpenAIProvider({
     endpoint: 'https://example.openai.azure.com',
     model: 'gpt-test',
+    apiKey: null,
     capabilities: ['research'],
     accessTokenProvider: async () => 'azure-token',
     fetchImpl: async (url, options) => {
