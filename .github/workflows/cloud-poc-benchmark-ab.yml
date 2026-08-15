@@ -1,0 +1,140 @@
+name: Cloud PoC Cross-Cloud A/B Benchmark
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'benchmarks/cross-cloud-ab.js'
+      - 'adapters/providers/azure-openai.js'
+      - 'adapters/providers/vertex-gemini.js'
+      - '.github/workflows/cloud-poc-benchmark-ab.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      TRUYN_RELAY: https://relay.truyn.org
+      AZURE_RG: truyn
+      AZURE_OPENAI_NAME: truyn-openai-1334540181
+      AZURE_OPENAI_DEPLOYMENT: truyn-gpt-4-1-mini
+      GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID || secrets.GCP_PROJECT_ID }}
+      GCP_WIF_PROVIDER_VALUE: ${{ vars.GCP_WIF_PROVIDER || secrets.GCP_WIF_PROVIDER }}
+      GCP_DEPLOYER_SA_VALUE: ${{ vars.GCP_DEPLOYER_SERVICE_ACCOUNT_EMAIL || secrets.GCP_DEPLOYER_SERVICE_ACCOUNT_EMAIL }}
+      GOOGLE_CLOUD_LOCATION: global
+      GEMINI_MODEL: gemini-2.5-flash
+      BENCHMARK_WARMUPS: '1'
+      BENCHMARK_ITERATIONS: '5'
+      BENCHMARK_OUTPUT: cross-cloud-ab.json
+      AZURE_INPUT_USD_PER_M: '0.44'
+      AZURE_OUTPUT_USD_PER_M: '1.76'
+      AZURE_PRICE_SOURCE: 'Azure Retail Prices API; eastus; gpt 4.1 mini Inp/Outp regnl; 2026-08-15 snapshot'
+      GEMINI_INPUT_USD_PER_M: '0.30'
+      GEMINI_OUTPUT_USD_PER_M: '2.50'
+      GEMINI_PRICE_SOURCE: 'Google Cloud Vertex AI pricing; Gemini 2.5 Flash GA ON_DEMAND; 2026-08-15 snapshot'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify canonical relay domain
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 60); do
+            if curl -fsS "${TRUYN_RELAY}/health" | jq -e '.ok == true and .protocol == "TRUYN/1"' >/dev/null; then
+              echo 'TRUYN_CANONICAL_RELAY_HEALTH=success'
+              exit 0
+            fi
+            sleep 5
+          done
+          echo 'TRUYN_CANONICAL_RELAY_HEALTH=failed'
+          exit 1
+
+      - name: Azure login with OIDC
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID || secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Prepare ephemeral direct Azure credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          endpoint="$(az cognitiveservices account show -g "$AZURE_RG" -n "$AZURE_OPENAI_NAME" --query properties.endpoint -o tsv)"
+          [[ -n "$endpoint" ]] || { echo 'AZURE_OPENAI_ENDPOINT=missing'; exit 1; }
+          echo "AZURE_OPENAI_ENDPOINT=$endpoint" >> "$GITHUB_ENV"
+
+          token="$(az account get-access-token --resource https://cognitiveservices.azure.com/ --query accessToken -o tsv)"
+          [[ -n "$token" ]] || { echo 'AZURE_OPENAI_ACCESS_TOKEN=missing'; exit 1; }
+          echo "::add-mask::$token"
+          echo "AZURE_OPENAI_ACCESS_TOKEN=$token" >> "$GITHUB_ENV"
+
+          # The benchmark runner is an orchestration identity, not the Azure provider runtime identity.
+          # Use an ephemeral account key for the direct control arm so the measurement is not blocked
+          # by data-plane RBAC differences. The key is masked, never printed, never stored, and exists
+          # only for this job. The TRUYN arm continues to use Managed Identity in Container Apps.
+          key="$(az cognitiveservices account keys list -g "$AZURE_RG" -n "$AZURE_OPENAI_NAME" --query key1 -o tsv)"
+          [[ -n "$key" ]] || { echo 'AZURE_OPENAI_API_KEY=missing'; exit 1; }
+          echo "::add-mask::$key"
+          echo "AZURE_OPENAI_API_KEY=$key" >> "$GITHUB_ENV"
+          echo 'AZURE_DIRECT_CREDENTIALS=ready'
+
+      - name: Authenticate to Google Cloud using WIF
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ env.GCP_WIF_PROVIDER_VALUE }}
+          service_account: ${{ env.GCP_DEPLOYER_SA_VALUE }}
+          create_credentials_file: true
+          export_environment_variables: true
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID }}
+
+      - name: Prepare ephemeral direct GCP credential
+        shell: bash
+        run: |
+          set -euo pipefail
+          token="$(gcloud auth print-access-token)"
+          [[ -n "$token" ]] || { echo 'GCP_ACCESS_TOKEN=missing'; exit 1; }
+          echo "::add-mask::$token"
+          echo "GCP_ACCESS_TOKEN=$token" >> "$GITHUB_ENV"
+          echo 'GCP_DIRECT_CREDENTIAL=ready'
+
+      - name: Run paired A/B benchmark
+        shell: bash
+        run: |
+          set -euo pipefail
+          node benchmarks/cross-cloud-ab.js
+
+      - name: Print benchmark summary
+        if: ${{ success() }}
+        shell: bash
+        run: |
+          jq '{
+            benchmark,
+            status,
+            generatedAt,
+            relayUrl,
+            methodology,
+            pricing,
+            aggregate,
+            claims
+          }' cross-cloud-ab.json
+
+      - name: Upload benchmark evidence
+        if: ${{ always() && hashFiles('cross-cloud-ab.json') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: truyn-cross-cloud-ab-${{ github.run_id }}
+          path: cross-cloud-ab.json
+          if-no-files-found: error
+          retention-days: 30
