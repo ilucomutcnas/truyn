@@ -17,7 +17,6 @@ on:
 
 permissions:
   contents: read
-  id-token: write
 
 jobs:
   prove:
@@ -25,29 +24,24 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     env:
-      AZURE_RG: truyn
-      AZURE_RELAY_APP: truyn-relay
+      TRUYN_RELAY: https://relay.truyn.org
     steps:
       - uses: actions/checkout@v4
 
-      - name: Azure login with OIDC
-        uses: azure/login@v2
-        with:
-          client-id: ${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ vars.AZURE_TENANT_ID || secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}
-
-      - name: Resolve deployed relay
+      - name: Verify canonical TRUYN relay domain
         shell: bash
         run: |
           set -euo pipefail
-          fqdn="$(az containerapp show -g "$AZURE_RG" -n "$AZURE_RELAY_APP" --query properties.configuration.ingress.fqdn -o tsv)"
-          [[ -n "$fqdn" ]] || { echo 'TRUYN_RELAY_FQDN=missing'; exit 1; }
-          relay="https://${fqdn}"
-          curl -fsS "${relay}/health" | tee relay-health.json | jq -e '.ok == true' >/dev/null
-          echo "TRUYN_RELAY=${relay}" >> "$GITHUB_ENV"
-          echo "TRUYN_RELAY=${relay}"
-          jq . relay-health.json
+          for attempt in $(seq 1 60); do
+            if curl -fsS "${TRUYN_RELAY}/health" | tee relay-health.json | jq -e '.ok == true and .protocol == "TRUYN/1"' >/dev/null; then
+              echo "TRUYN_RELAY=${TRUYN_RELAY}"
+              jq . relay-health.json
+              exit 0
+            fi
+            sleep 5
+          done
+          echo 'TRUYN_CANONICAL_RELAY_HEALTH=failed'
+          exit 1
 
       - name: Prove signed NEED to Azure GPT to RESULT
         shell: bash
