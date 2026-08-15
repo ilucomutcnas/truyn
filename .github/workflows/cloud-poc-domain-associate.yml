@@ -1,0 +1,76 @@
+name: Cloud PoC Associate relay.truyn.org
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/cloud-poc-domain-associate.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  associate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      AZURE_RG: truyn
+      AFD_PROFILE: truyn-frontdoor
+      AFD_ENDPOINT: truyn-edge-1334540181
+      AFD_ROUTE: relay-route
+      AFD_CUSTOM_DOMAIN: relay-truyn-org
+      TRUYN_HOST: relay.truyn.org
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login with OIDC
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID || secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Ensure Azure Front Door CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          az extension add --name cdn --upgrade --yes >/dev/null
+
+      - name: Associate approved custom domain with relay route
+        shell: bash
+        run: |
+          set -euo pipefail
+          state="$(az afd custom-domain show -g "$AZURE_RG" --profile-name "$AFD_PROFILE" --custom-domain-name "$AFD_CUSTOM_DOMAIN" --query domainValidationState -o tsv)"
+          [[ "$state" == 'Approved' ]] || { echo "AFD_DOMAIN_STATE=$state"; exit 1; }
+          domain_id="$(az afd custom-domain show -g "$AZURE_RG" --profile-name "$AFD_PROFILE" --custom-domain-name "$AFD_CUSTOM_DOMAIN" --query id -o tsv)"
+          [[ -n "$domain_id" ]] || { echo 'AFD_CUSTOM_DOMAIN_ID=missing'; exit 1; }
+          formatted="$(jq -nc --arg id "$domain_id" '[{id:$id}]')"
+          az afd route update \
+            -g "$AZURE_RG" \
+            --profile-name "$AFD_PROFILE" \
+            --endpoint-name "$AFD_ENDPOINT" \
+            --route-name "$AFD_ROUTE" \
+            --formatted-custom-domains "$formatted" \
+            --link-to-default-domain Enabled >/dev/null
+          echo 'AFD_ROUTE_DOMAIN_ASSOCIATION=success'
+
+      - name: Prove canonical TRUYN relay domain
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 90); do
+            status="$(curl -sS -o relay-health.json -w '%{http_code}' "https://${TRUYN_HOST}/health" || true)"
+            if [[ "$status" == '200' ]] && jq -e '.ok == true and .protocol == "TRUYN/1"' relay-health.json >/dev/null 2>&1; then
+              echo "TRUYN_PUBLIC_RELAY=https://${TRUYN_HOST}"
+              echo 'TRUYN_PUBLIC_DOMAIN_HEALTH=success'
+              jq . relay-health.json
+              exit 0
+            fi
+            echo "TRUYN_PUBLIC_DOMAIN_PROPAGATING attempt=${attempt} http=${status}"
+            sleep 10
+          done
+          echo 'TRUYN_PUBLIC_DOMAIN_HEALTH=timeout'
+          exit 1
