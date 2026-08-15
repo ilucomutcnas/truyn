@@ -3,7 +3,7 @@ name: Cloud PoC Infrastructure Discovery
 on:
   push:
     branches:
-      - deploy/azure-gcp-poc
+      - main
     paths:
       - '.github/workflows/cloud-poc-discovery.yml'
   workflow_dispatch:
