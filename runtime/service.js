@@ -57,11 +57,14 @@ async function runProvider() {
   const node = new TruynNode({ relayUrl, identity });
   const adapter = createProviderAdapter(providerName, { capabilities });
   const fastPath = process.env.TRUYN_FAST_PATH !== '0';
+  // The relay's default node freshness lease is 15s. Keep the long-poll heartbeat
+  // comfortably inside that lease so an actively connected provider never ages out.
+  const longPollMs = Number(process.env.TRUYN_LONG_POLL_MS || 10_000);
   const adapterHost = new TruynAdapterHost({
     node,
     adapter,
     fastPath,
-    longPollMs: Number(process.env.TRUYN_LONG_POLL_MS || 25_000),
+    longPollMs,
     pollIntervalMs: Number(process.env.TRUYN_POLL_MS || 500)
   });
 
@@ -81,12 +84,13 @@ async function runProvider() {
         capabilities,
         relayUrl,
         fastPath,
+        longPollMs,
         handled,
         lastError
       });
     }
     if (req.method === 'GET' && req.url === '/ready') {
-      return writeJson(res, ready ? 200 : 503, { ok: ready, lastError, fastPath });
+      return writeJson(res, ready ? 200 : 503, { ok: ready, lastError, fastPath, longPollMs });
     }
     return writeJson(res, 404, { ok: false, error: 'not_found' });
   });
@@ -100,6 +104,7 @@ async function runProvider() {
     capabilities,
     relayUrl,
     fastPath,
+    longPollMs,
     health: `http://${host}:${port}/health`
   })}\n`);
 
