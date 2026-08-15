@@ -4,6 +4,7 @@ on:
   workflow_run:
     workflows:
       - Cloud PoC Azure Relay and GPT Node
+      - Cloud PoC Azure Proof
     types:
       - completed
     branches:
@@ -113,7 +114,8 @@ jobs:
             azure: {
               providerNodeId: .azure.providerNodeId,
               signatureVerified: .azure.signatureVerified,
-              trustability: .azure.trustability,
+              matchTrustability: .azure.matchTrustability,
+              resultTrustability: .azure.resultTrustability,
               endToEndLatencyMs: .azure.endToEndLatencyMs,
               providerLatencyMs: .azure.providerLatencyMs,
               usage: .azure.usage,
@@ -123,7 +125,8 @@ jobs:
             gemini: {
               providerNodeId: .gemini.providerNodeId,
               signatureVerified: .gemini.signatureVerified,
-              trustability: .gemini.trustability,
+              matchTrustability: .gemini.matchTrustability,
+              resultTrustability: .gemini.resultTrustability,
               endToEndLatencyMs: .gemini.endToEndLatencyMs,
               providerLatencyMs: .gemini.providerLatencyMs,
               usage: .gemini.usage,
