@@ -1,4 +1,5 @@
 name: Cloud PoC Cross-Cloud A/B Benchmark
+# v2 retry trigger: compact provider liveness fix deployed
 
 on:
   push:
