@@ -48,11 +48,15 @@ export function createVertexGeminiProvider({
   endpoint = process.env.VERTEX_API_ENDPOINT || 'https://aiplatform.googleapis.com',
   capabilities = ['review'],
   accessTokenProvider = googleMetadataAccessToken,
-  fetchImpl = fetch
+  fetchImpl = fetch,
+  requestTimeoutMs = Number(process.env.VERTEX_GEMINI_REQUEST_TIMEOUT_MS || 120_000)
 } = {}) {
   if (!projectId) throw new Error('GCP_PROJECT_ID or GOOGLE_CLOUD_PROJECT is required');
   if (!location) throw new Error('GCP_REGION or GOOGLE_CLOUD_LOCATION is required');
   if (!model) throw new Error('GEMINI_MODEL is required');
+  if (!Number.isInteger(requestTimeoutMs) || requestTimeoutMs < 1_000 || requestTimeoutMs > 600_000) {
+    throw new Error('Vertex Gemini requestTimeoutMs must be an integer from 1000 to 600000');
+  }
 
   return {
     name: 'vertex-gemini-generate-content',
@@ -79,14 +83,27 @@ export function createVertexGeminiProvider({
         contents: [{ role: 'user', parts: [{ text: prompt }] }],
         ...(thinkingBudget == null ? {} : { generationConfig: { thinkingConfig: { thinkingBudget } } })
       });
-      const response = await fetchImpl(`${endpoint.replace(/\/$/, '')}/v1/${modelPath}:generateContent`, {
-        method: 'POST',
-        headers: {
-          authorization: `Bearer ${token}`,
-          'content-type': 'application/json'
-        },
-        body: requestBody
-      });
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), requestTimeoutMs);
+      let response;
+      try {
+        response = await fetchImpl(`${endpoint.replace(/\/$/, '')}/v1/${modelPath}:generateContent`, {
+          method: 'POST',
+          headers: {
+            authorization: `Bearer ${token}`,
+            'content-type': 'application/json'
+          },
+          body: requestBody,
+          signal: controller.signal
+        });
+      } catch (error) {
+        if (controller.signal.aborted || error?.name === 'AbortError') {
+          throw new Error(`Vertex AI request timed out after ${requestTimeoutMs}ms`);
+        }
+        throw new Error(`Vertex AI network request failed (${error?.name || 'Error'})`);
+      } finally {
+        clearTimeout(timeout);
+      }
       const { raw, json:body } = await readResponseBody(response);
       if (!response.ok) {
         const detail = body?.error?.message || safeBodyExcerpt(raw);
@@ -110,6 +127,7 @@ export function createVertexGeminiProvider({
           providerResponseBodyBytes,
           providerBodyBytes: providerRequestBodyBytes + providerResponseBodyBytes,
           thinkingBudget: thinkingBudget ?? null,
+          requestTimeoutMs,
           usage: body.usageMetadata || null
         }
       };
