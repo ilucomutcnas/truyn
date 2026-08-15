@@ -1,5 +1,5 @@
 name: Cloud PoC GCP Gemini Runtime
-# deployment revision: 5 — east-coast runtime + direct relay backchannel
+# deployment revision: 6 — relay latency trace instrumentation
 
 on:
   push:
