@@ -61,6 +61,7 @@ async function sendNeed(node, capability, input, policy = {}) {
   });
   const body = await response.json();
   if (!response.ok) throw new Error(body.error || `TRUYN NEED HTTP ${response.status}`);
+  if (!body.needId) throw new Error('TRUYN relay did not return needId');
   return { envelope, needBytes, startedAt, response: body };
 }
 
@@ -80,7 +81,8 @@ async function waitForResult(node, requestId, timeoutMs = 120000) {
 async function transact(node, capability, input, policy) {
   const discovery = await waitForOffer(node, capability);
   const sent = await sendNeed(node, capability, input, policy);
-  const resultEvent = await waitForResult(node, sent.response.requestId);
+  const requestId = sent.response.needId;
+  const resultEvent = await waitForResult(node, requestId);
   const metadata = resultEvent.envelope?.payload?.metadata || {};
   const output = resultEvent.envelope?.payload?.output;
   const resultEnvelopeBytes = bytes(resultEvent.envelope);
@@ -88,15 +90,20 @@ async function transact(node, capability, input, policy) {
 
   if (!signatureVerified) throw new Error(`${capability} RESULT signature verification failed`);
   if (metadata.failed) throw new Error(`${capability} provider failed: ${metadata.error || 'unknown error'}`);
+  if (discovery.offer.from !== resultEvent.envelope.from) {
+    throw new Error(`${capability} provider identity changed between OFFER and RESULT`);
+  }
 
   return {
     capability,
     providerNodeId: resultEvent.envelope.from,
-    providerOfferNodeId: discovery.offer.nodeId,
-    providerAdapter: discovery.offer.metadata?.adapter || metadata.adapter || null,
+    providerOfferNodeId: discovery.offer.from,
+    providerAdapter: discovery.offer.payload?.metadata?.adapter || metadata.adapter || null,
     signatureVerified,
-    trustability: sent.response.trustability ?? null,
-    requestId: sent.response.requestId,
+    matchTrustability: sent.response.providerTrust ?? discovery.offer.trust ?? null,
+    resultTrustability: resultEvent.trust ?? null,
+    trustability: resultEvent.trust ?? sent.response.providerTrust ?? null,
+    requestId,
     discoveryLatencyMs: discovery.discoveryLatencyMs,
     endToEndLatencyMs: Date.now() - sent.startedAt,
     providerLatencyMs: metadata.providerLatencyMs ?? metadata.latencyMs ?? null,
