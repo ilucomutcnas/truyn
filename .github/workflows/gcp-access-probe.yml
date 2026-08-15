@@ -22,7 +22,7 @@ jobs:
       GCP_WIF_PROVIDER_VALUE: ${{ vars.GCP_WIF_PROVIDER || secrets.GCP_WIF_PROVIDER }}
       GCP_DEPLOYER_SA_CONFIGURED: ${{ vars.GCP_DEPLOYER_SERVICE_ACCOUNT || secrets.GCP_DEPLOYER_SERVICE_ACCOUNT || vars.GCP_DEPLOYER_SA || secrets.GCP_DEPLOYER_SA }}
       GCP_RUNTIME_SA_CONFIGURED: ${{ vars.GCP_RUNTIME_SERVICE_ACCOUNT || secrets.GCP_RUNTIME_SERVICE_ACCOUNT || vars.GCP_RUNTIME_SA || secrets.GCP_RUNTIME_SA }}
-      GCP_REGION_VALUE: ${{ vars.GCP_REGION || secrets.GCP_REGION }}
+      GCP_REGION_CONFIGURED: ${{ vars.GCP_REGION || secrets.GCP_REGION }}
 
     steps:
       - uses: actions/checkout@v4
@@ -31,15 +31,22 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for key in GCP_PROJECT_ID_VALUE GCP_PROJECT_NUMBER_VALUE GCP_WIF_PROVIDER_VALUE GCP_REGION_VALUE; do
+          for key in GCP_PROJECT_ID_VALUE GCP_PROJECT_NUMBER_VALUE GCP_WIF_PROVIDER_VALUE GCP_REGION_CONFIGURED; do
             if [[ -z "${!key:-}" ]]; then
               echo "MISSING_${key}=true"
               exit 1
             fi
           done
 
+          region="$(printf '%s' "$GCP_REGION_CONFIGURED" | xargs)"
+          if [[ ! "$region" =~ ^[a-z]+-[a-z0-9]+[0-9]$ ]]; then
+            echo "GCP_REGION_FORMAT=invalid"
+            exit 1
+          fi
+
           deployer_sa="${GCP_DEPLOYER_SA_CONFIGURED:-truyn-github-deployer@${GCP_PROJECT_ID_VALUE}.iam.gserviceaccount.com}"
           runtime_sa="${GCP_RUNTIME_SA_CONFIGURED:-truyn-gemini-runtime@${GCP_PROJECT_ID_VALUE}.iam.gserviceaccount.com}"
+          echo "GCP_REGION_VALUE=${region}" >> "$GITHUB_ENV"
           echo "GCP_DEPLOYER_SA_VALUE=${deployer_sa}" >> "$GITHUB_ENV"
           echo "GCP_RUNTIME_SA_VALUE=${runtime_sa}" >> "$GITHUB_ENV"
           echo "GCP_CONFIG_PRESENT=ok"
@@ -73,16 +80,23 @@ jobs:
           gcloud projects describe "$project" --format='value(projectId)' >/dev/null
           echo "PROJECT_READ=ok"
 
-          gcloud run services list --project="$project" --region="$region" --format='value(metadata.name)' >/dev/null
+          token="$(gcloud auth print-access-token)"
+
+          curl -fsS \
+            -H "Authorization: Bearer ${token}" \
+            "https://run.googleapis.com/v2/projects/${project}/locations/${region}/services?pageSize=1" \
+            >/dev/null
           echo "CLOUD_RUN_READ=ok"
 
-          gcloud artifacts repositories list --project="$project" --location="$region" --format='value(name)' >/dev/null
+          curl -fsS \
+            -H "Authorization: Bearer ${token}" \
+            "https://artifactregistry.googleapis.com/v1/projects/${project}/locations/${region}/repositories?pageSize=1" \
+            >/dev/null
           echo "ARTIFACT_REGISTRY_READ=ok"
 
           gcloud iam service-accounts describe "$runtime_sa" --project="$project" --format='value(email)' >/dev/null
           echo "RUNTIME_SERVICE_ACCOUNT_READ=ok"
 
-          token="$(gcloud auth print-access-token)"
           perms_json="$(curl -fsS -X POST \
             -H "Authorization: Bearer ${token}" \
             -H 'Content-Type: application/json' \
