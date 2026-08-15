@@ -4,6 +4,7 @@ import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 
 const ROOT = path.resolve(new URL('..', import.meta.url).pathname);
+const SELF = 'tests/public-repository.test.js';
 const SKIP_DIRS = new Set(['.git', 'node_modules']);
 const TEXT_EXTENSIONS = new Set(['.md', '.js', '.mjs', '.cjs', '.json', '.yml', '.yaml', '.toml', '.txt', '.proto', '.sh', '.ps1', '.cmd', '.html', '.css']);
 
@@ -66,6 +67,7 @@ test('public repository contains no known operational/cloud leakage or credentia
   const violations = [];
 
   for (const file of files) {
+    if (file.relative === SELF) continue;
     for (const fragment of forbiddenPathFragments) {
       if (file.relative.includes(fragment)) violations.push(`${file.relative}: forbidden path ${fragment}`);
     }
