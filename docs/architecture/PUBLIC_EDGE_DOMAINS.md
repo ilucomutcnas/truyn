@@ -1,51 +1,67 @@
 # TRUYN Public Edge Domains
 
-Status: implemented infrastructure reservation for the current Azure/Cloudflare PoC edge.
+Status: public hostname architecture for the current PoC and future service separation.
 
-This document records the public HTTPS hostnames and Azure Front Door routes that have already been provisioned so future service activation does not unnecessarily repeat DNS ownership validation, managed-certificate setup, or initial route creation.
+This document records **intentionally public DNS/service names and their logical roles only**. It deliberately does not publish live cloud resource names, private origins, edge account identifiers, privileged route configuration, service tokens or internal topology.
 
-## Canonical live relay
+## Canonical public relay
 
-- `relay.truyn.org` → `relay-route` — canonical public TRUYN relay HTTP endpoint for the current PoC.
+- `relay.truyn.org` — canonical public TRUYN relay hostname for the current PoC.
 
-`relay.truyn.org` resolves through Cloudflare DNS to the Front Door endpoint. The route remains attached to the current relay origin group.
+Public reachability of the relay does **not** imply public access to private or owner-funded AI providers. Provider execution remains subject to the provider ownership/authorization architecture.
 
-## Prewarmed HTTPS surfaces
+## Reserved public HTTPS surfaces
 
-The following hostnames are reserved, Azure-approved managed-certificate custom domains and have dedicated Front Door route objects:
+The following names are reserved as public compatibility/control surfaces:
 
-- `api.truyn.org` → `api-route` — future public HTTP API surface.
-- `discovery.truyn.org` → `discovery-route` — future HTTP discovery/bootstrap compatibility surface; this does not redefine the native TRUYN QUIC/UDP discovery transport.
-- `gateway.truyn.org` → `gateway-route` — future HTTP/REST/webhook compatibility gateway.
-- `mcp.truyn.org` → `mcp-route` — future MCP interoperability surface.
-- `trust.truyn.org` → `trust-route` — future Trustability HTTP service surface.
-- `status.truyn.org` → `status-route` — future public status/health surface.
+- `api.truyn.org` — future public HTTP API surface.
+- `discovery.truyn.org` — future HTTP discovery/bootstrap compatibility surface; this does not redefine native TRUYN discovery transport.
+- `gateway.truyn.org` — future HTTP/REST/webhook compatibility gateway.
+- `mcp.truyn.org` — future MCP interoperability surface.
+- `trust.truyn.org` — future Trustability HTTP service surface.
+- `status.truyn.org` — future public status/health surface.
 
-For every hostname, Cloudflare contains the Azure Front Door ownership-validation TXT record and a DNS-only CNAME to the shared Front Door endpoint. Azure Front Door reports each custom domain as approved with managed TLS configured.
+Reservation of a hostname does not mean the corresponding service is implemented, active or authorized to reach private providers.
 
-Each future hostname owns exactly one dedicated route. For pre-provisioning only, those routes currently target the existing `relay-origin-group` as a placeholder. This is **not** a declaration that the future API, discovery, gateway, MCP, trust, or status services share relay ownership or implementation. When a dedicated service exists, preserve the approved hostname and route and replace the route's origin group/backend with the service-specific origin group.
+## Service ownership boundary
 
-The canonical `relay-route` owns only `relay.truyn.org`; future hostnames are not attached to it.
+Each public hostname should have an independently owned logical service/backend when that service is implemented. Temporary PoC route reuse is an infrastructure detail and MUST NOT become a permanent architecture rule.
+
+The architecture separates:
+
+```text
+public protocol / compatibility surfaces
+              ↓
+authentication + authorization boundary
+              ↓
+private owner control plane
+private provider backchannels
+```
+
+The public API/MCP/gateway surface must never be treated as an alternate path around provider authorization.
 
 ## Native network transport boundary
 
-Do not pre-provision `bootstrap`, `testnet`, or `mainnet` hostnames as Azure Front Door HTTP routes merely for convenience. The TRUYN roadmap defines the native network underlay around QUIC/UDP/IP. HTTP compatibility surfaces and the native transport must remain separate architectural concerns.
+Future native `testnet`/`mainnet` transport and bootstrap infrastructure may use protocols different from HTTP. Public HTTPS compatibility names do not redefine the native TRUYN transport contract.
 
-## Infrastructure source of truth
+## Edge and origin security
 
-- `.github/workflows/cloud-poc-domain-prewarm.yml` — idempotent reservation, Cloudflare DNS, Azure validation, and managed-TLS prewarming for future HTTPS hostnames.
-- `.github/workflows/cloud-poc-public-edge-routes.yml` — idempotent provisioning and verification of one Front Door route per public hostname.
-- `.github/workflows/cloud-poc-domain-diagnostic.yml` — DNS, Azure custom-domain, route-association, and HTTPS diagnostics for the canonical relay and all prewarmed names.
-- `.github/workflows/cloud-poc-domain-associate.yml` — canonical `relay.truyn.org` route association helper.
+Public edge infrastructure should provide TLS and may provide WAF/rate limiting/abuse controls. Private/control-plane services may additionally use machine-to-machine access policies.
 
-Current PoC edge resources:
+Origins should be protected against direct bypass where the deployment architecture supports it. Exact origin hostnames, edge application IDs, service tokens, firewall rules, account/zone IDs and bypass configuration are private operational data.
 
-- Azure resource group: `truyn`
-- Azure Front Door profile: `truyn-frontdoor`
-- Azure Front Door endpoint: `truyn-edge-1334540181`
-- Placeholder origin group for prewarmed routes: `relay-origin-group`
-- DNS zone: `truyn.org` in Cloudflare
+Edge controls are defense in depth. The provider authorization decision remains mandatory at the TRUYN execution boundary even if edge controls are misconfigured.
 
-## Change rule
+## Public/private source-of-truth rule
 
-Do not delete and recreate an approved Front Door custom-domain resource or its dedicated route as part of a normal backend migration. Prefer changing the route's origin group/backend. Recreating a custom domain can reintroduce DNS validation and managed-certificate propagation delay that this prewarming stage is specifically intended to avoid.
+This file is **not** the source of truth for live cloud resources. Live deployment identifiers, private origins, route/backend IDs and security-control configuration belong to protected operational configuration/systems.
+
+Public infrastructure-as-code and workflows should use generic/stable abstractions or placeholders where practical and must not rely on secrecy of architecture for security.
+
+The current repository may still contain PoC implementation details created before this boundary was adopted. Removing or restructuring such implementation details is a separate security-hardening task and is intentionally not performed by this documentation-only change.
+
+See:
+
+- `RELAY_SECURITY.md`
+- `PROVIDER_OWNERSHIP.md`
+- `PUBLIC_PRIVATE_BOUNDARY.md`

@@ -1,10 +1,10 @@
 # TRUYN MVP Quickstart
 
-This document describes the first executable TRUYN vertical slice. It is intentionally smaller than the target architecture: the MVP uses a dependency-free Node.js HTTP relay to prove signed agent discovery and request/result exchange before decentralized discovery, QUIC, NAT traversal, durable storage, and full Trustability are implemented.
+This document describes the first executable TRUYN vertical slice. It is intentionally smaller than the target architecture: the MVP uses a dependency-free Node.js HTTP relay to prove signed agent discovery and request/result exchange before decentralized discovery, QUIC, NAT traversal, durable storage, full Trustability and production-grade provider authorization are implemented.
 
 ## What is implemented
 
-The MVP currently provides:
+The core MVP currently provides:
 
 - `TRUYN/1` signed JSON envelopes for `IDENTITY`, `OFFER`, `NEED`, `RESULT`, and `REVOKE`;
 - Ed25519 node identities whose Node ID is derived from the public key rather than an IP address;
@@ -13,15 +13,37 @@ The MVP currently provides:
 - authenticated event polling with per-registration session tokens;
 - a `TruynNode` client;
 - a minimal CLI;
-- a provisional `trustability-lite/1` signal based on verified identity, task history, recency, and placeholder attestation input;
-- an end-to-end two-node demo and automated tests.
+- a provisional `trustability-lite/1` signal;
+- end-to-end demos and automated tests.
 
-The relay and Trustability Lite formula are MVP implementation choices, not final TRUYN network or trust contracts.
+Additional adapter/cloud PoC work exists elsewhere in the repository. The relay and Trustability Lite formula remain MVP implementation choices, not final TRUYN network/trust/security contracts.
+
+## Provider-security warning
+
+The current MVP relay does **not** yet represent the approved production provider-ownership security model.
+
+Do not interpret successful registration/discovery as permission for an arbitrary external requester to use a private or owner-funded provider.
+
+The target security architecture requires:
+
+```text
+authenticate requester
+      ↓
+resolve authoritative requester tenant
+      ↓
+provider ownership / visibility authorization
+      ↓
+billing / quota eligibility
+      ↓
+dispatch
+```
+
+until that is implemented and passes the negative matrix in `../architecture/THREAT_MODEL.md`, keep paid/private provider experiments in trusted/controlled environments.
 
 ## Requirements
 
 - Node.js 20 or newer
-- no external npm dependencies
+- no external npm dependencies for the core MVP path
 
 ## Fastest proof
 
@@ -38,7 +60,7 @@ A successful run ends with output similar to:
 
 ```text
 RESULT signature: VERIFIED
-Trustability Lite: 0.7833
+Trustability Lite: <score>
 TRUYN MVP transaction complete.
 ```
 
@@ -86,7 +108,7 @@ The requester then receives the signed result:
 TRUYN_HOME=.truyn-requester node cli/index.js poll --relay http://127.0.0.1:8787
 ```
 
-For testing across two computers, bind the relay to an interface reachable by both machines and replace `127.0.0.1` with the relay host address. Do not expose this MVP relay directly to the public Internet; production authentication, rate limiting, persistence, TLS, abuse controls, replay protection, and decentralized networking are not implemented yet.
+For testing across two computers, bind the relay only in a trusted environment and replace `127.0.0.1` with the reachable relay host address. The core MVP relay is not the final public provider-security boundary.
 
 ## MVP HTTP surface
 
@@ -103,9 +125,11 @@ GET  /health
 
 All TRUYN exchange messages are signed envelopes. Event polling additionally requires the relay session token returned during registration.
 
+**Security architecture requirement:** every execution-capable legacy/current route must eventually converge on central provider authorization. A future secure route does not make an older bypass safe.
+
 ## Current boundary
 
-This implementation proves the shortest useful TRUYN path:
+This core implementation proves:
 
 ```text
 independent identity
@@ -123,4 +147,15 @@ signed RESULT
 verification + Trustability Lite metadata
 ```
 
-Next implementation work should add the adapter contract, MCP/HTTP agent bridges, persistence/replay protection, and reproducible token/latency/cost benchmarks before expanding into decentralized discovery and the broader TRUYN/1 object/state/compute surface.
+It does **not** by itself prove:
+
+- production-grade tenant/provider authorization;
+- authorization-aware private discovery;
+- BYOK onboarding/secure credential storage;
+- billing/quota enforcement;
+- private provider backchannels;
+- safe public coexistence with owner-funded provider accounts;
+- decentralized discovery / DHT / QUIC / NAT traversal;
+- full Trustability / provenance / Sybil resistance.
+
+The immediate architecture priority for public paid-provider safety is the provider-security gate defined in `ROADMAP.md`, `SECURITY.md` and `docs/architecture/THREAT_MODEL.md`.

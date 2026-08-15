@@ -2,7 +2,7 @@
 
 Status: **planned methodology; no multimodal benchmark result is claimed by this document**.
 
-This document defines how the TRUYN reference testnet should compare providers across Google Cloud and Microsoft Azure without mixing incompatible modalities or presenting catalog availability as implementation status.
+This document defines how the TRUYN reference testnet should compare providers across Google Cloud and Microsoft Azure without mixing incompatible modalities, presenting catalog availability as implementation status, or implying public entitlement to project-funded provider accounts.
 
 ## Principle
 
@@ -15,6 +15,8 @@ video generation ↔ video generation
 ```
 
 The benchmark is provider-neutral at the TRUYN protocol layer and provider-specific only in the constrained benchmark policy.
+
+All benchmark providers must also be **authorized for the benchmark owner/workload**. A provider selector can choose among authorized candidates; it cannot override provider ownership/visibility policy.
 
 ## Planned provider groups
 
@@ -48,13 +50,17 @@ Google Cloud:
 Microsoft Azure:
 - Sora 2
 
+## Provider ownership and billing scope
+
+Reference benchmark providers are owner-private unless deliberately shared under an explicit policy. Public benchmark publication does not make their quota available to public TRUYN users.
+
+A benchmark run should record enough public model/version information to reproduce the comparison, while private cloud deployment resource names, service-account/managed-identity identifiers, private origins, quota allocations, credit balances and billing-account details remain operational/private.
+
+Public cost reporting uses disclosed list-price/equivalent assumptions where appropriate. Account-specific credits/discounts may be reported only in aggregate when useful and safe.
+
 ## Grok clarification
 
-The Azure Foundry Grok models currently documented by Microsoft are chat/reasoning models. Some Grok 4.1 Fast variants can accept image input, but the documented response format remains text.
-
-xAI separately exposes Grok Imagine image and video generation through the xAI API. That is not treated as an Azure media capability unless Microsoft Foundry exposes the corresponding generation model in its catalog.
-
-A future direct-xAI benchmark may compare Grok Imagine against Google/Azure media providers, but it must be identified as a third provider surface with its own access and billing path.
+The Azure Foundry Grok models documented for the reference architecture are treated as reasoning/multimodal-understanding providers unless the concrete deployed catalog explicitly exposes media generation. A future direct-xAI media benchmark would be a separate provider and billing surface.
 
 ## Reasoning benchmark controls
 
@@ -94,14 +100,7 @@ Record:
 - safety/filter outcome;
 - deterministic seed only where both compared providers support a meaningful equivalent.
 
-Quality evaluation should include a reproducible rubric such as:
-
-- prompt adherence;
-- visual coherence;
-- text rendering when requested;
-- subject/reference consistency when applicable;
-- artifact defects;
-- independent blinded human scoring and/or a disclosed multimodal evaluator.
+Quality evaluation should include a reproducible rubric such as prompt adherence, visual coherence, text rendering when requested, subject/reference consistency when applicable, artifact defects, and independent blinded human scoring and/or a disclosed multimodal evaluator.
 
 Do not report a single quality number without describing the evaluation method.
 
@@ -136,7 +135,7 @@ Because video generation is asynchronous, provider job polling is counted as pro
 
 ## Artifact-transfer comparison
 
-TRUYN should avoid embedding large image/video payloads into signed protocol envelopes. Benchmarks should therefore report separately:
+TRUYN should avoid embedding large image/video payloads into signed protocol envelopes. Benchmarks should report separately:
 
 ```text
 provider artifact bytes
@@ -147,38 +146,33 @@ actual artifact download bytes
 
 This prevents a small `ArtifactRef` from being incorrectly presented as if the underlying image or video required no transfer.
 
+Private bucket/container names or long-lived credential-bearing URLs must not be published as benchmark evidence. Use logical artifact references/hashes or intentionally public evidence artifacts.
+
 ## Cost reporting
 
 Public benchmark reports should distinguish:
 
 ```text
 provider list-price equivalent
-account-specific effective cash cost
+account-specific effective cash cost (only when safely reportable)
 ```
 
 Credits, sponsorships, negotiated discounts and private billing arrangements can change independently of the protocol and should not be treated as a universal TRUYN cost claim.
 
-## Model lifecycle
+## Model lifecycle and reproducibility
 
-Concrete model IDs are resolved immediately before a benchmark. Provider catalogs change over time.
+Concrete model IDs/versions are resolved immediately before a benchmark because provider catalogs change over time.
 
-As of the architecture update on 2026-08-15:
+Benchmark reports SHOULD record the public model family/version actually tested and deployment class/region when needed for interpreting performance. They SHOULD NOT publish a private cloud deployment resource name merely for reproducibility; a logical benchmark label can represent that deployment while protected evidence retains the operational mapping.
 
-- Google Cloud release notes recommend migration from listed Imagen generation endpoints to `gemini-2.5-flash-image` and from older Veo generation endpoints to Veo 3.1 equivalents.
-- Microsoft Foundry documents Azure OpenAI `gpt-image` image-generation models and Sora/Sora 2 video-generation models.
-- Microsoft Foundry also documents Azure-direct FLUX image-generation models.
+## Provider-security gate
 
-Benchmark reports MUST record the exact model/deployment version actually tested rather than relying only on family names.
+Multimodal benchmark success is separate from provider-access security. Before public users can safely coexist with owner-funded benchmark providers, the negative test matrix in `../architecture/THREAT_MODEL.md` must prove unauthorized requests cause zero upstream provider calls/jobs.
 
 ## References
 
-- Google Vertex AI release notes: https://cloud.google.com/vertex-ai/docs/release-notes
-- Google image generation: https://cloud.google.com/vertex-ai/generative-ai/docs/models/gemini/2-5-flash-image
-- Google Veo: https://cloud.google.com/vertex-ai/generative-ai/docs/video/generate-videos
-- Microsoft Foundry models sold by Azure: https://learn.microsoft.com/azure/foundry/foundry-models/concepts/models-sold-directly-by-azure
-- Microsoft Sora video generation: https://learn.microsoft.com/azure/foundry/openai/concepts/video-generation
-- xAI Grok Imagine: https://docs.x.ai/developers/model-capabilities/imagine
+Provider-specific public references may be updated at benchmark time because catalogs and model lifecycles change. Architecture semantics remain defined in `../architecture/MULTI_CLOUD_PROVIDER_ARCHITECTURE.md`.
 
 ## Implementation boundary
 
-This file defines benchmark scope only. It does not create providers, resources, deployments, credentials, quotas, workflows or inference traffic.
+This file defines benchmark scope only. It does not create providers, resources, deployments, credentials, quotas, workflows, authorization policy or inference traffic.

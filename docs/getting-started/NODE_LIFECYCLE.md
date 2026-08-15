@@ -1,6 +1,6 @@
 # TRUYN Node Installation and Lifecycle
 
-**Status: architectural contract; installers are not yet production-ready.**
+**Status: architectural contract; installers and streamlined BYOK onboarding are not yet production-ready.**
 
 TRUYN installs a **Node** on an ordinary computer. It does not install an AI model and it does not replace the operating system's network stack.
 
@@ -11,6 +11,7 @@ TRUYN installs a **Node** on an ordinary computer. It does not install an AI mod
 - local configuration/database/cache.
 - cryptographic node identity.
 - adapters/SDK endpoints used by agents and applications.
+- optional user-owned/BYOK provider connections.
 
 ## First install
 
@@ -25,16 +26,19 @@ TRUYN installs a **Node** on an ordinary computer. It does not install an AI mod
 8. Create configuration and initialize local storage schema.
 9. Select a network profile: local, testnet or mainnet.
 10. Register `truynd` as a background service when supported.
-11. Load bootstrap peers for testnet/mainnet; local mode may require none.
-12. Establish authenticated peer sessions.
-13. Expose local adapter/SDK endpoints according to policy.
-14. Report node status.
+11. Optionally configure/test one or more BYOK providers owned by the user.
+12. Load bootstrap peers for testnet/mainnet; local mode may require none.
+13. Establish authenticated peer sessions.
+14. Expose local adapter/SDK endpoints according to policy.
+15. Publish only capabilities/provider visibility explicitly allowed by local policy.
+16. Report node/provider status.
 ```
 
 Intended CLI shape:
 
 ```bash
 truyn install
+truyn setup
 truyn start --network local
 truyn start --network testnet
 truyn start --network mainnet
@@ -42,11 +46,22 @@ truyn status
 truyn peers
 truyn identity
 truyn capabilities
+truyn providers
 truyn trust
 truyn stop
 ```
 
 Commands are interface targets until implemented and tested.
+
+## BYOK lifecycle
+
+TRUYN is BYOK by default: Bring Your Own Intelligence / Bring Your Own Provider.
+
+A provider configured by a normal user is private/self-scoped by default. The user must explicitly choose to share/publish it under a wider access policy.
+
+The official client may require at least one successfully configured own provider before enabling AI requester workflows. That is a UX/product guardrail; authoritative provider authorization remains server-side so a custom client cannot bypass ownership policy.
+
+See `BYOK.md`.
 
 ## Runtime data
 
@@ -67,7 +82,9 @@ Logical layout:
 └── db/
 ```
 
-Secrets MUST NOT be assumed to live as plaintext files. The implementation should use platform keychains/secure storage when practical.
+Secrets MUST NOT be assumed to live as plaintext files. Node private keys and provider credentials should use platform keychains/secure storage or equivalent provider/runtime secret facilities when practical.
+
+Raw provider credentials are not part of TRUYN protocol envelopes or relay discovery state.
 
 ## Upgrade
 
@@ -80,13 +97,17 @@ A safe updater should:
 5. stop or quiesce the daemon safely;
 6. install the new binary;
 7. run required migrations;
-8. restart and perform health/interoperability checks;
+8. restart and perform health/interoperability/security checks;
 9. automatically rollback when policy-defined critical checks fail.
+
+Provider ownership/visibility policy and credential references must survive normal upgrades without silently broadening access.
 
 ## Identity persistence
 
 Routine software upgrades MUST NOT silently create a new node identity. Identity rotation/recovery/revocation must be explicit and auditable.
 
+Provider runtime identity rotation must likewise avoid silently changing ownership/authorization semantics.
+
 ## Uninstall
 
-Uninstall should distinguish binaries/service registration from user-owned identity/state. Destructive removal of identity/private material must require explicit intent.
+Uninstall should distinguish binaries/service registration from user-owned identity/state/provider credentials. Destructive removal of identity/private material must require explicit intent.
