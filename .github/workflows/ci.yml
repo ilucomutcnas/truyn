@@ -2,8 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main]
-  pull_request:
+    branches:
+      - main
+      - security/sanitized-validation-fresh
 
 permissions:
   contents: read
