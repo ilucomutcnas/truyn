@@ -32,7 +32,7 @@ test('semantic router scores each block against all projected query variants whi
     ['english projection', [1,0]],
     ['中文投影', [0.8,0.2]],
     ['target chinese block', [1,0]],
-    ['distractor block', [0,1]]
+    ['distractor block', [0.1,0.99]]
   ]);
   const embedder = {
     async embedMany(texts) {
