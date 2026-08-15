@@ -2,8 +2,11 @@ import http from 'node:http';
 
 const host = process.env.HOST || '0.0.0.0';
 const port = Number(process.env.PORT || 8080);
+const authToken = process.env.BENCHMARK_PROXY_TOKEN;
 const metadataHost = process.env.GCE_METADATA_HOST || 'metadata.google.internal';
 const vertexEndpoint = (process.env.REAL_VERTEX_API_ENDPOINT || 'https://aiplatform.googleapis.com').replace(/\/$/, '');
+
+if (!authToken) throw new Error('BENCHMARK_PROXY_TOKEN is required');
 
 function sendJson(res, status, body) {
   const data = JSON.stringify(body);
@@ -26,8 +29,10 @@ async function runtimeAccessToken() {
 }
 
 const server = http.createServer(async (req, res) => {
-  // The Cloud Run service is private. Cloud Run validates the caller's ID token
-  // before traffic reaches this process, so the application does not duplicate auth.
+  if (req.headers.authorization !== `Bearer ${authToken}`) {
+    return sendJson(res, 401, { ok: false, error: 'unauthorized' });
+  }
+
   if (req.method === 'GET' && req.url === '/health') {
     return sendJson(res, 200, { ok: true, role: 'benchmark-gemini-direct-proxy' });
   }
