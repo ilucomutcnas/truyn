@@ -77,3 +77,37 @@ test('two independent nodes discover, route NEED and return signed RESULT', asyn
   assert.equal(requesterEvents.events[0].envelope.payload.requestId, requestId);
   assert.ok(requesterEvents.events[0].trust.score > 0);
 });
+
+test('relay excludes stale OFFERs and routes to the live replacement provider', async (t) => {
+  const relay = createRelay({ nodeFreshnessMs: 1_000 });
+  const relayUrl = await relay.listen({ port: 0 });
+  t.after(() => relay.close());
+
+  const staleProvider = new TruynNode({ relayUrl });
+  const liveProvider = new TruynNode({ relayUrl });
+  const requester = new TruynNode({ relayUrl });
+
+  await staleProvider.register();
+  await staleProvider.offer('review');
+  await liveProvider.register();
+  await liveProvider.offer('review');
+  await requester.register();
+
+  relay.state.nodes.get(staleProvider.identity.nodeId).lastSeenAt = new Date(Date.now() - 5_000).toISOString();
+  relay.state.nodes.get(liveProvider.identity.nodeId).lastSeenAt = new Date().toISOString();
+
+  const discovery = await requester.find('review');
+  assert.equal(discovery.offers.length, 1);
+  assert.equal(discovery.offers[0].from, liveProvider.identity.nodeId);
+
+  const matched = await requester.need('review', { candidate: 'TRUYN' });
+  assert.equal(matched.provider, liveProvider.identity.nodeId);
+
+  const staleEvents = await staleProvider.poll();
+  assert.equal(staleEvents.events.length, 0);
+
+  const liveEvents = await liveProvider.poll();
+  assert.equal(liveEvents.events.length, 1);
+  assert.equal(liveEvents.events[0].kind, 'NEED');
+  assert.equal(liveEvents.events[0].envelope.id, matched.needId);
+});
