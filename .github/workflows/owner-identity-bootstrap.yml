@@ -1,0 +1,123 @@
+name: TRUYN Owner Benchmark Identity Bootstrap
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/owner-identity-bootstrap.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  id-token: write
+
+concurrency:
+  group: truyn-owner-benchmark-identity
+  cancel-in-progress: false
+
+jobs:
+  bootstrap:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      AZURE_RG: truyn
+      AZURE_LOCATION: eastus
+      OWNER_IDENTITY_SECRET: benchmark-requester-identity
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Azure login with OIDC
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID || secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Ensure private owner identity vault
+        shell: bash
+        run: |
+          set -euo pipefail
+          suffix="$(printf '%s' '${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}' | sha256sum | cut -c1-10)"
+          vault="truynown${suffix}"
+          if ! az keyvault show -g "$AZURE_RG" -n "$vault" >/dev/null 2>&1; then
+            az keyvault create \
+              -g "$AZURE_RG" \
+              -n "$vault" \
+              -l "$AZURE_LOCATION" \
+              --enable-rbac-authorization false \
+              --retention-days 7 \
+              --no-self-perms >/dev/null
+          fi
+          az keyvault set-policy \
+            -g "$AZURE_RG" \
+            -n "$vault" \
+            --spn '${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }}' \
+            --secret-permissions get list set >/dev/null
+          echo "OWNER_IDENTITY_VAULT=$vault" >> "$GITHUB_ENV"
+
+      - name: Create or reuse durable requester identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          identity_b64="$(az keyvault secret show \
+            --vault-name "$OWNER_IDENTITY_VAULT" \
+            --name "$OWNER_IDENTITY_SECRET" \
+            --query value -o tsv 2>/dev/null || true)"
+
+          if [[ -z "$identity_b64" ]]; then
+            identity_b64="$(node --input-type=module -e "import { createIdentity } from './core/identity/index.js'; process.stdout.write(Buffer.from(JSON.stringify(createIdentity())).toString('base64'));")"
+            echo "::add-mask::$identity_b64"
+            az keyvault secret set \
+              --vault-name "$OWNER_IDENTITY_VAULT" \
+              --name "$OWNER_IDENTITY_SECRET" \
+              --value "$identity_b64" >/dev/null
+            state=created
+          else
+            echo "::add-mask::$identity_b64"
+            state=reused
+          fi
+
+          node_id="$(printf '%s' "$identity_b64" | node --input-type=module -e "import { nodeIdFromPublicKey } from './core/protocol/index.js'; let data=''; for await (const chunk of process.stdin) data += chunk; const identity=JSON.parse(Buffer.from(data.trim(),'base64').toString('utf8')); if (!identity.privateKeyPem || !identity.publicKeyPem) process.exit(2); const computed=nodeIdFromPublicKey(identity.publicKeyPem); if (identity.nodeId && identity.nodeId !== computed) process.exit(3); process.stdout.write(computed);")"
+          [[ "$node_id" == truyn:node:* ]] || { echo 'OWNER_BENCHMARK_IDENTITY=invalid'; exit 1; }
+          echo "OWNER_BENCHMARK_NODE_ID=$node_id" >> "$GITHUB_ENV"
+          echo "OWNER_BENCHMARK_IDENTITY=$state"
+          echo "OWNER_BENCHMARK_NODE_ID=$node_id"
+
+      - name: Publish only the safe requester node id
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p config
+          cat > config/owner-benchmark.json <<JSON
+          {
+            "schema": 1,
+            "purpose": "owner-benchmark-requester",
+            "nodeId": "${OWNER_BENCHMARK_NODE_ID}",
+            "access": "owner-only"
+          }
+          JSON
+
+          if git diff --quiet -- config/owner-benchmark.json; then
+            echo 'OWNER_BENCHMARK_CONFIG=unchanged'
+            exit 0
+          fi
+          git config user.name 'TRUYN Automation'
+          git config user.email 'actions@truyn.org'
+          git add config/owner-benchmark.json
+          git commit -m 'Record owner benchmark requester id'
+          git push origin HEAD:main
+          echo 'OWNER_BENCHMARK_CONFIG=published'
+
+      - name: Verify secret can be re-read
+        shell: bash
+        run: |
+          set -euo pipefail
+          reread="$(az keyvault secret show --vault-name "$OWNER_IDENTITY_VAULT" --name "$OWNER_IDENTITY_SECRET" --query value -o tsv)"
+          echo "::add-mask::$reread"
+          test_id="$(printf '%s' "$reread" | node --input-type=module -e "import { nodeIdFromPublicKey } from './core/protocol/index.js'; let data=''; for await (const chunk of process.stdin) data += chunk; const identity=JSON.parse(Buffer.from(data.trim(),'base64').toString('utf8')); process.stdout.write(nodeIdFromPublicKey(identity.publicKeyPem));")"
+          [[ "$test_id" == "$OWNER_BENCHMARK_NODE_ID" ]] || { echo 'OWNER_IDENTITY_REREAD=failed'; exit 1; }
+          echo 'OWNER_IDENTITY_REREAD=success'
