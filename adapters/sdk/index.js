@@ -8,6 +8,15 @@ function normalizeCapabilities(capabilities) {
   });
 }
 
+function materializePrevious(value, previousOutput) {
+  if (Array.isArray(value)) return value.map((item) => materializePrevious(item, previousOutput));
+  if (value && typeof value === 'object') {
+    if (Object.keys(value).length === 1 && value.$previous === 'output') return previousOutput;
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, materializePrevious(item, previousOutput)]));
+  }
+  return value;
+}
+
 export function validateAdapter(adapter) {
   if (!adapter || typeof adapter.execute !== 'function') throw new Error('Adapter execute(request) is required');
   const capabilities = normalizeCapabilities(adapter.capabilities);
@@ -51,11 +60,50 @@ export class TruynAdapterHost {
         adapter: this.adapter.name,
         adapterVersion: this.adapter.version,
         description: capability.description || null,
-        fastPath: this.fastPath
+        fastPath: this.fastPath,
+        chainPath: this.fastPath
       });
       this.offerIds.push(result.offerId);
     }
     return this.offerIds;
+  }
+
+  normalizeEvent(event) {
+    if (event.kind === 'NEED') {
+      if (!event.verification?.ok) return null;
+      const compact = Boolean(event.frame);
+      return compact
+        ? { id: event.frame.i, from: event.from, payload: event.payload, compact: true }
+        : event.envelope;
+    }
+
+    if (event.kind === 'CHAIN_STAGE') {
+      if (!event.verification?.ok) return null;
+      if (!Number.isInteger(event.stageIndex) || !event.requestId) return null;
+      if (event.stageIndex > 0 && event.priorVerification?.ok !== true) return null;
+      const stage = event.payload?.stages?.[event.stageIndex];
+      if (!stage) return null;
+      const previousOutput = event.priorResult?.payload?.output;
+      const inputSource = Object.prototype.hasOwnProperty.call(stage, 'inputTemplate') ? stage.inputTemplate : stage.input;
+      return {
+        id: event.requestId,
+        from: event.from,
+        compact: true,
+        chain: true,
+        chainId: event.frame.i,
+        stageIndex: event.stageIndex,
+        payload: {
+          capability: stage.capability,
+          input: materializePrevious(inputSource, previousOutput),
+          policy: stage.policy || {}
+        },
+        chainFrame: event.frame,
+        chainPayload: event.payload,
+        priorResult: event.priorResult || null
+      };
+    }
+
+    return null;
   }
 
   async runOnce() {
@@ -66,11 +114,9 @@ export class TruynAdapterHost {
     let handled = 0;
 
     for (const event of polled.events) {
-      if (event.kind !== 'NEED' || !event.verification?.ok) continue;
-      const compact = Boolean(event.frame);
-      const need = compact
-        ? { id: event.frame.i, from: event.from, payload: event.payload, compact: true }
-        : event.envelope;
+      const need = this.normalizeEvent(event);
+      if (!need) continue;
+      const compact = Boolean(need.compact);
       const capability = need.payload?.capability?.name || need.payload?.capability;
       if (!this.adapter.capabilities.some((item) => item.name === capability)) continue;
 
@@ -92,6 +138,7 @@ export class TruynAdapterHost {
           latencyMs: Date.now() - startedAt,
           ...(normalized.metadata || {})
         };
+        if (need.chain) metadata.chainStage = need.stageIndex;
         if (compact) await this.node.compactResult(need.id, normalized.output, metadata);
         else await this.node.result(need.id, normalized.output, metadata);
       } catch (error) {
@@ -102,6 +149,7 @@ export class TruynAdapterHost {
           error: error.message,
           failed: true
         };
+        if (need.chain) metadata.chainStage = need.stageIndex;
         if (compact) await this.node.compactResult(need.id, null, metadata);
         else await this.node.result(need.id, null, metadata);
       }
