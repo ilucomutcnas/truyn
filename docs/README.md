@@ -17,19 +17,15 @@ Human-facing documentation for TRUYN architecture, concepts, setup, operations, 
 
 ### Provider and edge architecture
 
-- [Multi-Cloud Provider Architecture](architecture/MULTI_CLOUD_PROVIDER_ARCHITECTURE.md) — public Google Cloud / Microsoft Azure reasoning, image and video provider target without private deployment identifiers.
-- [Multi-Cloud Provider Implementation Status](providers/MULTICLOUD_PROVIDER_IMPLEMENTATION_STATUS_2026-08-15.md) — implemented adapters and isolated live smoke evidence for text, image, and video providers.
+- [Multi-Cloud Provider Architecture](architecture/MULTI_CLOUD_PROVIDER_ARCHITECTURE.md) — public Google Cloud / Microsoft Azure capability architecture without private deployment identifiers.
 - [Public Edge Domains](architecture/PUBLIC_EDGE_DOMAINS.md) — intentionally public hostname roles and the public/control-plane separation; live origin/resource identifiers are deliberately excluded.
-- [Multimodal Provider Parity Benchmark](benchmarks/MULTIMODAL_PROVIDER_PARITY.md) — planned apples-to-apples methodology for reasoning, image and video comparisons.
+- [Multimodal Provider Parity Benchmark](benchmarks/MULTIMODAL_PROVIDER_PARITY.md) — public apples-to-apples methodology for reasoning, image and video comparisons.
 
-### Measured benchmark evidence
+### Benchmark documentation boundary
 
-- [Cross-Cloud A/B Baseline](benchmarks/CROSS_CLOUD_AB_2026-08-15.md) — measured baseline; explicitly records where the early PoC did not improve tokens/cost/latency.
-- [Cross-Cloud 8× Hot-Path Optimization](benchmarks/CROSS_CLOUD_8X_OPTIMIZATION_2026-08-15.md) — measured transport/orchestration optimization gate.
-- [Content-Addressed Context Efficiency](benchmarks/CONTEXT_EFFICIENCY_2026-08-15.md) — measured sparse context/delta economic gate.
-- [Semantic Retrieval Gate](benchmarks/SEMANTIC_RETRIEVAL_GATE_2026-08-15.md) — measured natural-language question + root CID retrieval/provenance/economic gate.
+Public benchmark documentation contains methodology, reproducible local logic and non-sensitive claims only. Live cloud run identifiers, private provider topology, cloud identities, privileged deployment workflows, quota/billing details and raw operational evidence are intentionally outside the public repository.
 
-Public benchmark evidence describes performance under authorized project-controlled providers. It does not grant public access to the underlying provider accounts and does not substitute for the independent provider-security negative test gate.
+Historical measured results may be summarized publicly only after sanitization and independent review. Publication of a benchmark result never grants access to the provider accounts used to produce it.
 
 ### Getting started
 
