@@ -45,6 +45,12 @@ jobs:
       GEMINI_PRICE_SOURCE: 'Google Cloud Vertex AI pricing; Gemini 2.5 Flash GA ON_DEMAND; 2026-08-15 snapshot'
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+      - name: Install benchmark dependencies
+        run: npm ci --no-audit --no-fund
 
       - name: Verify canonical relay domain
         shell: bash
