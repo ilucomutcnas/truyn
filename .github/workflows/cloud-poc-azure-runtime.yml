@@ -1,5 +1,5 @@
 name: Cloud PoC Azure Relay and GPT Node
-# deployment revision: relay latency trace instrumentation
+# deployment revision: durable provider identity
 
 on:
   push:
@@ -35,6 +35,7 @@ jobs:
       AZURE_CA_ENV: truyn-poc-env
       AZURE_RELAY_APP: truyn-relay
       AZURE_PROVIDER_APP: truyn-azure-gpt
+      AZURE_PROVIDER_IDENTITY_SECRET: truyn-provider-identity-b64
       AZURE_RUNTIME_IDENTITY: id-truyn-runtime
       TRUYN_PUBLIC_RELAY: https://relay.truyn.org
     steps:
@@ -168,6 +169,22 @@ jobs:
                 AZURE_OPENAI_DEPLOYMENT="$AZURE_OPENAI_DEPLOYMENT" \
                 AZURE_CLIENT_ID="$AZURE_RUNTIME_CLIENT_ID" >/dev/null
           fi
+
+          secret_count="$(az containerapp secret list -g "$AZURE_RG" -n "$AZURE_PROVIDER_APP" --query "[?name=='$AZURE_PROVIDER_IDENTITY_SECRET'] | length(@)" -o tsv)"
+          if [[ "$secret_count" == "0" ]]; then
+            identity_b64="$(node --input-type=module -e "import { createIdentity } from './core/identity/index.js'; process.stdout.write(Buffer.from(JSON.stringify(createIdentity())).toString('base64'));")"
+            echo "::add-mask::$identity_b64"
+            az containerapp secret set -g "$AZURE_RG" -n "$AZURE_PROVIDER_APP" \
+              --secrets "$AZURE_PROVIDER_IDENTITY_SECRET=$identity_b64" >/dev/null
+            echo 'AZURE_PROVIDER_IDENTITY_SECRET=created'
+          else
+            echo 'AZURE_PROVIDER_IDENTITY_SECRET=existing'
+          fi
+          az containerapp update -g "$AZURE_RG" -n "$AZURE_PROVIDER_APP" \
+            --set-env-vars "TRUYN_IDENTITY_B64=secretref:$AZURE_PROVIDER_IDENTITY_SECRET" >/dev/null
+          identity_secret_ref="$(az containerapp show -g "$AZURE_RG" -n "$AZURE_PROVIDER_APP" --query "properties.template.containers[0].env[?name=='TRUYN_IDENTITY_B64'].secretRef | [0]" -o tsv)"
+          [[ "$identity_secret_ref" == "$AZURE_PROVIDER_IDENTITY_SECRET" ]] || { echo 'AZURE_PROVIDER_IDENTITY_BINDING=failed'; exit 1; }
+          echo "AZURE_PROVIDER_IDENTITY_BINDING=$identity_secret_ref"
           echo "AZURE_GPT_PUBLIC_RELAY=${TRUYN_PUBLIC_RELAY}"
           echo "AZURE_GPT_BACKCHANNEL_RELAY=${TRUYN_RELAY_ORIGIN_URL}"
           echo 'AZURE_GPT_NODE_DEPLOY=success'
