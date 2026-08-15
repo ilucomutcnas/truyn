@@ -18,7 +18,7 @@ concurrency:
 jobs:
   text-smoke:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     env:
       AZURE_RG: truyn
       AZURE_LOCATION: eastus2
@@ -27,6 +27,10 @@ jobs:
       GCP_PROJECT_ID_VALUE: ${{ vars.GCP_PROJECT_ID || secrets.GCP_PROJECT_ID }}
       GCP_WIF_PROVIDER_VALUE: ${{ vars.GCP_WIF_PROVIDER || secrets.GCP_WIF_PROVIDER }}
       GCP_DEPLOYER_SA_VALUE: ${{ vars.GCP_DEPLOYER_SERVICE_ACCOUNT_EMAIL || secrets.GCP_DEPLOYER_SERVICE_ACCOUNT_EMAIL }}
+      GCP_RUNTIME_SA_VALUE: ${{ vars.GCP_RUNTIME_SERVICE_ACCOUNT_EMAIL || secrets.GCP_RUNTIME_SERVICE_ACCOUNT_EMAIL }}
+      GCP_PROXY_REGION: us-east4
+      GCP_AR_REPO: truyn-poc
+      GCP_PROXY_SERVICE: truyn-text-smoke-${{ github.run_id }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -67,6 +71,7 @@ jobs:
             entry="$(jq -c --arg m "$requested" '[.[] | select(((.name // .model.name // "") | ascii_downcase) == ($m | ascii_downcase))][0] // empty' /tmp/models.json)"
             status="blocked_access"
             actual="$requested"
+            error_class="catalog"
             if [[ -n "$entry" ]]; then
               actual="$(jq -r '.name // .model.name' <<<"$entry")"
               format="$(jq -r '.format // .model.format // "OpenAI"' <<<"$entry")"
@@ -74,17 +79,23 @@ jobs:
               sku="$(jq -r '[.skus[]?.name | select(.=="GlobalStandard" or .=="Standard" or .=="GlobalProvisionedManaged")][0] // "GlobalStandard"' <<<"$entry")"
               if az cognitiveservices account deployment show -g "$AZURE_RG" -n "$account" --deployment-name "$alias" >/dev/null 2>&1; then
                 status="existing"
+                error_class=""
               else
                 args=(cognitiveservices account deployment create -g "$AZURE_RG" -n "$account" --deployment-name "$alias" --model-name "$actual" --model-format "$format" --sku-name "$sku" --sku-capacity 1)
                 [[ -n "$version" ]] && args+=(--model-version "$version")
-                if az "${args[@]}" >/tmp/deploy.out 2>/tmp/deploy.err; then status="deployed"; else status="blocked_access"; fi
+                if az "${args[@]}" >/tmp/deploy.out 2>/tmp/deploy.err; then
+                  status="deployed"
+                  error_class=""
+                else
+                  error_class="deployment"
+                fi
               fi
             fi
             tmp="$(mktemp)"
-            jq --arg alias "$alias" --arg requested "$requested" --arg actual "$actual" --arg vendor "$vendor" --arg family "$family" --arg status "$status" '. + [{alias:$alias,requested:$requested,actual:$actual,vendor:$vendor,family:$family,status:$status}]' smoke-artifacts/text/azure-deployments.json > "$tmp" && mv "$tmp" smoke-artifacts/text/azure-deployments.json
+            jq --arg alias "$alias" --arg requested "$requested" --arg actual "$actual" --arg vendor "$vendor" --arg family "$family" --arg status "$status" --arg errorClass "$error_class" '. + [{alias:$alias,requested:$requested,actual:$actual,vendor:$vendor,family:$family,status:$status,errorClass:($errorClass|select(length>0))}]' smoke-artifacts/text/azure-deployments.json > "$tmp" && mv "$tmp" smoke-artifacts/text/azure-deployments.json
           }
 
-          deploy_one truyn-grok 'grok-4.1-fast-non-reasoning' xai grok
+          deploy_one truyn-grok 'grok-3-mini' xai grok
           deploy_one truyn-deepseek 'DeepSeek-V3.2' deepseek deepseek
           deploy_one truyn-llama 'Llama-3.3-70B-Instruct' meta llama
           deploy_one truyn-mistral 'Mistral-Large-3' mistral mistral
@@ -105,7 +116,7 @@ jobs:
         run: |
           set -uo pipefail
           failures=0
-          jq -c '.[]' smoke-artifacts/text/azure-deployments.json | while read -r row; do
+          while read -r row; do
             alias="$(jq -r .alias <<<"$row")"; vendor="$(jq -r .vendor <<<"$row")"; family="$(jq -r .family <<<"$row")"; state="$(jq -r .status <<<"$row")"
             if [[ "$state" == "blocked_access" ]]; then
               jq -n --arg provider "$family" '{ok:false,modality:"text",provider:$provider,status:"blocked_access"}' > "smoke-artifacts/text/${family}.json"
@@ -117,10 +128,10 @@ jobs:
               jq -n --arg provider "$family" '{ok:false,modality:"text",provider:$provider,status:"smoke_failed"}' > "smoke-artifacts/text/${family}.json"
               failures=$((failures+1))
             fi
-          done
+          done < <(jq -c '.[]' smoke-artifacts/text/azure-deployments.json)
           exit "$failures"
 
-      - name: Authenticate to Google Cloud using WIF
+      - name: Authenticate GCP deployer using WIF
         uses: google-github-actions/auth@v3
         with:
           project_id: ${{ env.GCP_PROJECT_ID_VALUE }}
@@ -134,13 +145,40 @@ jobs:
         with:
           project_id: ${{ env.GCP_PROJECT_ID_VALUE }}
 
+      - name: Prepare ephemeral runtime-identity Vertex proxy
+        shell: bash
+        run: |
+          set -euo pipefail
+          proxy_token="$(openssl rand -hex 32)"
+          echo "::add-mask::$proxy_token"
+          registry="${GCP_PROXY_REGION}-docker.pkg.dev"
+          image="${registry}/${GCP_PROJECT_ID_VALUE}/${GCP_AR_REPO}/text-smoke:${GITHUB_SHA}"
+          gcloud auth configure-docker "$registry" --quiet
+          docker build -f benchmarks/Dockerfile.gemini-proxy -t "$image" .
+          docker push "$image"
+          gcloud run deploy "$GCP_PROXY_SERVICE" \
+            --project="$GCP_PROJECT_ID_VALUE" \
+            --region="$GCP_PROXY_REGION" \
+            --image="$image" \
+            --service-account="$GCP_RUNTIME_SA_VALUE" \
+            --port=8080 --min=0 --max=1 --cpu=1 --memory=512Mi \
+            --set-env-vars="BENCHMARK_PROXY_TOKEN=${proxy_token}" \
+            --no-invoker-iam-check --quiet
+          proxy_url="$(gcloud run services describe "$GCP_PROXY_SERVICE" --project="$GCP_PROJECT_ID_VALUE" --region="$GCP_PROXY_REGION" --format='value(status.url)')"
+          for attempt in $(seq 1 30); do
+            if curl -fsS -H "Authorization: Bearer ${proxy_token}" "${proxy_url}/health" | jq -e '.ok == true' >/dev/null; then break; fi
+            [[ "$attempt" -lt 30 ]] || exit 1
+            sleep 2
+          done
+          echo "VERTEX_SMOKE_ENDPOINT=$proxy_url" >> "$GITHUB_ENV"
+          echo "::add-mask::$proxy_token"
+          echo "VERTEX_SMOKE_TOKEN=$proxy_token" >> "$GITHUB_ENV"
+
       - name: Smoke Vertex Gemini
         shell: bash
         run: |
           set -euo pipefail
-          token="$(gcloud auth print-access-token)"
-          echo "::add-mask::$token"
-          SMOKE_PROVIDER=vertex-gemini GCP_PROJECT_ID="$GCP_PROJECT_ID_VALUE" GCP_REGION=global GEMINI_MODEL=gemini-2.5-flash GCP_ACCESS_TOKEN="$token" node scripts/smoke/text-provider.js | tee smoke-artifacts/text/gemini.json
+          SMOKE_PROVIDER=vertex-gemini GCP_PROJECT_ID="$GCP_PROJECT_ID_VALUE" GCP_REGION=global GEMINI_MODEL=gemini-2.5-flash VERTEX_API_ENDPOINT="$VERTEX_SMOKE_ENDPOINT" GCP_ACCESS_TOKEN="$VERTEX_SMOKE_TOKEN" node scripts/smoke/text-provider.js | tee smoke-artifacts/text/gemini.json
 
       - name: Upload text-only smoke evidence
         uses: actions/upload-artifact@v4
@@ -150,3 +188,10 @@ jobs:
           path: smoke-artifacts/text
           if-no-files-found: error
           retention-days: 30
+
+      - name: Delete ephemeral Vertex proxy
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          gcloud run services delete "$GCP_PROXY_SERVICE" --project="$GCP_PROJECT_ID_VALUE" --region="$GCP_PROXY_REGION" --quiet >/dev/null 2>&1 || true
