@@ -1,6 +1,11 @@
 name: Cloud PoC Cross-Cloud A/B Benchmark
 
 on:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/cloud-poc-benchmark-ab.yml'
   workflow_dispatch:
 
 permissions:
@@ -68,12 +73,10 @@ jobs:
           endpoint="$(az cognitiveservices account show -g "$AZURE_RG" -n "$AZURE_OPENAI_NAME" --query properties.endpoint -o tsv)"
           [[ -n "$endpoint" ]] || { echo 'AZURE_OPENAI_ENDPOINT=missing'; exit 1; }
           echo "AZURE_OPENAI_ENDPOINT=$endpoint" >> "$GITHUB_ENV"
-
           token="$(az account get-access-token --resource https://cognitiveservices.azure.com/ --query accessToken -o tsv)"
           [[ -n "$token" ]] || { echo 'AZURE_OPENAI_ACCESS_TOKEN=missing'; exit 1; }
           echo "::add-mask::$token"
           echo "AZURE_OPENAI_ACCESS_TOKEN=$token" >> "$GITHUB_ENV"
-
           key="$(az cognitiveservices account keys list -g "$AZURE_RG" -n "$AZURE_OPENAI_NAME" --query key1 -o tsv)"
           [[ -n "$key" ]] || { echo 'AZURE_OPENAI_API_KEY=missing'; exit 1; }
           echo "::add-mask::$key"
@@ -101,18 +104,15 @@ jobs:
           region="$(printf '%s' "$GCP_REGION_CONFIGURED" | grep -oE '[a-z]+-[a-z0-9]+[0-9]' | head -n1 || true)"
           [[ -n "$region" ]] || { echo 'GCP_REGION_FORMAT=invalid'; exit 1; }
           echo "GCP_REGION_VALUE=$region" >> "$GITHUB_ENV"
-
           proxy_token="$(openssl rand -hex 32)"
           echo "::add-mask::$proxy_token"
           echo "BENCHMARK_PROXY_TOKEN=$proxy_token" >> "$GITHUB_ENV"
-
           registry="${region}-docker.pkg.dev"
           image="${registry}/${GCP_PROJECT_ID}/${GCP_AR_REPO}/benchmark-ab:${GITHUB_SHA}"
           gcloud auth configure-docker "$registry" --quiet
           docker build -f benchmarks/Dockerfile.gemini-proxy -t "$image" .
           docker push "$image"
           echo "GCP_BENCHMARK_IMAGE=$image" >> "$GITHUB_ENV"
-
           gcloud run deploy "$GCP_PROXY_SERVICE" \
             --project="$GCP_PROJECT_ID" \
             --region="$region" \
@@ -126,7 +126,6 @@ jobs:
             --set-env-vars="BENCHMARK_PROXY_TOKEN=${proxy_token}" \
             --no-invoker-iam-check \
             --quiet
-
           proxy_url="$(gcloud run services describe "$GCP_PROXY_SERVICE" --project="$GCP_PROJECT_ID" --region="$region" --format='value(status.url)')"
           [[ -n "$proxy_url" ]] || { echo 'GEMINI_DIRECT_PROXY_URL=missing'; exit 1; }
           for attempt in $(seq 1 30); do
