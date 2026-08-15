@@ -1,3 +1,4 @@
+import WebSocket from 'ws';
 import { compactFrameBytes, createCompactFrame, createEnvelope, verifyCompactFrame, verifyEnvelope } from '../core/protocol/index.js';
 import { createIdentity } from '../core/identity/index.js';
 
@@ -28,6 +29,10 @@ export class TruynNode {
     this.identity = identity;
     this.sessionToken = null;
     this.identityCache = new Map([[identity.nodeId, identity.publicKeyPem]]);
+    this.fastSocket = null;
+    this.fastSocketConnectPromise = null;
+    this.fastSocketQueue = [];
+    this.fastSocketWaiters = [];
   }
 
   envelope(type, payload, extra = {}) {
@@ -62,6 +67,7 @@ export class TruynNode {
   }
 
   async register({ name = null, protocols = ['TRUYN/1'] } = {}) {
+    this.closeFastSocket();
     const envelope = this.envelope('IDENTITY', {
       nodeId: this.identity.nodeId,
       algorithm: this.identity.algorithm,
@@ -195,10 +201,150 @@ export class TruynNode {
     });
   }
 
+  fastSocketUrl() {
+    const socketUrl = new URL(this.relayUrl);
+    socketUrl.protocol = socketUrl.protocol === 'https:' ? 'wss:' : 'ws:';
+    socketUrl.pathname = '/v1/fast/socket';
+    socketUrl.search = '';
+    socketUrl.searchParams.set('nodeId', this.identity.nodeId);
+    return socketUrl.toString();
+  }
+
+  rejectFastSocketWaiters(error) {
+    const waiters = this.fastSocketWaiters.splice(0);
+    for (const waiter of waiters) waiter.reject(error);
+  }
+
+  deliverFastSocketEvent(event) {
+    const waiter = this.fastSocketWaiters.shift();
+    if (waiter) waiter.resolve(event);
+    else this.fastSocketQueue.push(event);
+  }
+
+  async ensureFastSocket() {
+    if (!this.sessionToken) throw new Error('Node must register before opening fast socket');
+    if (this.fastSocket?.readyState === WebSocket.OPEN) return this.fastSocket;
+    if (this.fastSocketConnectPromise) return this.fastSocketConnectPromise;
+
+    this.fastSocketConnectPromise = new Promise((resolve, reject) => {
+      const socket = new WebSocket(this.fastSocketUrl(), {
+        headers: { authorization: `Bearer ${this.sessionToken}` },
+        perMessageDeflate: false,
+        handshakeTimeout: 10_000
+      });
+      let opened = false;
+
+      socket.once('open', () => {
+        opened = true;
+        this.fastSocket = socket;
+        this.fastSocketConnectPromise = null;
+        resolve(socket);
+      });
+      socket.on('message', (data) => {
+        try {
+          const message = JSON.parse(data.toString());
+          if (message?.kind === 'ACK') return;
+          if (message?.kind === 'ERROR') {
+            this.rejectFastSocketWaiters(new Error(message.error || 'fast_socket_error'));
+            return;
+          }
+          this.deliverFastSocketEvent(message);
+        } catch (error) {
+          this.rejectFastSocketWaiters(error);
+        }
+      });
+      socket.on('error', (error) => {
+        if (!opened) {
+          this.fastSocketConnectPromise = null;
+          reject(error);
+        }
+      });
+      socket.on('close', () => {
+        if (this.fastSocket === socket) this.fastSocket = null;
+        if (!opened) this.fastSocketConnectPromise = null;
+        this.rejectFastSocketWaiters(new Error('fast_socket_closed'));
+      });
+    });
+    return this.fastSocketConnectPromise;
+  }
+
+  closeFastSocket() {
+    const socket = this.fastSocket;
+    this.fastSocket = null;
+    this.fastSocketConnectPromise = null;
+    if (socket && socket.readyState < WebSocket.CLOSING) {
+      try { socket.close(1000, 'client_close'); } catch {}
+    }
+    this.rejectFastSocketWaiters(new Error('fast_socket_closed'));
+  }
+
+  async verifyCompactEvent(event) {
+    const publicKey = await this.resolveIdentity(event.from);
+    const signedType = event.signedType || event.kind;
+    const verification = verifyCompactFrame(event.frame, event.payload, publicKey, { allowedTypes: [signedType] });
+    let priorVerification = null;
+    if (event.priorResult) {
+      const priorPublicKey = await this.resolveIdentity(event.priorResult.from);
+      priorVerification = verifyCompactFrame(
+        event.priorResult.frame,
+        event.priorResult.payload,
+        priorPublicKey,
+        { allowedTypes: ['RESULT'] }
+      );
+    }
+    return { ...event, verification, priorVerification };
+  }
+
+  async nextCompactSocketEvent({ timeoutMs = 0 } = {}) {
+    await this.ensureFastSocket();
+    if (this.fastSocketQueue.length > 0) {
+      return this.verifyCompactEvent(this.fastSocketQueue.shift());
+    }
+
+    const event = await new Promise((resolve, reject) => {
+      const waiter = { resolve, reject, timer: null };
+      if (timeoutMs > 0) {
+        waiter.timer = setTimeout(() => {
+          const index = this.fastSocketWaiters.indexOf(waiter);
+          if (index >= 0) this.fastSocketWaiters.splice(index, 1);
+          reject(new Error('fast_socket_event_timeout'));
+        }, timeoutMs);
+        const originalResolve = waiter.resolve;
+        waiter.resolve = (value) => {
+          clearTimeout(waiter.timer);
+          originalResolve(value);
+        };
+        const originalReject = waiter.reject;
+        waiter.reject = (error) => {
+          clearTimeout(waiter.timer);
+          originalReject(error);
+        };
+      }
+      this.fastSocketWaiters.push(waiter);
+    });
+    return this.verifyCompactEvent(event);
+  }
+
   async compactResult(requestId, output, metadata = {}) {
     if (!this.sessionToken) throw new Error('Node must register before compact RESULT');
     const payload = { output, metadata };
     const frame = this.compactFrame('RESULT', payload, { id: requestId });
+
+    if (this.fastSocket?.readyState === WebSocket.OPEN) {
+      await new Promise((resolve, reject) => {
+        this.fastSocket.send(JSON.stringify({ kind: 'RESULT', frame, payload }), (error) => error ? reject(error) : resolve());
+      });
+      return {
+        ok: true,
+        transport: 'websocket',
+        requestId,
+        frame,
+        payload,
+        frameBytes: compactFrameBytes(frame),
+        payloadBytes: bytes(payload)
+      };
+    }
+
     const result = await requestJson(`${this.relayUrl}/v1/fast/results`, {
       method: 'POST',
       headers: { authorization: `Bearer ${this.sessionToken}` },
@@ -206,6 +352,7 @@ export class TruynNode {
     });
     return {
       ...result,
+      transport: 'http',
       frame,
       payload,
       frameBytes: compactFrameBytes(frame),
@@ -229,10 +376,7 @@ export class TruynNode {
 
     return {
       ...result,
-      events: result.events.map((event) => ({
-        ...event,
-        verification: verifyEnvelope(event.envelope)
-      }))
+      events: result.events.map((event) => ({ ...event, verification: verifyEnvelope(event.envelope) }))
     };
   }
 
@@ -242,23 +386,7 @@ export class TruynNode {
       `${this.relayUrl}/v1/fast/events?nodeId=${encodeURIComponent(this.identity.nodeId)}&waitMs=${Math.max(0, Math.floor(waitMs))}`,
       { headers: { authorization: `Bearer ${this.sessionToken}` } }
     );
-
-    const events = await Promise.all((result.events || []).map(async (event) => {
-      const publicKey = await this.resolveIdentity(event.from);
-      const signedType = event.signedType || event.kind;
-      const verification = verifyCompactFrame(event.frame, event.payload, publicKey, { allowedTypes: [signedType] });
-      let priorVerification = null;
-      if (event.priorResult) {
-        const priorPublicKey = await this.resolveIdentity(event.priorResult.from);
-        priorVerification = verifyCompactFrame(
-          event.priorResult.frame,
-          event.priorResult.payload,
-          priorPublicKey,
-          { allowedTypes: ['RESULT'] }
-        );
-      }
-      return { ...event, verification, priorVerification };
-    }));
+    const events = await Promise.all((result.events || []).map((event) => this.verifyCompactEvent(event)));
     return { ...result, events };
   }
 }
