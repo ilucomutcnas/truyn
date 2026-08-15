@@ -170,7 +170,7 @@ jobs:
                 AZURE_CLIENT_ID="$AZURE_RUNTIME_CLIENT_ID" >/dev/null
           fi
 
-          secret_count="$(az containerapp secret list -g "$AZURE_RG" -n "$AZURE_PROVIDER_APP" --query "[?name=='$AZURE_PROVIDER_IDENTITY_SECRET'] | length(@)" -o tsv)"
+          secret_count="$(az containerapp secret list -g "$AZURE_RG" -n "$AZURE_PROVIDER_APP" -o json | jq --arg name "$AZURE_PROVIDER_IDENTITY_SECRET" '[.[]? | select(.name == $name)] | length')"
           if [[ "$secret_count" == "0" ]]; then
             identity_b64="$(node --input-type=module -e "import { createIdentity } from './core/identity/index.js'; process.stdout.write(Buffer.from(JSON.stringify(createIdentity())).toString('base64'));")"
             echo "::add-mask::$identity_b64"
