@@ -2,7 +2,7 @@
 
 Status: **public architecture target; implementation not started by this document**.
 
-This document defines the public provider architecture for the TRUYN reference testnet across Google Cloud and Microsoft Azure. It intentionally excludes operational identifiers, credentials, quota allocations, billing-account data, private resource names, service-account identities, production topology, and other deployment-sensitive information.
+This document defines the public provider architecture for the TRUYN reference testnet across Google Cloud and Microsoft Azure. It intentionally excludes operational identifiers, credentials, quota allocations, billing-account data, private resource names, service-account identities, production topology, provider node IDs, privileged allowlists and other deployment-sensitive information.
 
 ## Goal
 
@@ -15,6 +15,28 @@ video generation
 ```
 
 The purpose is to support reproducible provider selection, failover and benchmarks where equivalent capabilities are compared against equivalent capabilities.
+
+## Security premise
+
+Reference cloud providers are not a public pool of free intelligence.
+
+> **A provider being connected to TRUYN does not make its upstream cloud account available to every TRUYN participant.**
+
+Every reference provider is subject to the provider ownership and authorization architecture:
+
+```text
+provider identity
+owner / tenant boundary
+visibility policy
+billing mode
+authorization / entitlement
+```
+
+Project/operator-funded benchmark providers are owner-private by default. Their presence in discovery/benchmark documentation is not an entitlement to their quota.
+
+Normal external users are BYOK by default and connect provider capacity they control.
+
+See `PROVIDER_OWNERSHIP.md`, `AUTHORIZATION_MODEL.md`, `BILLING_BOUNDARY.md` and `BYOK_ARCHITECTURE.md`.
 
 ## Public reference matrix
 
@@ -32,47 +54,23 @@ Model versions, regional availability, preview/GA status, quotas and concrete de
 
 ### Google image lifecycle
 
-TRUYN treats `media.image.generate` as a stable capability even when Google changes the concrete model endpoint. Google Cloud release notes published in 2026 deprecated several Imagen generation endpoints and recommended migration to `gemini-2.5-flash-image`. Therefore the public architecture uses the logical **Google image-generation track** rather than binding TRUYN to one Imagen version string.
-
-Reference:
-- https://cloud.google.com/vertex-ai/docs/release-notes
-- https://cloud.google.com/vertex-ai/generative-ai/docs/models/gemini/2-5-flash-image
+TRUYN treats `media.image.generate` as a stable capability even when Google changes the concrete model endpoint. Public architecture uses the logical **Google image-generation track** rather than binding TRUYN to one permanent model version string.
 
 ### Google video lifecycle
 
-Veo is the Google video-generation track. Concrete Veo versions are selected at deployment/preflight time. Google release notes recommend current Veo 3.1 endpoints over retired Veo 2/3.0 generation endpoints.
-
-Reference:
-- https://cloud.google.com/vertex-ai/docs/release-notes
-- https://cloud.google.com/vertex-ai/generative-ai/docs/video/generate-videos
+Veo is the Google video-generation track. Concrete versions are selected at deployment/preflight time and are not protocol semantics.
 
 ### Azure image generation
 
-Microsoft Foundry exposes Azure OpenAI image-generation models including the `gpt-image` family. Microsoft also lists Black Forest Labs FLUX image models as models sold directly by Azure, which gives TRUYN an optional second Azure-side image-generation vendor for diversity testing.
-
-Reference:
-- https://learn.microsoft.com/azure/foundry/foundry-models/concepts/models-sold-directly-by-azure
+Microsoft/Azure image-generation families can back `media.image.generate`. Multiple vendors can be tested independently without changing the TRUYN capability namespace.
 
 ### Azure video generation
 
-Azure OpenAI exposes Sora video generation, including Sora 2 through the Azure OpenAI v1 API. Video generation is asynchronous and therefore maps naturally to TRUYN's long-running execution semantics while still returning a normal `RESULT` to the requester.
-
-Reference:
-- https://learn.microsoft.com/azure/foundry/openai/concepts/video-generation
+Azure-hosted video-generation families can back `media.video.generate`. Video generation is asynchronous and therefore maps naturally to TRUYN's long-running execution semantics while still returning a normal `RESULT` to the requester.
 
 ### Grok media clarification
 
-xAI provides **Grok Imagine** image and video generation through xAI's own API. However, the current Microsoft Foundry xAI catalog documents Azure-hosted Grok models primarily as chat/reasoning models. Some Grok 4.1 Fast variants accept image input, but their documented output is text.
-
-Therefore:
-
-- Grok in the Azure reference path is a `reasoning.general` / multimodal-understanding provider.
-- Grok MUST NOT be advertised as an Azure `media.image.generate` or `media.video.generate` provider unless Microsoft Foundry explicitly exposes those generation models in the deployed catalog.
-- A future direct-xAI Grok Imagine adapter would be a separate provider path and a separate billing/deployment surface, not an implicit capability of the Azure Grok node.
-
-References:
-- https://learn.microsoft.com/azure/foundry/foundry-models/concepts/models-sold-directly-by-azure
-- https://docs.x.ai/developers/model-capabilities/imagine
+A model family available for reasoning/multimodal understanding MUST NOT be advertised as an image/video generation provider unless that concrete deployed provider explicitly supports generation. Direct vendor adapters and cloud-marketplace adapters are separate provider/billing surfaces.
 
 ## Logical architecture
 
@@ -81,21 +79,22 @@ References:
                                     │
                        NEED / OFFER / RESULT
                                     │
+                          AUTHORIZATION GATE
+                                    │
              ┌──────────────────────┴──────────────────────┐
              │                                             │
       GOOGLE CLOUD                                  MICROSOFT AZURE
-        Vertex AI                                   Foundry / Azure OpenAI
+      provider runtimes                             provider runtimes
              │                                             │
      ┌───────┼────────┐                 ┌──────────────────┼──────────────────┐
      │       │        │                 │        │         │        │         │
    Gemini  Google    Veo               GPT      Grok   DeepSeek   Llama   Mistral/Kimi
            Image                         │
-                                         ├── gpt-image family  → image artifacts
-                                         ├── FLUX (optional)   → image artifacts
-                                         └── Sora 2            → video artifacts
+                                         ├── image provider family → artifacts
+                                         └── video provider family → artifacts
 ```
 
-The diagram describes capability ownership, not a promise that every provider is already deployed.
+The diagram describes capability/provider roles, not public access entitlement and not a promise that every provider is already deployed.
 
 ## Provider isolation
 
@@ -103,7 +102,7 @@ The reference runtime follows this rule:
 
 > **one provider family/capability runtime = one TRUYN identity = independently observable health, latency, cost and failure domain**
 
-A common container/runtime implementation may be reused, but a Grok node and a DeepSeek node, or an image node and a video node, should not become one indistinguishable provider identity.
+A common container/runtime implementation may be reused, but materially different provider families or modalities should not become one indistinguishable provider identity.
 
 This preserves:
 
@@ -114,6 +113,8 @@ This preserves:
 - clear benchmark attribution;
 - clean rollback and quota isolation.
 
+Provider identity isolation is not the same as authorization. A distinct provider identity still needs an owner/tenant/visibility policy.
+
 ## Capability semantics
 
 Model names are metadata, not capabilities.
@@ -123,15 +124,15 @@ Correct:
 ```text
 OFFER
 capability: media.image.generate
-metadata.cloud: azure
-metadata.vendor: openai
-metadata.family: gpt-image
+metadata.cloud: <cloud>
+metadata.vendor: <vendor>
+metadata.family: <logical family>
 ```
 
 Incorrect as the primary network abstraction:
 
 ```text
-OFFER gpt-image-1.5
+OFFER <specific-model-version>
 ```
 
 A requester can remain vendor-neutral:
@@ -140,12 +141,9 @@ A requester can remain vendor-neutral:
 NEED media.video.generate
 ```
 
-while a benchmark or policy can constrain the route:
+while a benchmark or policy can constrain the route by cloud/vendor/family.
 
-```text
-policy.providerSelector.cloud = "gcp"
-policy.providerSelector.family = "veo"
-```
+Authorization still runs before ranking/dispatch. A selector cannot force a requester onto a provider it is not allowed to use.
 
 ## Result classes
 
@@ -166,16 +164,16 @@ Conceptual media result:
       "sha256": "...",
       "ref": "...",
       "provenance": {
-        "cloud": "azure",
-        "vendor": "openai",
-        "family": "gpt-image"
+        "cloud": "<cloud>",
+        "vendor": "<vendor>",
+        "family": "<family>"
       }
     }
   ]
 }
 ```
 
-`ref` is a logical artifact reference. Public protocol documentation MUST NOT require a provider-specific bucket URL, storage-account URL, signed URL, or credential-bearing URI.
+`ref` is a logical artifact reference. Public protocol documentation MUST NOT require a provider-specific private bucket URL, storage-account URL, credential-bearing URI or long-lived signed URL.
 
 ## Asynchronous video execution
 
@@ -183,6 +181,8 @@ Video generation is not assumed to be synchronous.
 
 ```text
 NEED media.video.generate
+          ↓
+authorization + quota
           ↓
 provider job / operation
           ↓
@@ -193,7 +193,25 @@ artifact persisted or referenced
 RESULT { ArtifactRef }
 ```
 
-Provider-specific polling, job IDs and temporary download URLs remain adapter concerns. The TRUYN requester receives the same network-level result concept regardless of whether the underlying provider is Veo or Sora.
+Provider-specific polling, job IDs and temporary download URLs remain adapter concerns.
+
+## Credentials and cloud identity
+
+Prefer cloud-native workload identity/managed identity where available. Raw API keys, service-account JSON, client secrets and private provider credentials are not protocol payloads.
+
+Public architecture may describe the generic identity flow:
+
+```text
+CI/deployer identity
+      ↓
+cloud deployment
+      ↓
+runtime workload identity
+      ↓
+provider API
+```
+
+but MUST NOT publish live privileged identity strings merely to document the architecture.
 
 ## Cross-cloud comparison principle
 
@@ -205,14 +223,7 @@ image     ↔ image
 video     ↔ video
 ```
 
-Primary public parity pairs are:
-
-- Google reasoning (Gemini) ↔ Azure reasoning providers (GPT, Grok, DeepSeek, Llama, Mistral, Kimi)
-- Google image generation ↔ Azure OpenAI image generation
-- Google image generation ↔ Azure-direct FLUX as an optional independent-vendor image comparison
-- Google Veo ↔ Azure OpenAI Sora 2
-
-Grok chat output MUST NOT be compared as though it were Grok Imagine image/video output.
+Only providers authorized for the benchmark owner/workload participate. Benchmark availability is not public network entitlement.
 
 See `docs/benchmarks/MULTIMODAL_PROVIDER_PARITY.md`.
 
@@ -236,6 +247,8 @@ status
 providerRequestId
 ```
 
+Provider-security/accounting telemetry should additionally support attribution such as requester/provider owner/billing mode without publishing private operational identities in aggregate public benchmark output.
+
 Cost reporting should distinguish provider list-price equivalent from account-specific credits, discounts or sponsorship. Credit balances and private billing arrangements are operational data and do not belong in this public repository.
 
 ## Public/private boundary
@@ -245,26 +258,29 @@ Safe to publish:
 - logical provider families;
 - capability taxonomy;
 - generic cloud architecture;
+- provider ownership/authorization invariants;
 - generic adapter contracts;
 - artifact/result schemas;
 - benchmark methodology;
-- measured benchmark results after validation;
-- generic environment-variable names when they do not reveal identifiers.
+- validated aggregate benchmark results;
+- generic placeholders and non-sensitive environment-variable examples.
 
-Do not publish:
+Do not intentionally publish:
 
 - credentials or private keys;
-- subscription, billing-account or tenant-sensitive identifiers beyond already-intended public metadata;
-- real service-account or managed-identity identifiers;
-- private bucket/container names;
+- unnecessary subscription/billing/internal tenant identifiers;
+- real privileged service-account/managed-identity identifiers;
+- private origins/backchannels or bucket/container names;
 - production resource topology;
 - quota allocations and internal cost ceilings;
-- secret paths or access policies;
-- private deployment names where they reveal operational topology;
+- secret paths or privileged allowlists;
+- private provider node IDs/deployment names where they reveal operations;
 - sensitive prompts, outputs or customer data.
+
+See `PUBLIC_PRIVATE_BOUNDARY.md`.
 
 ## Implementation boundary
 
-This document changes **architecture and public planning only**. It does not declare any new adapter, model deployment, quota allocation, cloud resource, or benchmark as implemented.
+This document changes **architecture and public planning only**. It does not declare any new adapter, model deployment, ownership ACL, quota system, cloud resource, BYOK onboarding flow or benchmark as implemented.
 
-Before implementation, each provider/capability path requires a zero-spend preflight for current model availability, region, access requirements, quota and billing eligibility.
+Before public users can safely coexist with owner-funded reference providers, the provider-security gate in `THREAT_MODEL.md` and `ROADMAP.md` must be implemented and pass negative tests.
