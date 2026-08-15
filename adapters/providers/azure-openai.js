@@ -60,13 +60,17 @@ export function createAzureOpenAIProvider({
       if (apiKey) headers['api-key'] = apiKey;
       else headers.authorization = `Bearer ${await accessTokenProvider({ fetchImpl })}`;
 
+      const requestBody = JSON.stringify({ model, input: prompt, store: false });
       const response = await fetchImpl(`${endpoint.replace(/\/$/, '')}/openai/v1/responses`, {
         method: 'POST',
         headers,
-        body: JSON.stringify({ model, input: prompt, store: false })
+        body: requestBody
       });
       const body = await response.json();
       if (!response.ok) throw new Error(body?.error?.message || `Azure OpenAI HTTP ${response.status}`);
+
+      const providerRequestBodyBytes = Buffer.byteLength(requestBody);
+      const providerResponseBodyBytes = Buffer.byteLength(JSON.stringify(body));
 
       return {
         output: extractText(body),
@@ -75,6 +79,9 @@ export function createAzureOpenAIProvider({
           model: body.model || model,
           providerRequestId: body.id || null,
           providerLatencyMs: Date.now() - startedAt,
+          providerRequestBodyBytes,
+          providerResponseBodyBytes,
+          providerBodyBytes: providerRequestBodyBytes + providerResponseBodyBytes,
           usage: body.usage || null
         }
       };
