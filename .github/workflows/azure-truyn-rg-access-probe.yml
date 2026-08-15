@@ -1,0 +1,78 @@
+name: Azure TRUYN RG Access Probe
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/azure-truyn-rg-access-probe.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Azure login with OIDC
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID || secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Verify target resource group and effective roles
+        shell: bash
+        run: |
+          set -euo pipefail
+          target_rg="truyn"
+          principal_object_id="4845be35-9952-4436-abfa-8a9aa3eb2639"
+
+          rg_id="$(az group show --name "$target_rg" --query id -o tsv)"
+          echo "TARGET_RG_READ=ok"
+
+          direct_roles="$(az role assignment list --scope "$rg_id" --query "[?principalId=='${principal_object_id}'].roleDefinitionName" -o tsv | sort -u | paste -sd, -)"
+          inherited_roles="$(az role assignment list --all --query "[?principalId=='${principal_object_id}' && starts_with('${rg_id}', scope)].roleDefinitionName" -o tsv | sort -u | paste -sd, -)"
+          echo "TARGET_RG_DIRECT_ROLES=${direct_roles:-none}"
+          echo "TARGET_RG_EFFECTIVE_PARENT_ROLES=${inherited_roles:-none}"
+
+          echo "TARGET_RG_RESOURCE_COUNT=$(az resource list --resource-group "$target_rg" --query 'length(@)' -o tsv)"
+          echo "TARGET_RG_CONTAINER_APPS=$(az resource list --resource-group "$target_rg" --resource-type Microsoft.App/containerApps --query 'length(@)' -o tsv)"
+          echo "TARGET_RG_COGNITIVE_ACCOUNTS=$(az resource list --resource-group "$target_rg" --resource-type Microsoft.CognitiveServices/accounts --query 'length(@)' -o tsv)"
+          echo "TARGET_RG_ACR=$(az resource list --resource-group "$target_rg" --resource-type Microsoft.ContainerRegistry/registries --query 'length(@)' -o tsv)"
+
+      - name: Verify resource create delete in truyn group
+        shell: bash
+        run: |
+          set -euo pipefail
+          target_rg="truyn"
+          probe_identity="truyn-access-probe-${GITHUB_RUN_ID}"
+          cleanup() { az identity delete --resource-group "$target_rg" --name "$probe_identity" >/dev/null 2>&1 || true; }
+          trap cleanup EXIT
+
+          az identity create --resource-group "$target_rg" --name "$probe_identity" >/dev/null
+          echo "RESOURCE_CREATE_IN_TRUYN=ok"
+          principal_id="$(az identity show --resource-group "$target_rg" --name "$probe_identity" --query principalId -o tsv)"
+          rg_id="$(az group show --name "$target_rg" --query id -o tsv)"
+
+          az role assignment create \
+            --assignee-object-id "$principal_id" \
+            --assignee-principal-type ServicePrincipal \
+            --role Reader \
+            --scope "$rg_id" \
+            >/dev/null
+          echo "RBAC_CREATE_IN_TRUYN=ok"
+
+          az role assignment delete \
+            --assignee-object-id "$principal_id" \
+            --role Reader \
+            --scope "$rg_id" \
+            >/dev/null
+          echo "RBAC_DELETE_IN_TRUYN=ok"
+
+          az identity delete --resource-group "$target_rg" --name "$probe_identity" >/dev/null
+          trap - EXIT
+          echo "RESOURCE_DELETE_IN_TRUYN=ok"
