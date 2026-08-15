@@ -1,4 +1,4 @@
-const SUPPORTED = new Set(['openai', 'openai-compatible', 'local', 'anthropic', 'azure-openai', 'vertex-gemini', 'custom-http']);
+const SUPPORTED = new Set(['openai', 'openai-compatible', 'local', 'anthropic', 'azure-openai', 'vertex-gemini', 'custom-http', 'custom-mcp']);
 
 function listCapabilities(value) {
   const values = Array.isArray(value) ? value : String(value || 'reasoning.general').split(',');
@@ -10,6 +10,7 @@ export function createByokProfile({
   model = null,
   baseUrl = null,
   endpoint = null,
+  tool = null,
   projectId = null,
   location = null,
   credentialEnv = null,
@@ -28,10 +29,12 @@ export function createByokProfile({
 
   const adapterProvider = ['openai-compatible', 'local'].includes(normalizedProvider)
     ? 'openai'
-    : normalizedProvider;
+    : normalizedProvider === 'custom-mcp'
+      ? 'mcp-http-tool'
+      : normalizedProvider;
   const authMode = normalizedProvider === 'local'
     ? 'none'
-    : normalizedProvider === 'custom-http'
+    : ['custom-http', 'custom-mcp'].includes(normalizedProvider)
       ? (credentialEnv && !noAuth ? 'bearer' : 'none')
       : normalizedProvider === 'openai-compatible'
         ? (noAuth ? 'none' : 'bearer')
@@ -51,6 +54,7 @@ export function createByokProfile({
     model: model || null,
     baseUrl: baseUrl || null,
     endpoint: endpoint || null,
+    tool: tool || null,
     projectId: projectId || null,
     location: location || null,
     credentialEnv: resolvedCredentialEnv,
@@ -77,6 +81,10 @@ export function createByokProfile({
   }
   if (normalizedProvider === 'custom-http' && !profile.endpoint) {
     throw new Error('custom-http BYOK profile requires --endpoint');
+  }
+  if (normalizedProvider === 'custom-mcp') {
+    if (!profile.endpoint) throw new Error('custom-mcp BYOK profile requires --endpoint');
+    if (!profile.tool) throw new Error('custom-mcp BYOK profile requires --tool');
   }
   return profile;
 }
@@ -127,6 +135,15 @@ export function providerAdapterOptions(profile, env = process.env) {
     return {
       capabilities,
       endpoint: profile.endpoint,
+      authMode: profile.authMode,
+      apiKey: profile.credentialEnv ? env[profile.credentialEnv] : undefined
+    };
+  }
+  if (profile.provider === 'custom-mcp') {
+    return {
+      capabilities,
+      endpoint: profile.endpoint,
+      tool: profile.tool,
       authMode: profile.authMode,
       apiKey: profile.credentialEnv ? env[profile.credentialEnv] : undefined
     };
