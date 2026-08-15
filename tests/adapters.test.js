@@ -87,3 +87,38 @@ test('MCP Streamable HTTP validates modern routing headers and executes tools', 
   const body = await response.json();
   assert.equal(body.result.structuredContent.nodeId, requester.identity.nodeId);
 });
+
+test('socket AdapterHost reconnects after fast_socket_closed instead of terminating the provider loop', async () => {
+  let nextCalls = 0;
+  let closeCalls = 0;
+  const node = {
+    sessionToken: null,
+    async register() { this.sessionToken = 'test-session'; return { ok: true }; },
+    async ensureFastSocket() { return { readyState: 1 }; },
+    async offer() { return { offerId: 'offer-reconnect' }; },
+    async nextCompactSocketEvent() {
+      nextCalls += 1;
+      if (nextCalls === 1) throw new Error('fast_socket_closed');
+      throw new Error('terminal_test_error');
+    },
+    closeFastSocket() { closeCalls += 1; }
+  };
+  const adapter = createFunctionAdapter({
+    name: 'reconnect-provider',
+    capabilities: ['reconnect-test'],
+    execute: async () => ({ output: 'unused' })
+  });
+  const host = new TruynAdapterHost({
+    node,
+    adapter,
+    fastPath: true,
+    socketPath: true,
+    socketReconnectDelayMs: 0
+  });
+
+  await host.start();
+  await assert.rejects(host.loopPromise, /terminal_test_error/);
+  assert.equal(nextCalls, 2);
+  assert.equal(closeCalls, 1);
+  await host.stop();
+});
