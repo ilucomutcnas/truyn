@@ -1,3 +1,5 @@
+import { createProviderAccessPolicy } from '../../core/security/provider-access.js';
+
 function normalizeCapabilities(capabilities) {
   const values = typeof capabilities === 'function' ? capabilities() : capabilities;
   if (!Array.isArray(values) || values.length === 0) throw new Error('Adapter must expose at least one capability');
@@ -33,7 +35,7 @@ export function createFunctionAdapter({ name = 'function-adapter', version = '0.
 }
 
 export class TruynAdapterHost {
-  constructor({ node, adapter, pollIntervalMs = 500, fastPath = false, longPollMs = 25_000, socketPath = false }) {
+  constructor({ node, adapter, pollIntervalMs = 500, fastPath = false, longPollMs = 25_000, socketPath = false, accessPolicy } = {}) {
     if (!node) throw new Error('node is required');
     this.node = node;
     this.adapter = validateAdapter(adapter);
@@ -41,6 +43,7 @@ export class TruynAdapterHost {
     this.fastPath = fastPath;
     this.longPollMs = longPollMs;
     this.socketPath = socketPath;
+    this.accessPolicy = accessPolicy || createProviderAccessPolicy();
     this.running = false;
     this.registered = false;
     this.offerIds = [];
@@ -64,7 +67,8 @@ export class TruynAdapterHost {
         description: capability.description || null,
         fastPath: this.fastPath,
         chainPath: this.fastPath,
-        socketPath: this.socketPath
+        socketPath: this.socketPath,
+        accessMode: this.accessPolicy.mode
       });
       this.offerIds.push(result.offerId);
     }
@@ -128,6 +132,25 @@ export class TruynAdapterHost {
       const capability = need.payload?.capability?.name || need.payload?.capability;
       if (!this.adapter.capabilities.some((item) => item.name === capability)) continue;
 
+      const access = this.accessPolicy.authorize(need);
+      if (!access?.ok) {
+        const metadata = {
+          adapter: this.adapter.name,
+          adapterVersion: this.adapter.version,
+          latencyMs: 0,
+          error: 'PROVIDER_ACCESS_DENIED',
+          errorClass: 'authorization',
+          accessDenied: true,
+          accessMode: this.accessPolicy.mode,
+          failed: true
+        };
+        if (need.chain) metadata.chainStage = need.stageIndex;
+        if (compact) await this.node.compactResult(need.id, null, metadata);
+        else await this.node.result(need.id, null, metadata);
+        handled += 1;
+        continue;
+      }
+
       const startedAt = Date.now();
       try {
         let input = need.payload?.input;
@@ -175,7 +198,6 @@ export class TruynAdapterHost {
   }
 
   async start() {
-    if (this.running) return;
     await this.publishCapabilities();
     this.running = true;
     this.loopPromise = (async () => {
