@@ -1,96 +1,87 @@
 # Security Policy
 
-TRUYN is security-sensitive infrastructure. Please do not publish exploitable vulnerabilities, credentials, private keys, private topology or unremediated production bypasses in public issues.
+TRUYN is security-sensitive infrastructure. Do not publish exploitable vulnerabilities, credentials, private keys, private topology, operational allowlists, incident data, or unremediated production bypasses in public issues.
 
 ## Reporting
 
-Until a dedicated security contact/process is published, use GitHub private vulnerability reporting when available. Do not include private keys, credentials, production secrets, customer data or personally identifying data in public reports.
+Use GitHub private vulnerability reporting when available. Never place credentials, private keys, production secrets, customer data, or personally identifying data in a public report.
 
-## Security status
+## Current security baseline
 
-TRUYN is pre-1.0 experimental software. Security guarantees are release- and subsystem-specific.
+TRUYN is pre-1.0 experimental software. The public reference runtime is intentionally conservative:
 
-The repository contains a working MVP and cloud PoC paths, but **the current MVP must not be treated as a production-grade public provider-authorization boundary** until the approved provider-ownership security architecture is implemented and passes its negative test matrix.
+- production-style relay registration is denied unless a node is explicitly enrolled;
+- provider execution is denied unless the requester is explicitly trusted;
+- untrusted requesters do not receive foreign provider offers from discovery;
+- legacy mutation/execution routes require an active bearer session bound to the signed node identity;
+- registration envelopes are freshness-checked and replay IDs are rejected;
+- sessions expire;
+- HTTP/WebSocket payload sizes are bounded;
+- public health responses omit operational counters/topology by default;
+- provider health endpoints do not expose node IDs, relay URLs, provider names, internal errors, or transport details;
+- the user-facing CLI can start only a loopback local-development relay; it cannot expose the permissive local mode on a non-loopback interface.
 
-A public TRUYN relay or public source repository does **not** imply permission to use TRUYN-operated or third-party paid AI credentials/provider quota.
+This immediate fail-closed baseline is not the final multi-tenant provider marketplace. Full provider owner/tenant/visibility/billing semantics still require the complete authorization and negative-test contracts in `docs/architecture/`.
 
-## Core provider-security principles
+## Core principles
 
 ### Open protocol does not mean open billing account
 
-TRUYN may be open-source and publicly reachable while individual providers remain private.
+TRUYN source code and protocol can be public while individual AI providers remain private. Public network reachability never implies permission to spend another party's provider quota.
 
 ### BYOK by default
 
-Normal users are expected to Bring Their Own Intelligence / Bring Their Own Provider. Raw upstream provider credentials stay with the user's/provider runtime and do not belong in TRUYN protocol envelopes or relay state.
+Normal users Bring Their Own Intelligence / Bring Their Own Provider. Raw upstream credentials stay with the user's/provider runtime and do not belong in TRUYN envelopes or relay state.
 
 ### Server-side authorization
 
-Provider authorization must be enforced at the execution boundary. UI/CLI restrictions are helpful but are not sufficient because a network participant can modify or replace the official client.
-
-### Provider ownership
-
-A provider has an accountable owner/tenant boundary, visibility policy and billing mode. Requester-supplied ownership fields are not authoritative. Private is the default visibility.
+Provider authorization is enforced before provider selection/dispatch. UI, CLI, obscurity, hidden provider IDs, DNS controls, or Cloudflare rules are not sufficient authorization boundaries.
 
 ### Fail closed
 
-If provider ownership, requester tenant, authorization, billing responsibility or mandatory quota/entitlement cannot be resolved, private/chargeable execution must not occur.
+If identity, ownership, tenant, authorization, billing responsibility, or required entitlement cannot be resolved, chargeable/private execution must not occur.
 
-### One authorization layer for every execution path
+### One execution boundary
 
-HTTP, WebSocket, MCP, SDK, relay fast paths and legacy compatibility routes must converge on the same provider-authorization decision before execution.
+HTTP, WebSocket, MCP, SDK, fast paths, and legacy compatibility paths must converge on the same authorization decision before any upstream provider invocation.
 
-## Security scope
+## Public/private repository boundary
 
-Security work includes:
+The public repository may contain protocol semantics, generic implementation code, security invariants, local examples, generic adapters, and reviewed benchmark methodology.
 
-- protocol integrity and canonical signatures;
-- node identity and key handling;
-- provider ownership and tenant isolation;
-- BYOK credential locality;
-- relay/provider authorization;
-- billing/quota attribution and cost-abuse prevention;
-- authorization-aware discovery;
-- replay/expiry protection;
-- private provider backchannels and origin protection;
-- Trustability manipulation;
-- Sybil/collusion resistance;
-- transport security;
-- storage protection;
-- adapter isolation;
-- compute sandboxing;
-- supply-chain security;
-- signed updates, migration and rollback;
-- public/private operational-information boundaries.
+It must not contain unnecessary live operational data such as:
 
-## Reference threat model
+- credentials, private keys, access tokens, service-account keys, or credential-bearing URLs;
+- private cloud resource/deployment names or internal origins;
+- cloud account/subscription/project/tenant identifiers when not required by the public protocol;
+- privileged workflow/bootstrap/provisioning automation for owner infrastructure;
+- WIF/service-account/managed-identity topology;
+- private bucket/container names;
+- live quota, cost ceilings, emergency controls, allowlists, or secret-manager paths;
+- raw production benchmark artifacts/run IDs that expose execution topology;
+- incident-sensitive logs, prompts, outputs, or customer data.
 
-The architecture assumes an attacker may possess a valid independent TRUYN identity, know the source code, know or guess a provider ID, forge requester-controlled policy fields, use a custom client, call legacy routes directly and attempt high-cost workloads.
+Privileged deployment/operations material belongs in access-controlled operational systems, not in this public repository. Encrypting a file inside a public repository is not treated as making the file private.
 
-The security design must still guarantee that an unauthorized foreign requester cannot cause an owner-private provider invocation.
+## History and secret response
 
-See `docs/architecture/THREAT_MODEL.md`.
+Removing content from the current tree is not enough when sensitive data existed historically. Repository history must be rewritten and all normal refs moved to the sanitized root. Any credential that may have been exposed must still be revoked/rotated; history rewriting is not a substitute for credential rotation.
 
-## Provider security acceptance gate
+Git hosting providers may retain unreachable objects, pull-request refs, caches, forks, clones, Actions logs, or artifacts after a force rewrite. Those copies must be purged through the hosting provider and affected fork/clone owners as applicable.
 
-Before TRUYN can claim safe coexistence of public users and owner-funded providers, automated/adversarial tests must prove at minimum:
+## Security acceptance gate
 
-- anonymous requester → owner-private provider: denied, zero upstream calls;
-- registered foreign node → owner-private provider: denied, zero upstream calls;
-- known/guessed private provider ID: denied;
-- forged owner/tenant fields: denied;
-- legacy execution route: same denial policy;
-- user → own BYOK provider: allowed when valid;
-- explicit shared entitlement: allowed only within its policy/quota;
-- trusted owner request → owner-private provider: allowed within owner policy.
+Before public users can coexist with owner-funded providers, automated/adversarial tests must prove at minimum:
 
-## Operational data
-
-Public architecture should explain security invariants without publishing unnecessary live operational data. Credentials, private identities, private origins, privileged allowlists, exact quotas/cost ceilings, cloud identity topology and incident-sensitive details belong in private operational systems.
-
-Removing a value from the current branch does not erase Git history or Actions logs. Secret material that was ever exposed must be treated according to normal secret-rotation procedures.
-
-See `docs/architecture/PUBLIC_PRIVATE_BOUNDARY.md`.
+- anonymous or non-enrolled node → registration/provider access: denied;
+- enrolled but untrusted requester → owner provider: denied, zero provider events/calls;
+- known/guessed provider ID: denied;
+- forged requester-controlled owner/tenant fields: denied;
+- legacy execution route: same denial policy and active-session binding;
+- replayed registration envelope: denied;
+- oversized input: rejected before unbounded buffering;
+- trusted owner requester → explicitly enrolled provider: allowed;
+- future user → own BYOK provider: allowed only after authoritative tenant/ownership binding exists.
 
 ## Related architecture
 
@@ -100,4 +91,5 @@ See `docs/architecture/PUBLIC_PRIVATE_BOUNDARY.md`.
 - `docs/architecture/BILLING_BOUNDARY.md`
 - `docs/architecture/BYOK_ARCHITECTURE.md`
 - `docs/architecture/THREAT_MODEL.md`
+- `docs/architecture/PUBLIC_PRIVATE_BOUNDARY.md`
 - `spec/protocol/v1/provider-policy.md`
