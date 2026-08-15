@@ -43,6 +43,11 @@ export async function proxyCloudflareOrigin(request, env, fetchImpl = globalThis
     return jsonResponse(503, { ok: false, error: 'edge_not_configured' });
   }
 
+  const incomingUrl = new URL(request.url);
+  if (incomingUrl.host === config.origin.host) {
+    return jsonResponse(503, { ok: false, error: 'edge_origin_invalid' });
+  }
+
   const headers = new Headers(request.headers);
   // Never trust a proof supplied by the public client. The Worker overwrites it
   // with the secret binding for this deployment.
