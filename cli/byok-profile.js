@@ -1,4 +1,4 @@
-const SUPPORTED = new Set(['openai', 'openai-compatible', 'anthropic', 'azure-openai', 'vertex-gemini']);
+const SUPPORTED = new Set(['openai', 'openai-compatible', 'local', 'anthropic', 'azure-openai', 'vertex-gemini', 'custom-http']);
 
 function listCapabilities(value) {
   const values = Array.isArray(value) ? value : String(value || 'reasoning.general').split(',');
@@ -16,7 +16,8 @@ export function createByokProfile({
   capabilities = ['reasoning.general'],
   requesterNodeId,
   providerNodeId,
-  verifiedAt = null
+  verifiedAt = null,
+  noAuth = false
 } = {}) {
   const normalizedProvider = String(provider || '').trim().toLowerCase();
   if (!SUPPORTED.has(normalizedProvider)) {
@@ -25,16 +26,35 @@ export function createByokProfile({
   if (!requesterNodeId || !providerNodeId) throw new Error('requesterNodeId and providerNodeId are required');
   if (requesterNodeId === providerNodeId) throw new Error('BYOK provider identity must be separate from requester identity');
 
+  const adapterProvider = ['openai-compatible', 'local'].includes(normalizedProvider)
+    ? 'openai'
+    : normalizedProvider;
+  const authMode = normalizedProvider === 'local'
+    ? 'none'
+    : normalizedProvider === 'custom-http'
+      ? (credentialEnv && !noAuth ? 'bearer' : 'none')
+      : normalizedProvider === 'openai-compatible'
+        ? (noAuth ? 'none' : 'bearer')
+        : normalizedProvider === 'vertex-gemini'
+          ? 'runtime-identity'
+          : normalizedProvider === 'azure-openai'
+            ? 'api-key-or-managed-identity'
+            : 'bearer';
+  const resolvedCredentialEnv = authMode === 'none' || authMode === 'runtime-identity'
+    ? null
+    : credentialEnv || defaultCredentialEnv(normalizedProvider);
+
   const profile = {
     schema: 1,
     provider: normalizedProvider,
-    adapterProvider: normalizedProvider === 'openai-compatible' ? 'openai' : normalizedProvider,
+    adapterProvider,
     model: model || null,
     baseUrl: baseUrl || null,
     endpoint: endpoint || null,
     projectId: projectId || null,
     location: location || null,
-    credentialEnv: credentialEnv || defaultCredentialEnv(normalizedProvider),
+    credentialEnv: resolvedCredentialEnv,
+    authMode,
     capabilities: listCapabilities(capabilities),
     accessMode: 'owner-only',
     billingMode: 'byok',
@@ -43,17 +63,20 @@ export function createByokProfile({
     verifiedAt: verifiedAt || null
   };
 
-  if (['openai', 'openai-compatible', 'anthropic', 'azure-openai'].includes(normalizedProvider) && !profile.model) {
+  if (['openai', 'openai-compatible', 'local', 'anthropic', 'azure-openai'].includes(normalizedProvider) && !profile.model) {
     throw new Error(`${normalizedProvider} BYOK profile requires --model`);
   }
-  if (normalizedProvider === 'openai-compatible' && !profile.baseUrl) {
-    throw new Error('openai-compatible BYOK profile requires --base-url');
+  if (['openai-compatible', 'local'].includes(normalizedProvider) && !profile.baseUrl) {
+    throw new Error(`${normalizedProvider} BYOK profile requires --base-url`);
   }
   if (normalizedProvider === 'azure-openai' && !profile.endpoint) {
     throw new Error('azure-openai BYOK profile requires --endpoint');
   }
   if (normalizedProvider === 'vertex-gemini' && !profile.projectId) {
     throw new Error('vertex-gemini BYOK profile requires --project-id');
+  }
+  if (normalizedProvider === 'custom-http' && !profile.endpoint) {
+    throw new Error('custom-http BYOK profile requires --endpoint');
   }
   return profile;
 }
@@ -67,12 +90,13 @@ function defaultCredentialEnv(provider) {
 
 export function providerAdapterOptions(profile, env = process.env) {
   const capabilities = listCapabilities(profile?.capabilities);
-  if (profile.provider === 'openai' || profile.provider === 'openai-compatible') {
+  if (profile.provider === 'openai' || profile.provider === 'openai-compatible' || profile.provider === 'local') {
     return {
       capabilities,
       apiKey: profile.credentialEnv ? env[profile.credentialEnv] : undefined,
       model: profile.model,
-      baseUrl: profile.baseUrl || undefined
+      baseUrl: profile.baseUrl || undefined,
+      allowNoAuth: profile.authMode === 'none'
     };
   }
   if (profile.provider === 'anthropic') {
@@ -99,12 +123,20 @@ export function providerAdapterOptions(profile, env = process.env) {
       model: profile.model || undefined
     };
   }
+  if (profile.provider === 'custom-http') {
+    return {
+      capabilities,
+      endpoint: profile.endpoint,
+      authMode: profile.authMode,
+      apiKey: profile.credentialEnv ? env[profile.credentialEnv] : undefined
+    };
+  }
   throw new Error(`Unsupported BYOK profile provider: ${profile?.provider}`);
 }
 
 export function validateByokEnvironment(profile, env = process.env) {
   const missing = [];
-  if (profile.provider === 'openai' || profile.provider === 'openai-compatible' || profile.provider === 'anthropic') {
+  if (profile.authMode === 'bearer') {
     if (!profile.credentialEnv || !env[profile.credentialEnv]) missing.push(profile.credentialEnv || 'credential env');
   }
   if (profile.provider === 'azure-openai') {
