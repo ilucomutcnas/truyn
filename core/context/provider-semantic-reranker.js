@@ -38,8 +38,10 @@ function parseIdList(output, allowedIds, requiredCount) {
 function normalizedUsage(metadata = {}) {
   const usage = metadata.usage || {};
   const input = usage.promptTokenCount ?? usage.input_tokens ?? usage.prompt_tokens ?? 0;
-  const output = usage.candidatesTokenCount ?? usage.output_tokens ?? usage.completion_tokens ?? 0;
-  const total = usage.totalTokenCount ?? usage.total_tokens ?? input + output + (usage.thoughtsTokenCount || 0);
+  const thoughts = usage.thoughtsTokenCount ?? usage.reasoning_tokens ?? 0;
+  const visibleOutput = usage.candidatesTokenCount ?? usage.output_tokens ?? usage.completion_tokens ?? 0;
+  const output = visibleOutput + thoughts;
+  const total = usage.totalTokenCount ?? usage.total_tokens ?? input + output;
   return { input, output, total };
 }
 
