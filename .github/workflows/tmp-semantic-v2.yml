@@ -1,0 +1,195 @@
+name: Temporary Semantic Retrieval Gate v2
+
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/tmp-semantic-v2.yml']
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      AZURE_RG: truyn
+      AZURE_GPT_ACCOUNT: truyn-openai-1334540181
+      AZURE_GPT_DEPLOYMENT: truyn-gpt-4-1-mini
+      FOUNDRY_BENCH_CAPACITY: '100'
+      GCP_PROJECT_ID_VALUE: ${{ vars.GCP_PROJECT_ID || secrets.GCP_PROJECT_ID }}
+      GCP_WIF_PROVIDER_VALUE: ${{ vars.GCP_WIF_PROVIDER || secrets.GCP_WIF_PROVIDER }}
+      GCP_DEPLOYER_SA_VALUE: ${{ vars.GCP_DEPLOYER_SERVICE_ACCOUNT_EMAIL || secrets.GCP_DEPLOYER_SERVICE_ACCOUNT_EMAIL }}
+      GCP_RUNTIME_SA_VALUE: ${{ vars.GCP_RUNTIME_SERVICE_ACCOUNT_EMAIL || secrets.GCP_RUNTIME_SERVICE_ACCOUNT_EMAIL }}
+      GCP_PROXY_REGION: us-east4
+      GCP_AR_REPO: truyn-poc
+      GCP_PROXY_SERVICE: truyn-semanticv2-${{ github.run_id }}
+      GEMINI_MODEL: gemini-2.5-flash
+      GOOGLE_CLOUD_LOCATION: global
+      VERTEX_EMBEDDING_LOCATION: us-central1
+      VERTEX_EMBEDDING_MODEL: text-multilingual-embedding-002
+      SEMANTIC_V2_CORPUS_BLOCKS: '600'
+      SEMANTIC_V2_RETRIEVAL_CASES: '360'
+      SEMANTIC_V2_LIVE_CASES: '6'
+      SEMANTIC_V2_PACING_MS: '30000'
+      SEMANTIC_V2_RATE_LIMIT_RETRIES: '8'
+      SEMANTIC_V2_OUTPUT: semantic-retrieval-v2.json
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm install --ignore-scripts --no-audit --no-fund
+
+      - name: Validate repository before cloud spend
+        run: npm test
+        env:
+          TRUYN_LOCAL_DEVELOPMENT: '1'
+
+      - name: Azure login with OIDC
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID || secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Prepare Azure actors and temporary benchmark throughput
+        shell: bash
+        run: |
+          set -euo pipefail
+          gpt_endpoint="$(az cognitiveservices account show -g "$AZURE_RG" -n "$AZURE_GPT_ACCOUNT" --query properties.endpoint -o tsv)"
+          gpt_key="$(az cognitiveservices account keys list -g "$AZURE_RG" -n "$AZURE_GPT_ACCOUNT" --query key1 -o tsv)"
+          [[ -n "$gpt_endpoint" && -n "$gpt_key" ]]
+          echo "::add-mask::$gpt_key"
+          echo "AZURE_OPENAI_ENDPOINT=$gpt_endpoint" >> "$GITHUB_ENV"
+          echo "AZURE_OPENAI_API_KEY=$gpt_key" >> "$GITHUB_ENV"
+          echo "AZURE_OPENAI_DEPLOYMENT=$AZURE_GPT_DEPLOYMENT" >> "$GITHUB_ENV"
+
+          suffix="$(printf '%s' '${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}' | sha256sum | cut -c1-12)"
+          account="truynai${suffix}"
+          echo "FOUNDRY_ACCOUNT=$account" >> "$GITHUB_ENV"
+          endpoint="$(az cognitiveservices account show -g "$AZURE_RG" -n "$account" --query properties.endpoint -o tsv)"
+          key="$(az cognitiveservices account keys list -g "$AZURE_RG" -n "$account" --query key1 -o tsv)"
+          [[ -n "$endpoint" && -n "$key" ]]
+          echo "::add-mask::$key"
+          echo "AZURE_FOUNDRY_ENDPOINT=$endpoint" >> "$GITHUB_ENV"
+          echo "AZURE_FOUNDRY_API_KEY=$key" >> "$GITHUB_ENV"
+
+          resize() {
+            dep="$1"; cap="$2"
+            data="$(az cognitiveservices account deployment show -g "$AZURE_RG" -n "$account" --deployment-name "$dep" -o json)"
+            model="$(jq -r '.properties.model.name' <<<"$data")"
+            format="$(jq -r '.properties.model.format' <<<"$data")"
+            version="$(jq -r '.properties.model.version // empty' <<<"$data")"
+            sku="$(jq -r '.sku.name' <<<"$data")"
+            args=(cognitiveservices account deployment create -g "$AZURE_RG" -n "$account" --deployment-name "$dep" --model-name "$model" --model-format "$format" --sku-name "$sku" --sku-capacity "$cap")
+            [[ -n "$version" ]] && args+=(--model-version "$version")
+            az "${args[@]}" >/dev/null
+          }
+          for dep in truyn-grok truyn-deepseek truyn-llama truyn-mistral truyn-kimi; do resize "$dep" "$FOUNDRY_BENCH_CAPACITY"; done
+          echo "AZURE_FOUNDRY_GROK=truyn-grok" >> "$GITHUB_ENV"
+          echo "AZURE_FOUNDRY_DEEPSEEK=truyn-deepseek" >> "$GITHUB_ENV"
+          echo "AZURE_FOUNDRY_LLAMA=truyn-llama" >> "$GITHUB_ENV"
+          echo "AZURE_FOUNDRY_MISTRAL=truyn-mistral" >> "$GITHUB_ENV"
+          echo "AZURE_FOUNDRY_KIMI=truyn-kimi" >> "$GITHUB_ENV"
+
+      - name: Authenticate GCP deployer using WIF
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID_VALUE }}
+          workload_identity_provider: ${{ env.GCP_WIF_PROVIDER_VALUE }}
+          service_account: ${{ env.GCP_DEPLOYER_SA_VALUE }}
+          create_credentials_file: true
+          export_environment_variables: true
+
+      - uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID_VALUE }}
+
+      - name: Prepare isolated Vertex inference and embedding proxy
+        shell: bash
+        run: |
+          set -euo pipefail
+          token="$(openssl rand -hex 32)"
+          echo "::add-mask::$token"
+          registry="${GCP_PROXY_REGION}-docker.pkg.dev"
+          image="${registry}/${GCP_PROJECT_ID_VALUE}/${GCP_AR_REPO}/semanticv2:${GITHUB_SHA}"
+          gcloud auth configure-docker "$registry" --quiet
+          docker build -f benchmarks/Dockerfile.semantic-v2-gcp-proxy -t "$image" .
+          docker push "$image" >/dev/null
+          gcloud run deploy "$GCP_PROXY_SERVICE" \
+            --project="$GCP_PROJECT_ID_VALUE" \
+            --region="$GCP_PROXY_REGION" \
+            --image="$image" \
+            --service-account="$GCP_RUNTIME_SA_VALUE" \
+            --port=8080 --min=0 --max=1 --cpu=1 --memory=512Mi \
+            --set-env-vars="BENCHMARK_PROXY_TOKEN=${token}" \
+            --no-invoker-iam-check --quiet >/dev/null
+          url="$(gcloud run services describe "$GCP_PROXY_SERVICE" --project="$GCP_PROJECT_ID_VALUE" --region="$GCP_PROXY_REGION" --format='value(status.url)')"
+          for attempt in $(seq 1 30); do
+            if curl -fsS -H "Authorization: Bearer ${token}" "${url}/health" | jq -e '.ok == true' >/dev/null; then break; fi
+            [[ "$attempt" -lt 30 ]] || exit 1
+            sleep 2
+          done
+          echo "VERTEX_API_ENDPOINT=$url" >> "$GITHUB_ENV"
+          echo "GCP_ACCESS_TOKEN=$token" >> "$GITHUB_ENV"
+          echo "GCP_PROJECT_ID=$GCP_PROJECT_ID_VALUE" >> "$GITHUB_ENV"
+
+      - name: Preflight multilingual embedding model
+        shell: bash
+        run: |
+          set -euo pipefail
+          path="/v1/projects/${GCP_PROJECT_ID}/locations/${VERTEX_EMBEDDING_LOCATION}/publishers/google/models/${VERTEX_EMBEDDING_MODEL}:predict"
+          body='{"instances":[{"task_type":"RETRIEVAL_QUERY","content":"multilingual semantic retrieval preflight"}],"parameters":{"autoTruncate":true}}'
+          curl -fsS -H "Authorization: Bearer ${GCP_ACCESS_TOKEN}" -H 'Content-Type: application/json' -d "$body" "${VERTEX_API_ENDPOINT}${path}" | jq -e '.predictions[0].embeddings.values | length > 0' >/dev/null
+
+      - name: Run multilingual seven-actor Semantic Retrieval Gate v2
+        run: node benchmarks/semantic-retrieval-v2.js
+
+      - name: Print gate summary
+        if: ${{ always() && hashFiles('semantic-retrieval-v2.json') != '' }}
+        run: jq '{benchmark,status,corpus,retrieval,actors,live,embedding,semanticGate,methodology}' semantic-retrieval-v2.json
+
+      - name: Upload evidence
+        if: ${{ always() && hashFiles('semantic-retrieval-v2.json') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: truyn-semantic-retrieval-v2-${{ github.run_id }}
+          path: semantic-retrieval-v2.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Enforce v2 gate
+        if: ${{ hashFiles('semantic-retrieval-v2.json') != '' }}
+        run: jq -e '.semanticGate.passed == true' semantic-retrieval-v2.json >/dev/null
+
+      - name: Delete isolated Vertex proxy
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          gcloud run services delete "$GCP_PROXY_SERVICE" --project="$GCP_PROJECT_ID_VALUE" --region="$GCP_PROXY_REGION" --quiet >/dev/null 2>&1 || true
+
+      - name: Restore Foundry smoke capacity
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          account="${FOUNDRY_ACCOUNT:-}"
+          [[ -n "$account" ]] || exit 0
+          resize_back() {
+            dep="$1"
+            data="$(az cognitiveservices account deployment show -g "$AZURE_RG" -n "$account" --deployment-name "$dep" -o json 2>/dev/null)" || return 0
+            model="$(jq -r '.properties.model.name' <<<"$data")"
+            format="$(jq -r '.properties.model.format' <<<"$data")"
+            version="$(jq -r '.properties.model.version // empty' <<<"$data")"
+            sku="$(jq -r '.sku.name' <<<"$data")"
+            args=(cognitiveservices account deployment create -g "$AZURE_RG" -n "$account" --deployment-name "$dep" --model-name "$model" --model-format "$format" --sku-name "$sku" --sku-capacity 1)
+            [[ -n "$version" ]] && args+=(--model-version "$version")
+            az "${args[@]}" >/dev/null 2>&1 || true
+          }
+          for dep in truyn-grok truyn-deepseek truyn-llama truyn-mistral truyn-kimi; do resize_back "$dep"; done
