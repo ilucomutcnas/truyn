@@ -1,0 +1,51 @@
+name: Relay latency trace instrumentation patch
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/relay-trace-patch.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  patch-test-commit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Apply trace instrumentation patch
+        run: node scripts/relay-trace-patch.mjs
+
+      - name: Install runtime dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Run complete test suite
+        run: npm test
+
+      - name: Verify patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check
+          git diff -- network/relay/server.js benchmarks/cross-cloud-ab.js tests/mvp.test.js
+
+      - name: Commit tested instrumentation
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'Instrument relay chain latency breakdown'
+          git push origin HEAD:main
