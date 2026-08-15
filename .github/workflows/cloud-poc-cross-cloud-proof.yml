@@ -5,6 +5,7 @@ on:
     workflows:
       - Cloud PoC Azure Relay and GPT Node
       - Cloud PoC Azure Proof
+      - Cloud PoC GCP AI Foundation
     types:
       - completed
     branches:
