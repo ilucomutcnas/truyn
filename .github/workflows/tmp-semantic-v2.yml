@@ -38,6 +38,7 @@ jobs:
       SEMANTIC_V2_OUTPUT: semantic-retrieval-v2.json
       SEMANTIC_V2_SOURCE_SHA: 6f2ddf743e83ad1704a831a7058a93ad668c6a69
       SEMANTIC_V2_PROXY_SHA: c1ea39a3f5a0408035fea7f00604ff14310eda10
+      SEMANTIC_V2_ATTEMPT: '5'
       GH_TOKEN: ${{ github.token }}
 
     steps:
