@@ -62,7 +62,11 @@ export async function proxyCloudflareOrigin(request, env, fetchImpl = globalThis
   if (request.method !== 'GET' && request.method !== 'HEAD') init.body = request.body;
 
   try {
-    return await fetchImpl(targetUrl(request.url, config.origin), init);
+    const response = await fetchImpl(targetUrl(request.url, config.origin), init);
+    if (response.status >= 300 && response.status < 400) {
+      return jsonResponse(502, { ok: false, error: 'origin_redirect_denied' });
+    }
+    return response;
   } catch {
     return jsonResponse(502, { ok: false, error: 'origin_unavailable' });
   }

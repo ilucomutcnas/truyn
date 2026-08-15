@@ -32,9 +32,14 @@ TRUYN is pre-1.0 experimental software. The public reference runtime is intentio
 - incomplete origin-guard configuration fails startup rather than silently exposing the inner relay;
 - the reference code also includes a generic Cloudflare Worker-compatible edge proxy that requires an HTTPS origin plus Worker secret binding, overwrites any client-supplied origin proof, preserves normal requester/session and WebSocket headers, and uses manual redirect handling;
 - the edge proxy refuses same-host origin configuration, including alternate ports, so a public Worker route cannot be accidentally configured to recursively fetch itself;
-- edge-proxy failures are sanitized and do not return Worker secret bindings or upstream exception details.
+- edge-proxy failures are sanitized and do not return Worker secret bindings or upstream exception details;
+- the relay runtime also supports an optional protected-provider M2M guard for explicitly enumerated provider node identities;
+- protected provider identities must present the exact M2M proof before registration can produce a relay session, and protected HTTP/WebSocket traffic continues to require that proof;
+- possession of a protected relay session without the M2M proof is insufficient, while ordinary non-protected nodes preserve normal transport behavior;
+- the provider M2M proof is a transport header only and is stripped before the inner relay; it is never serialized into TRUYN protocol envelopes;
+- incomplete protected-node/M2M-token configuration fails closed.
 
-This implements the first provider ownership/BYOK enforcement boundary plus reference edge-to-origin defense-in-depth components. Rich account/tenant ownership, commercial entitlements, sponsored access, durable quota accounting and billing attribution remain later layers and must preserve these fail-closed invariants. Deployment-specific edge configuration, secret rotation, firewall/tunnel policy and direct-origin denial still require separate operational verification.
+This implements the first provider ownership/BYOK enforcement boundary plus reference edge-to-origin and protected-provider backchannel defense-in-depth components. Rich account/tenant ownership, commercial entitlements, sponsored access, durable quota accounting and billing attribution remain later layers and must preserve these fail-closed invariants. Deployment-specific edge configuration, secret rotation, firewall/tunnel policy and direct-origin denial still require separate operational verification.
 
 ## Core principles
 
@@ -72,7 +77,7 @@ It must not contain unnecessary live operational data such as:
 - privileged workflow/bootstrap/provisioning automation for owner infrastructure;
 - WIF/service-account/managed-identity topology;
 - private bucket/container names;
-- live quota, cost ceilings, emergency controls, allowlists, or secret-manager paths;
+- live quota, cost ceilings, emergency controls, allowlists, protected provider node IDs, or secret-manager paths;
 - raw benchmark logs/artifacts when they expose private execution topology, credentials, prompts/customer data, or privileged operational state;
 - incident-sensitive logs, prompts, outputs, or customer data.
 
@@ -130,9 +135,15 @@ The in-repository regression suite now proves at minimum:
 - Cloudflare edge proxy → spoofed client proof: overwritten with the Worker binding;
 - Cloudflare edge proxy → same public/origin hostname, including alternate ports: denied before upstream fetch;
 - Cloudflare edge proxy → upstream exception: sanitized failure without secret or exception leakage;
+- protected provider → registration without/wrong M2M proof: denied before a relay session is issued;
+- protected provider → stolen protected session without M2M proof: HTTP and WebSocket access denied;
+- protected provider → exact M2M proof: registration and protected WebSocket path allowed;
+- ordinary non-protected node → no M2M proof required;
+- provider M2M proof → transport-only and stripped before the inner relay;
+- actual runtime relay entrypoint → protected provider proof enforced before session issuance;
 - protected benchmark evidence files remain present/substantial and are scanned for public-repository leakage rather than banned by path.
 
-Deployment-specific cloud/IAM/edge activation, direct-origin production proof, durable billing/quota accounting and richer account-level tenancy remain separate from these in-repository tests.
+Deployment-specific cloud/IAM/edge activation, direct-origin production proof, protected-provider token provisioning/rotation, durable billing/quota accounting and richer account-level tenancy remain separate from these in-repository tests.
 
 ## Related architecture
 
