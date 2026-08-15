@@ -2,6 +2,9 @@ name: Cloud PoC Semantic Retrieval A/B
 
 on:
   workflow_dispatch:
+  push:
+    paths:
+      - .github/semantic-final-run-once
 
 permissions:
   contents: read
