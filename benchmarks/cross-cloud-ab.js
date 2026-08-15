@@ -258,6 +258,7 @@ async function truynChain() {
   const startedAt = Date.now();
   const chain = await requester.compactChain(stages, { waitMs: 120_000 });
   const endToEndLatencyMs = Date.now() - startedAt;
+  if (chain.requesterTransport !== 'websocket') throw new Error(`TRUYN benchmark requester transport was ${chain.requesterTransport || 'unknown'}, expected websocket`);
   if (chain.results.length < 1) throw new Error('TRUYN CHAIN returned no provider results');
 
   const azureEvent = chain.results[0];
@@ -285,6 +286,8 @@ async function truynChain() {
   const providerBodyBytes = (azure.providerBodyBytes || 0) + (gemini.providerBodyBytes || 0);
   const providerLatencyMs = (azure.providerLatencyMs || 0) + (gemini.providerLatencyMs || 0);
   const relayTrace = await fetchRelayChainTrace(chain.chainId);
+  if (relayTrace.requesterTransport !== 'websocket') throw new Error(`Relay trace requester transport was ${relayTrace.requesterTransport || 'unknown'}, expected websocket`);
+  if (JSON.stringify(relayTrace.stageTransport) !== JSON.stringify(['socket', 'socket'])) throw new Error(`Relay trace provider transports were ${JSON.stringify(relayTrace.stageTransport)}, expected two sockets`);
   const relaySegments = relayTrace.segments || {};
   const orchestrationBreakdown = {
     requesterPublicEdgeResidualMs: round(Math.max(0, endToEndLatencyMs - (relayTrace.relayTotalMs || 0)), 3),
@@ -546,3 +549,4 @@ console.log(JSON.stringify({
   rateLimitRetries: report.methodology.rateLimitRetryEvents.length,
   relayBootstrapNetworkRetries: report.methodology.relayBootstrapNetworkRetryEvents.length
 }, null, 2));
+requester.closeFastSocket();
