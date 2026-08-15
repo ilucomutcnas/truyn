@@ -75,6 +75,7 @@ async function main() {
 
   if (command === 'offer') {
     await node.register();
+    await saveSession({ relayUrl, nodeId: identity.nodeId, sessionToken: node.sessionToken });
     const capability = process.argv[3];
     if (!capability) throw new Error('Usage: truyn offer <capability> [--relay URL]');
     print(await node.offer(capability));
@@ -90,10 +91,21 @@ async function main() {
 
   if (command === 'need') {
     await node.register();
+    await saveSession({ relayUrl, nodeId: identity.nodeId, sessionToken: node.sessionToken });
     const capability = process.argv[3];
     const input = process.argv[4];
     if (!capability || input === undefined) throw new Error('Usage: truyn need <capability> <input> [--relay URL]');
     print(await node.need(capability, input));
+    return;
+  }
+
+  if (command === 'result') {
+    await node.register();
+    await saveSession({ relayUrl, nodeId: identity.nodeId, sessionToken: node.sessionToken });
+    const requestId = process.argv[3];
+    const output = process.argv[4];
+    if (!requestId || output === undefined) throw new Error('Usage: truyn result <requestId> <output> [--relay URL]');
+    print(await node.result(requestId, output));
     return;
   }
 
@@ -104,7 +116,7 @@ async function main() {
     return;
   }
 
-  print(`TRUYN MVP CLI\n\nCommands:\n  truyn init\n  truyn identity\n  truyn relay [--host 127.0.0.1] [--port 8787]\n  truyn register [--relay URL]\n  truyn offer <capability> [--relay URL]\n  truyn find <capability> [--relay URL]\n  truyn need <capability> <input> [--relay URL]\n  truyn poll [--relay URL]`);
+  print(`TRUYN MVP CLI\n\nCommands:\n  truyn init\n  truyn identity\n  truyn relay [--host 127.0.0.1] [--port 8787]\n  truyn register [--relay URL]\n  truyn offer <capability> [--relay URL]\n  truyn find <capability> [--relay URL]\n  truyn need <capability> <input> [--relay URL]\n  truyn result <requestId> <output> [--relay URL]\n  truyn poll [--relay URL]`);
 }
 
 main().catch((error) => {
