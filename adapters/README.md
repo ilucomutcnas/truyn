@@ -18,7 +18,7 @@ The repository contains executable interoperability surfaces including:
 - `adapters/providers/azure-openai-video.js` — Azure OpenAI asynchronous Sora video generation;
 - `adapters/providers/azure-flux.js` — Azure-direct Black Forest Labs FLUX image generation.
 
-The current isolated live smoke status is recorded in `../docs/providers/MULTICLOUD_PROVIDER_IMPLEMENTATION_STATUS_2026-08-15.md`. Adapter implementation is deliberately distinguished from cloud deployment entitlement: an adapter can be complete even when a particular subscription/region does not permit model deployment.
+Adapter implementation is deliberately distinguished from cloud deployment entitlement: an adapter can be complete even when a particular account, subscription, project or region does not permit model deployment. Live deployment identifiers, private cloud topology and raw operational smoke evidence are not part of this public adapter catalog.
 
 Provider adapter presence is not a claim that a public user is entitled to a TRUYN-operated upstream account.
 
@@ -91,8 +91,8 @@ The architecture uses a shared provider-adapter contract so vendor adapters rema
 
 See:
 
-- `../docs/providers/MULTICLOUD_PROVIDER_IMPLEMENTATION_STATUS_2026-08-15.md`
 - `../docs/getting-started/BYOK.md`
 - `../docs/architecture/BYOK_ARCHITECTURE.md`
 - `../docs/architecture/PROVIDER_OWNERSHIP.md`
 - `../docs/architecture/AUTHORIZATION_MODEL.md`
+- `../docs/architecture/PUBLIC_PRIVATE_BOUNDARY.md`
