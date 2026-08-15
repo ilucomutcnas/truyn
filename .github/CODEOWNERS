@@ -13,6 +13,7 @@ adapters/sdk/ @ilucomutcnas
 spec/protocol/v1/provider-policy.md @ilucomutcnas
 
 tests/public-repository.test.js @ilucomutcnas
+tests/benchmark-evidence.test.js @ilucomutcnas
 tests/security-boundary.test.js @ilucomutcnas
 tests/provider-access.test.js @ilucomutcnas
 tests/runtime-security.test.js @ilucomutcnas
