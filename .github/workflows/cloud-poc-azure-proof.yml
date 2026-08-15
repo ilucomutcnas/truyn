@@ -1,6 +1,13 @@
 name: Cloud PoC Azure Proof
 
 on:
+  workflow_run:
+    workflows:
+      - Cloud PoC Azure Relay and GPT Node
+    types:
+      - completed
+    branches:
+      - main
   push:
     branches:
       - main
@@ -14,6 +21,7 @@ permissions:
 
 jobs:
   prove:
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     env:
