@@ -41,7 +41,7 @@ test('same authoritative tenant can use its own BYOK provider', () => {
   assert.equal(decision.reason, 'same_tenant');
 });
 
-test('foreign requester cannot use a self-scoped BYOK provider', () => {
+test('foreign requester can never spend a self-scoped BYOK provider', () => {
   const registry = createProviderOwnershipRegistry();
   const policy = registry.resolveProviderPolicy({ from: 'truyn:node:user-provider' });
   const decision = registry.authorizeProvider({
@@ -50,10 +50,10 @@ test('foreign requester cannot use a self-scoped BYOK provider', () => {
   });
 
   assert.equal(decision.ok, false);
-  assert.equal(decision.reason, 'cross_tenant_disabled');
+  assert.equal(decision.reason, 'byok_cross_tenant_forbidden');
 });
 
-test('owner-funded provider denies cross-tenant calls even when a caller is listed unless external funding is explicitly enabled', () => {
+test('owner-funded provider always denies cross-tenant calls even when trusted policy lists the caller', () => {
   const registry = createProviderOwnershipRegistry({
     tenantBindings: {
       'truyn:node:owner-provider': 'tenant:owner',
@@ -63,10 +63,11 @@ test('owner-funded provider denies cross-tenant calls even when a caller is list
       'truyn:node:owner-provider': {
         ownerId: 'owner',
         tenantId: 'tenant:owner',
-        visibility: 'shared',
+        visibility: 'network',
         billingMode: 'owner-funded',
         allowedCallerIds: ['truyn:node:external'],
-        allowCrossTenant: true
+        allowCrossTenant: true,
+        allowOwnerFundedExternal: true
       }
     }
   });
@@ -103,7 +104,7 @@ test('trusted private owner provider remains invisible and unusable to foreign t
   assert.equal(registry.canDiscoverProvider({ requesterNodeId: 'truyn:node:foreign', providerPolicy: policy }).ok, false);
 });
 
-test('cross-tenant sharing requires trusted server policy plus explicit cross-tenant enablement', () => {
+test('cross-tenant sharing requires trusted server policy plus explicit prepaid entitlement', () => {
   const registry = createProviderOwnershipRegistry({
     tenantBindings: {
       'truyn:node:provider': 'tenant:provider',
@@ -127,7 +128,24 @@ test('cross-tenant sharing requires trusted server policy plus explicit cross-te
   assert.equal(decision.reason, 'explicit_tenant_grant');
 });
 
-test('network visibility is powerless unless it comes from trusted provisioning and cross-tenant use is explicitly enabled', () => {
+test('sponsored cross-tenant access is architecturally present but hard-disabled by default', () => {
+  const registry = createProviderOwnershipRegistry({
+    providerPolicies: {
+      'truyn:node:provider': {
+        visibility: 'network',
+        billingMode: 'sponsored',
+        allowCrossTenant: true
+      }
+    }
+  });
+  const policy = registry.resolveProviderPolicy({ from: 'truyn:node:provider' });
+  const decision = registry.authorizeProvider({ requesterNodeId: 'truyn:node:foreign', providerPolicy: policy });
+
+  assert.equal(decision.ok, false);
+  assert.equal(decision.reason, 'sponsored_access_disabled');
+});
+
+test('network visibility is powerless unless it comes from trusted provisioning and an allowed billing mode', () => {
   const derivedRegistry = createProviderOwnershipRegistry();
   const derived = derivedRegistry.resolveProviderPolicy({
     from: 'truyn:node:provider',
@@ -149,4 +167,23 @@ test('network visibility is powerless unless it comes from trusted provisioning 
   const decision = trustedRegistry.authorizeProvider({ requesterNodeId: 'truyn:node:foreign', providerPolicy: trusted });
   assert.equal(decision.ok, true);
   assert.equal(decision.reason, 'trusted_network_provider');
+});
+
+test('trusted policy snapshot cannot be mutated after registry creation', () => {
+  const configured = {
+    visibility: 'shared',
+    billingMode: 'prepaid',
+    allowCrossTenant: true,
+    allowedTenantIds: ['tenant:customer']
+  };
+  const registry = createProviderOwnershipRegistry({
+    tenantBindings: { 'truyn:node:customer': 'tenant:customer' },
+    providerPolicies: { 'truyn:node:provider': configured }
+  });
+  configured.allowedTenantIds.push('tenant:attacker');
+  configured.visibility = 'network';
+
+  const policy = registry.resolveProviderPolicy({ from: 'truyn:node:provider' });
+  assert.equal(policy.visibility, 'shared');
+  assert.deepEqual(policy.allowedTenantIds, ['tenant:customer']);
 });
