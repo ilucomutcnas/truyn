@@ -1,0 +1,244 @@
+name: Cloud PoC Prewarm TRUYN public domains
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/cloud-poc-domain-prewarm.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  prewarm-domains:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      AZURE_RG: truyn
+      AFD_PROFILE: truyn-frontdoor
+      AFD_ENDPOINT: truyn-edge-1334540181
+      AFD_ROUTE: relay-route
+      CF_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKENS }}
+      CF_ZONE_ID: ${{ vars.CLOUDFLARE_ZONE_ID || secrets.CLOUDFLARE_ZONE_ID }}
+      CF_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID || secrets.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login with OIDC
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID || secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Ensure Azure Front Door CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          az extension add --name cdn --upgrade --yes >/dev/null
+
+      - name: Resolve shared Front Door edge
+        shell: bash
+        run: |
+          set -euo pipefail
+          afd_host="$(az afd endpoint show \
+            -g "$AZURE_RG" \
+            --profile-name "$AFD_PROFILE" \
+            --endpoint-name "$AFD_ENDPOINT" \
+            --query hostName -o tsv)"
+          [[ -n "$afd_host" ]] || { echo 'AFD_ENDPOINT_HOST=missing'; exit 1; }
+          az afd route show \
+            -g "$AZURE_RG" \
+            --profile-name "$AFD_PROFILE" \
+            --endpoint-name "$AFD_ENDPOINT" \
+            --route-name "$AFD_ROUTE" >/dev/null
+          echo "AFD_ENDPOINT_HOST=$afd_host" >> "$GITHUB_ENV"
+          echo "AFD_ENDPOINT_HOST=$afd_host"
+
+      - name: Verify Cloudflare DNS credential
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ -n "$CF_API_TOKEN" ]] || { echo 'CLOUDFLARE_API_TOKENS=missing'; exit 1; }
+          [[ -n "$CF_ZONE_ID" ]] || { echo 'CLOUDFLARE_ZONE_ID=missing'; exit 1; }
+          api='https://api.cloudflare.com/client/v4'
+          auth=(-H "Authorization: Bearer ${CF_API_TOKEN}" -H 'Content-Type: application/json')
+          curl -fsS "${auth[@]}" "${api}/user/tokens/verify" | jq -e '.success == true and .result.status == "active"' >/dev/null
+          zone_name="$(curl -fsS "${auth[@]}" "${api}/zones/${CF_ZONE_ID}" | jq -r '.result.name // empty')"
+          [[ "$zone_name" == 'truyn.org' ]] || { echo "CLOUDFLARE_ZONE_MISMATCH=${zone_name}"; exit 1; }
+          echo "CLOUDFLARE_ACCOUNT_ID_PRESENT=$([[ -n "$CF_ACCOUNT_ID" ]] && echo true || echo false)"
+          echo 'CLOUDFLARE_PREFLIGHT=success'
+
+      - name: Create custom domains and DNS validation records
+        shell: bash
+        run: |
+          set -euo pipefail
+          api='https://api.cloudflare.com/client/v4'
+          auth=(-H "Authorization: Bearer ${CF_API_TOKEN}" -H 'Content-Type: application/json')
+
+          hosts=(
+            api.truyn.org
+            discovery.truyn.org
+            gateway.truyn.org
+            mcp.truyn.org
+            trust.truyn.org
+            status.truyn.org
+          )
+          domains=(
+            api-truyn-org
+            discovery-truyn-org
+            gateway-truyn-org
+            mcp-truyn-org
+            trust-truyn-org
+            status-truyn-org
+          )
+
+          upsert_record() {
+            local type="$1" name="$2" content="$3" proxied="$4"
+            local existing record_id payload
+            existing="$(curl -fsS "${auth[@]}" "${api}/zones/${CF_ZONE_ID}/dns_records?type=${type}&name=${name}")"
+            jq -e '.success == true' <<<"$existing" >/dev/null
+            record_id="$(jq -r '.result[0].id // empty' <<<"$existing")"
+            payload="$(jq -nc \
+              --arg type "$type" \
+              --arg name "$name" \
+              --arg content "$content" \
+              --argjson proxied "$proxied" \
+              '{type:$type,name:$name,content:$content,ttl:60,proxied:$proxied}')"
+            if [[ -n "$record_id" ]]; then
+              curl -fsS -X PUT "${auth[@]}" "${api}/zones/${CF_ZONE_ID}/dns_records/${record_id}" --data "$payload" | jq -e '.success == true' >/dev/null
+            else
+              curl -fsS -X POST "${auth[@]}" "${api}/zones/${CF_ZONE_ID}/dns_records" --data "$payload" | jq -e '.success == true' >/dev/null
+            fi
+          }
+
+          for i in "${!hosts[@]}"; do
+            host="${hosts[$i]}"
+            domain="${domains[$i]}"
+            if ! az afd custom-domain show \
+              -g "$AZURE_RG" \
+              --profile-name "$AFD_PROFILE" \
+              --custom-domain-name "$domain" >/dev/null 2>&1; then
+              az afd custom-domain create \
+                -g "$AZURE_RG" \
+                --profile-name "$AFD_PROFILE" \
+                --custom-domain-name "$domain" \
+                --host-name "$host" \
+                --certificate-type ManagedCertificate \
+                --minimum-tls-version TLS12 >/dev/null
+            fi
+
+            token="$(az afd custom-domain show \
+              -g "$AZURE_RG" \
+              --profile-name "$AFD_PROFILE" \
+              --custom-domain-name "$domain" \
+              --query validationProperties.validationToken -o tsv)"
+            state="$(az afd custom-domain show \
+              -g "$AZURE_RG" \
+              --profile-name "$AFD_PROFILE" \
+              --custom-domain-name "$domain" \
+              --query domainValidationState -o tsv)"
+            [[ -n "$token" || "$state" == 'Approved' ]] || { echo "AFD_VALIDATION_TOKEN_MISSING=${host}"; exit 1; }
+
+            if [[ -n "$token" ]]; then
+              upsert_record TXT "_dnsauth.${host}" "$token" false
+            fi
+            upsert_record CNAME "$host" "$AFD_ENDPOINT_HOST" false
+            echo "PREWARM_DNS=${host} state=${state}"
+          done
+          echo 'PREWARM_DNS_ALL=success'
+
+      - name: Wait for all Azure domain approvals
+        shell: bash
+        run: |
+          set -euo pipefail
+          hosts=(api.truyn.org discovery.truyn.org gateway.truyn.org mcp.truyn.org trust.truyn.org status.truyn.org)
+          domains=(api-truyn-org discovery-truyn-org gateway-truyn-org mcp-truyn-org trust-truyn-org status-truyn-org)
+
+          for attempt in $(seq 1 120); do
+            pending=0
+            for i in "${!hosts[@]}"; do
+              state="$(az afd custom-domain show \
+                -g "$AZURE_RG" \
+                --profile-name "$AFD_PROFILE" \
+                --custom-domain-name "${domains[$i]}" \
+                --query domainValidationState -o tsv)"
+              echo "AFD_DOMAIN=${hosts[$i]} state=${state} attempt=${attempt}"
+              [[ "$state" == 'Approved' ]] || pending=$((pending + 1))
+            done
+            if [[ "$pending" -eq 0 ]]; then
+              echo 'AFD_PREWARM_APPROVALS=success'
+              exit 0
+            fi
+            sleep 10
+          done
+          echo 'AFD_PREWARM_APPROVALS=timeout'
+          exit 1
+
+      - name: Attach prewarmed hosts to current relay route
+        shell: bash
+        run: |
+          set -euo pipefail
+          domains=(
+            relay-truyn-org
+            api-truyn-org
+            discovery-truyn-org
+            gateway-truyn-org
+            mcp-truyn-org
+            trust-truyn-org
+            status-truyn-org
+          )
+
+          current_ids="$(az afd route show \
+            -g "$AZURE_RG" \
+            --profile-name "$AFD_PROFILE" \
+            --endpoint-name "$AFD_ENDPOINT" \
+            --route-name "$AFD_ROUTE" \
+            --query 'customDomains[].id' -o json)"
+          added_ids='[]'
+          for domain in "${domains[@]}"; do
+            id="$(az afd custom-domain show \
+              -g "$AZURE_RG" \
+              --profile-name "$AFD_PROFILE" \
+              --custom-domain-name "$domain" \
+              --query id -o tsv)"
+            [[ -n "$id" ]] || { echo "AFD_CUSTOM_DOMAIN_ID_MISSING=${domain}"; exit 1; }
+            added_ids="$(jq -c --arg id "$id" '. + [$id]' <<<"$added_ids")"
+          done
+
+          formatted="$(jq -nc \
+            --argjson current "$current_ids" \
+            --argjson added "$added_ids" \
+            '$current + $added | unique | map({id:.})')"
+
+          az afd route update \
+            -g "$AZURE_RG" \
+            --profile-name "$AFD_PROFILE" \
+            --endpoint-name "$AFD_ENDPOINT" \
+            --route-name "$AFD_ROUTE" \
+            --formatted-custom-domains "$formatted" \
+            --link-to-default-domain Enabled >/dev/null
+
+          echo 'AFD_PREWARM_ROUTE_ASSOCIATION=success'
+          echo "$formatted" | jq .
+
+      - name: Report TLS readiness without blocking prewarm
+        shell: bash
+        run: |
+          set -euo pipefail
+          hosts=(api.truyn.org discovery.truyn.org gateway.truyn.org mcp.truyn.org trust.truyn.org status.truyn.org)
+          ready=0
+          for host in "${hosts[@]}"; do
+            status="$(curl --connect-timeout 5 --max-time 10 -sS -o health.json -w '%{http_code}' "https://${host}/health" || true)"
+            if [[ "$status" == '200' ]] && jq -e '.ok == true and .protocol == "TRUYN/1"' health.json >/dev/null 2>&1; then
+              echo "PREWARM_TLS_READY=${host}"
+              ready=$((ready + 1))
+            else
+              echo "PREWARM_TLS_PROPAGATING=${host} http=${status}"
+            fi
+          done
+          echo "PREWARM_TLS_READY_COUNT=${ready}/${#hosts[@]}"
+          echo 'PREWARM_COMPLETE=approved_and_associated'
