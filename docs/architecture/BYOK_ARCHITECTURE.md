@@ -1,6 +1,6 @@
 # TRUYN BYOK Architecture
 
-**Status:** first official CLI BYOK onboarding and private-provider isolation implemented; broader profile types and secure-secret integrations remain future work.
+**Status:** official CLI BYOK onboarding, private-provider isolation, local OpenAI-compatible runtime profiles and generic custom HTTP provider profiles implemented; custom MCP provider onboarding and secure-secret integrations remain future work.
 
 ## Definition
 
@@ -18,11 +18,13 @@ Anthropic / Claude
 Azure OpenAI
 Vertex Gemini
 OpenAI-compatible endpoint
+local OpenAI-compatible runtime
+custom HTTP JSON provider
 ```
 
-The profile records non-secret provider configuration and the **name** of the environment variable that supplies a credential. `truyn setup --test` performs a minimal real provider call and only then marks the profile verified.
+The profile records non-secret provider configuration and, when authentication is required, the **name** of the environment variable that supplies a credential. `truyn setup --test` performs a minimal real provider call and only then marks the profile verified.
 
-Local-model and arbitrary custom HTTP/MCP provider profile types remain future onboarding work. The existing HTTP/MCP adapters are interoperability surfaces but are not yet generic BYOK profile types in `truyn setup`.
+A generic custom MCP provider profile is not yet implemented in `truyn setup`. MCP remains an existing TRUYN interoperability/requester surface and a separate future provider-onboarding slice.
 
 ## Separate requester and provider identities
 
@@ -48,9 +50,9 @@ user device / private runtime
   ├── requester TRUYN identity
   ├── private provider TRUYN identity
   ├── provider adapter
-  └── provider credential from local environment/runtime identity
+  └── optional provider credential from local environment/runtime identity
           ↓
-      upstream provider
+      upstream/local provider
 ```
 
 The relay receives signed TRUYN protocol data and policy/usage metadata. It does not require raw provider API keys for ordinary BYOK routing.
@@ -63,7 +65,8 @@ The current local profile contains data such as:
 provider type
 model
 endpoint/base URL where applicable
-credential environment-variable name
+auth mode
+credential environment-variable name where applicable
 capabilities
 requester node ID
 provider node ID
@@ -81,6 +84,8 @@ The separate provider identity is private key material and is written into the u
 The current implementation resolves credential material from environment variables or the provider's cloud runtime identity. It does **not** yet integrate with an operating-system credential/key store.
 
 OS credential/key-store integration remains a future hardening path. Documentation must not claim that capability until it is implemented.
+
+No-auth provider profiles contain no credential reference at all.
 
 ## Official-client gate
 
@@ -116,27 +121,46 @@ A provider owner may later choose to publish a capability under explicit terms, 
 
 Owner-funded providers remain separate: default owner-funded billing refuses public execution even if public provider access is separately enabled.
 
-## OpenAI-compatible path
+## OpenAI-compatible and local paths
 
-The current generic BYOK path supports:
+The generic OpenAI-compatible BYOK path supports:
 
 ```text
 base URL
-API key via named environment variable
 model
 capabilities
+optional API key via named environment variable
+explicit --no-auth mode
 ```
 
-This reuses the existing OpenAI-compatible adapter transport.
+The `local` profile is the no-auth local-runtime form of this transport. It requires a base URL and model and calls the OpenAI Responses-compatible `/v1/responses` endpoint without an Authorization header.
+
+Normal `openai` profiles still require authentication. No-auth behavior is explicit and is not silently applied to OpenAI cloud profiles.
+
+## Custom HTTP provider path
+
+The `custom-http` profile sends a normalized POST to a user-supplied `http` or `https` endpoint:
+
+```json
+{
+  "capability": "...",
+  "input": "...",
+  "policy": {}
+}
+```
+
+The provider may return text, a JSON value, or `{ "output": ..., "metadata": { "usage": ... } }`.
+
+Authentication is `none` by default. Optional bearer authentication is enabled only when the user explicitly names a credential environment variable; the resolved token is not persisted and is not returned in normalized provider metadata.
+
+Because this endpoint executes from the user's private provider runtime rather than from the central relay, endpoint reachability remains part of the user's own runtime trust boundary.
 
 ## Future custom-provider paths
 
 Future profile types may add:
 
 ```text
-local model runtime
-custom HTTP agent
-custom MCP agent
+custom MCP provider
 OS credential/key-store integration
 universal desktop Google ADC/login flow
 ```
