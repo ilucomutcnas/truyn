@@ -34,18 +34,20 @@ test('Cloudflare origin proxy fails closed when origin or secret binding is miss
   assert.equal(calls, 0);
 });
 
-test('Cloudflare origin proxy rejects an origin that resolves to the public edge host', async () => {
+test('Cloudflare origin proxy rejects the public edge hostname even when an alternate port is configured', async () => {
   let calls = 0;
-  const response = await proxyCloudflareOrigin(request('https://relay.example/v1/register'), {
-    TRUYN_ORIGIN_URL: 'https://relay.example',
-    TRUYN_ORIGIN_GUARD_TOKEN: 'edge-secret'
-  }, async () => {
-    calls += 1;
-    return new Response('unexpected');
-  });
+  for (const origin of ['https://relay.example', 'https://relay.example:8443']) {
+    const response = await proxyCloudflareOrigin(request('https://relay.example/v1/register'), {
+      TRUYN_ORIGIN_URL: origin,
+      TRUYN_ORIGIN_GUARD_TOKEN: 'edge-secret'
+    }, async () => {
+      calls += 1;
+      return new Response('unexpected');
+    });
 
-  assert.equal(response.status, 503);
-  assert.deepEqual(await response.json(), { ok: false, error: 'edge_origin_invalid' });
+    assert.equal(response.status, 503);
+    assert.deepEqual(await response.json(), { ok: false, error: 'edge_origin_invalid' });
+  }
   assert.equal(calls, 0, 'recursive origin configuration must fail before fetch');
 });
 
