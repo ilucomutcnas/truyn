@@ -33,7 +33,7 @@ function writeJson(res, status, body) {
 async function runRelay() {
   const relay = createRelay();
   const url = await relay.listen({ host, port });
-  process.stdout.write(`${JSON.stringify({ ok: true, role: 'relay', url, fastPath: true })}\n`);
+  process.stdout.write(`${JSON.stringify({ ok: true, role: 'relay', url, fastPath: true, chainPath: true, socketPath: true })}\n`);
 
   const shutdown = async () => {
     await relay.close();
@@ -57,13 +57,13 @@ async function runProvider() {
   const node = new TruynNode({ relayUrl, identity });
   const adapter = createProviderAdapter(providerName, { capabilities });
   const fastPath = process.env.TRUYN_FAST_PATH !== '0';
-  // The relay's default node freshness lease is 15s. Keep the long-poll heartbeat
-  // comfortably inside that lease so an actively connected provider never ages out.
+  const socketPath = fastPath && process.env.TRUYN_SOCKET_PATH !== '0';
   const longPollMs = Number(process.env.TRUYN_LONG_POLL_MS || 10_000);
   const adapterHost = new TruynAdapterHost({
     node,
     adapter,
     fastPath,
+    socketPath,
     longPollMs,
     pollIntervalMs: Number(process.env.TRUYN_POLL_MS || 500)
   });
@@ -84,13 +84,15 @@ async function runProvider() {
         capabilities,
         relayUrl,
         fastPath,
+        socketPath,
+        transport: socketPath ? 'websocket' : (fastPath ? 'long-poll' : 'legacy-poll'),
         longPollMs,
         handled,
         lastError
       });
     }
     if (req.method === 'GET' && req.url === '/ready') {
-      return writeJson(res, ready ? 200 : 503, { ok: ready, lastError, fastPath, longPollMs });
+      return writeJson(res, ready ? 200 : 503, { ok: ready, lastError, fastPath, socketPath, longPollMs });
     }
     return writeJson(res, 404, { ok: false, error: 'not_found' });
   });
@@ -104,6 +106,7 @@ async function runProvider() {
     capabilities,
     relayUrl,
     fastPath,
+    socketPath,
     longPollMs,
     health: `http://${host}:${port}/health`
   })}\n`);
@@ -115,13 +118,14 @@ async function runProvider() {
         ready = true;
         lastError = null;
         handled += result.handled;
-        // Compact providers keep a long-poll open, so there is no fixed sleep in the hot path.
         if (!fastPath && adapterHost.pollIntervalMs > 0) await sleep(adapterHost.pollIntervalMs);
       } catch (error) {
+        if (stopping) break;
         ready = false;
         lastError = error.message;
         adapterHost.registered = false;
         adapterHost.offerIds = [];
+        node.closeFastSocket();
         node.sessionToken = null;
         process.stderr.write(`TRUYN provider retry: ${error.message}\n`);
         await sleep(Number(process.env.TRUYN_RETRY_MS || 1000));
@@ -132,6 +136,7 @@ async function runProvider() {
   const shutdown = async () => {
     if (stopping) return;
     stopping = true;
+    node.closeFastSocket();
     await loop;
     await new Promise((resolve) => server.close(resolve));
     process.exit(0);
