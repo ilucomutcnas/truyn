@@ -1,0 +1,17 @@
+{
+  "name": "truyn",
+  "version": "0.1.0-mvp.1",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "truyn": "./cli/index.js"
+  },
+  "scripts": {
+    "test": "node --test tests/*.test.js",
+    "demo": "node examples/mvp-demo.js",
+    "relay": "node cli/index.js relay"
+  }
+}
