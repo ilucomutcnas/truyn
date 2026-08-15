@@ -1,8 +1,8 @@
 # TRUYN Authorization Model
 
-**Status:** approved target architecture; the first fail-closed provider-execution gate is implemented, while tenant/billing/quota/discovery policy remains incremental work.
+**Status:** fail-closed runtime execution gate and authoritative provider-ownership policy core implemented; tenant-aware relay wiring, billing attribution and quota enforcement remain incremental work.
 
-## Implemented minimum security gate
+## Implemented minimum security gates
 
 The current provider runtime implements an identity-bound pre-inference gate:
 
@@ -18,11 +18,23 @@ DENY  → RESULT / PROVIDER_ACCESS_DENIED
           provider execution count = 0
 ```
 
-Provider runtimes launched through `runtime/service.js` default to `owner-only`. With no explicit requester allowlist they fail closed. A public runtime therefore requires an explicit `TRUYN_PROVIDER_ACCESS_MODE=public` opt-in.
+Provider runtimes launched through `runtime/service.js` default to `owner-only`. With no explicit requester allowlist they fail closed. Public provider execution requires two explicit runtime signals: public access mode plus the separate public-provider opt-in. The regression suite verifies that the production entrypoint wires this policy into `TruynAdapterHost` before `adapter.execute()`.
 
-The gate is covered by negative tests that assert an unauthorized requester is rejected before the adapter's `execute()` method is called.
+The provider-ownership core adds a second, server-authoritative decision layer:
 
-This first implementation does **not** yet claim the complete tenant, billing-owner, quota, private-discovery or marketplace-grant system described below.
+```text
+signed provider identity
+        ↓
+authoritative node → tenant binding
+        ↓
+trusted provider policy or derived self/BYOK policy
+        ↓
+capability match + authorization filter
+```
+
+`core/security/provider-ownership.js` and `network/relay/provider-routing.js` implement this policy core. Requester/provider payload metadata cannot promote a provider into another owner or tenant.
+
+**Important boundary:** the current `network/relay/server.js` on this feature branch has not yet been switched to the new tenant-aware registry/filter. Until that integration lands, the production-style relay remains on the stricter coarse trusted-requester deny model inherited from the current security baseline. This document does not claim full tenant-aware relay enforcement yet.
 
 ## Core rule
 
@@ -54,58 +66,91 @@ dispatch
 
 If any mandatory stage cannot produce a trustworthy answer, dispatch MUST NOT occur.
 
-The current MVP implements the provider-execution authorization checkpoint at the point immediately before provider work. The remaining target stages are added without weakening that invariant.
+## Authoritative identity and tenant
 
-## Authoritative identity
+The authorization layer may use a cryptographic TRUYN identity, authenticated relay session, account/tenant binding or another trusted provisioning mechanism. The invariant is that authorization attributes are not accepted merely because a requester or provider placed them in a payload.
 
-The authorization layer may use a cryptographic TRUYN identity, authenticated relay session, account/tenant binding or another trusted provisioning mechanism. The important invariant is that requester authorization attributes are not accepted merely because the requester placed them in a payload.
+In the implemented ownership registry:
 
-Requester-controlled fields are claims. Authorization state is derived from authenticated context.
+- `OFFER.from` supplies the cryptographic provider identity;
+- a trusted server-side `tenantBindings` map may bind multiple identities to the same tenant;
+- trusted `providerPolicies` may define non-default visibility/billing/entitlement behavior;
+- without trusted provisioning, the provider is derived as `self` + `byok` and its tenant is its authoritative node identity;
+- payload fields such as `ownerId`, `tenantId`, `visibility`, `billingMode` or cross-tenant flags have no authority.
 
 ## Default deny
 
-The following cases are denied by default in the target authorization model:
+The following cases are denied by default:
 
-- provider policy missing;
-- requester tenant unresolved;
-- provider owner unresolved;
-- billing owner unresolved;
-- visibility unknown;
-- explicit sharing required but no grant exists;
-- quota state unavailable when quota is mandatory;
-- legacy route cannot reach the central authorization layer.
+- provider policy unresolved;
+- requester identity unresolved;
+- cross-tenant BYOK use;
+- cross-tenant owner-funded use;
+- sponsored use while sponsored access is disabled;
+- explicit sharing required but no trusted grant exists;
+- cross-tenant use requested without explicit trusted cross-tenant enablement;
+- quota state unavailable when quota becomes mandatory;
+- an execution route cannot reach the central authorization layer.
 
-For the implemented MVP requester gate specifically, `owner-only` with a missing or empty requester allowlist denies execution.
+For the provider runtime gate specifically, `owner-only` with a missing or empty requester allowlist denies execution.
 
-## Explicit policy exception
+## BYOK invariant
 
-Cross-owner execution is allowed only through an explicit policy/entitlement. Such a policy may represent a shared provider, paid capability, organization grant, sponsored allowance or future marketplace contract.
-
-There is no implicit rule that `authenticated user` means `may use all registered providers`.
-
-## Requester-owned provider
-
-For normal BYOK operation:
+Normal BYOK is self/tenant-scoped:
 
 ```text
-requester owner == provider owner
+requester tenant == provider tenant
 billingMode == byok
 ```
 
-is the simplest authorization path. It allows TRUYN to route intelligence while the user remains responsible for the upstream provider account.
+The implemented ownership core hard-denies cross-tenant `byok`, even if a malicious wire payload claims network visibility or another owner.
 
-## Owner-funded provider
+If a user's requester identity and provider identity are different, they must be joined by an authoritative server-side tenant binding before they are considered the same tenant.
 
-For an owner-funded provider:
+## Owner-funded invariant
+
+The implemented ownership core hard-denies cross-tenant `owner-funded` access. A provider cannot turn owner-funded quota into a network resource with a payload flag or a permissive client.
+
+TRUYN-operated reference providers therefore remain owner-private unless their requester is authoritatively bound to the same owner tenant. This preserves the core acceptance condition:
 
 ```text
-provider owner != foreign requester owner
-visibility == private
+foreign requester
++ public relay
++ known provider ID
++ custom client
+= zero owner-funded provider execution
 ```
 
-must result in denial unless a trusted explicit grant exists. The denial must happen before any upstream model request, token reservation or chargeable job is created.
+## Future cross-tenant entitlement
 
-The implemented runtime gate enforces the crucial pre-inference part of this invariant through an exact requester-identity allowlist. Rich owner/tenant/grant policy is the next layer rather than a substitute for this gate.
+Cross-tenant provider use is not globally forbidden; it is explicit and commercially attributable. The current policy core permits trusted cross-tenant grants only after:
+
+1. trusted server-side provider policy exists;
+2. `allowCrossTenant` is explicitly enabled in that policy;
+3. the billing mode is eligible for cross-tenant use, currently `prepaid` or `subscription`;
+4. the requester has an exact caller/tenant grant, or the trusted policy intentionally exposes a network provider.
+
+`sponsored` exists as an architectural billing class but is disabled by default. Enabling it later must also introduce the corresponding quota/cost controls; merely choosing the string `sponsored` does not grant access.
+
+## Discovery and routing
+
+Capability and authorization are separate filters:
+
+```text
+capability match
+      ↓
+authoritative provider policy
+      ↓
+authorization filter
+      ↓
+eligible provider set
+      ↓
+ranking / dispatch
+```
+
+`network/relay/provider-routing.js` implements the reusable candidate filter. A capability match never overrides ownership policy.
+
+The next relay-integration package must use this same filter for HTTP, compact/fast and WebSocket chain routing, preserving zero provider events for unauthorized candidates.
 
 ## Legacy and alternate transports
 
