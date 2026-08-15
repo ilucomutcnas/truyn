@@ -12,11 +12,11 @@ selected_model=""
 selected_region=""
 
 record_attempt() {
-  local region="$1" stage="$2" status="$3" model="$4" detail="$5"
+  local region="$1" stage="$2" status="$3" model="$4" reason="$5"
   local tmp
   tmp="$(mktemp)"
-  jq --arg region "$region" --arg stage "$stage" --arg status "$status" --arg model "$model" --arg detail "$detail" \
-    '. + [({region:$region,stage:$stage,status:$status} + (if ($model|length)>0 then {model:$model} else {} end) + (if ($detail|length)>0 then {detail:$detail} else {} end))]' \
+  jq --arg region "$region" --arg stage "$stage" --arg status "$status" --arg model "$model" --arg reason "$reason" \
+    '. + [({region:$region,stage:$stage,status:$status} + (if ($model|length)>0 then {model:$model} else {} end) + (if ($reason|length)>0 then {reason:$reason} else {} end))]' \
     <<<"$attempts" > "$tmp"
   attempts="$(cat "$tmp")"
   rm -f "$tmp"
@@ -26,14 +26,11 @@ try_region() {
   local region="$1"
   local region_tag="${region//[^a-z0-9]/}"
   local account="truynvid${region_tag:0:4}${suffix}"
-  local stage="account"
   local model=""
-  local detail=""
 
   if ! az cognitiveservices account show -g "$AZURE_RG" -n "$account" >/dev/null 2>&1; then
     if ! az cognitiveservices account create -g "$AZURE_RG" -n "$account" -l "$region" --kind OpenAI --sku S0 --custom-domain "$account" --yes >/tmp/video-account.out 2>/tmp/video-account.err; then
-      detail="$(tail -c 1200 /tmp/video-account.err 2>/dev/null || true)"
-      record_attempt "$region" "$stage" "blocked_access" "" "$detail"
+      record_attempt "$region" "account" "blocked_access" "" "account_creation_denied"
       return 1
     fi
   fi
@@ -46,7 +43,6 @@ try_region() {
     return 1
   fi
 
-  stage="catalog"
   az cognitiveservices account list-models -g "$AZURE_RG" -n "$account" -o json > "/tmp/video-models-${region}.json"
   local entry
   entry="$(jq -c '[.[] | select(((.name // .model.name // "") | ascii_downcase) == "sora-2")][0] // empty' "/tmp/video-models-${region}.json")"
@@ -54,7 +50,7 @@ try_region() {
     entry="$(jq -c '[.[] | select(((.name // .model.name // "") | ascii_downcase) == "sora")][0] // empty' "/tmp/video-models-${region}.json")"
   fi
   if [[ -z "$entry" ]]; then
-    record_attempt "$region" "$stage" "blocked_access" "" "sora_not_in_subscription_catalog"
+    record_attempt "$region" "catalog" "blocked_access" "" "sora_not_in_subscription_catalog"
     return 1
   fi
 
@@ -64,18 +60,16 @@ try_region() {
   format="$(jq -r '.format // .model.format // "OpenAI"' <<<"$entry")"
   sku="$(jq -r '[.skus[]?.name | select(.=="GlobalStandard" or .=="Standard")][0] // "GlobalStandard"' <<<"$entry")"
 
-  stage="deployment"
   if ! az cognitiveservices account deployment show -g "$AZURE_RG" -n "$account" --deployment-name "$deployment" >/dev/null 2>&1; then
     local args=(cognitiveservices account deployment create -g "$AZURE_RG" -n "$account" --deployment-name "$deployment" --model-name "$model" --model-format "$format" --sku-name "$sku" --sku-capacity 1)
     [[ -n "$version" ]] && args+=(--model-version "$version")
     if ! az "${args[@]}" >/tmp/video-deploy.out 2>/tmp/video-deploy.err; then
-      detail="$(tail -c 1600 /tmp/video-deploy.err 2>/dev/null || true)"
-      record_attempt "$region" "$stage" "blocked_access" "$model" "$detail"
+      record_attempt "$region" "deployment" "blocked_access" "$model" "deployment_or_entitlement_denied"
       return 1
     fi
   fi
 
-  record_attempt "$region" "$stage" "ready" "$model" ""
+  record_attempt "$region" "deployment" "ready" "$model" ""
   selected_model="$model"
   selected_region="$region"
   echo "AZURE_VIDEO_ACCOUNT=$account" >> "$GITHUB_ENV"
