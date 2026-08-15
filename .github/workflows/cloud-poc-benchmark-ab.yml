@@ -7,6 +7,7 @@ on:
     paths:
       - 'benchmarks/cross-cloud-ab.js'
       - 'benchmarks/gemini-direct-proxy.js'
+      - 'benchmarks/Dockerfile.gemini-proxy'
       - 'adapters/providers/azure-openai.js'
       - 'adapters/providers/vertex-gemini.js'
       - '.github/workflows/cloud-poc-benchmark-ab.yml'
@@ -110,7 +111,7 @@ jobs:
           registry="${region}-docker.pkg.dev"
           image="${registry}/${GCP_PROJECT_ID}/${GCP_AR_REPO}/benchmark-ab:${GITHUB_SHA}"
           gcloud auth configure-docker "$registry" --quiet
-          docker build -t "$image" .
+          docker build -f benchmarks/Dockerfile.gemini-proxy -t "$image" .
           docker push "$image"
           echo "GCP_BENCHMARK_IMAGE=$image" >> "$GITHUB_ENV"
 
@@ -124,10 +125,8 @@ jobs:
             --max=1 \
             --cpu=1 \
             --memory=512Mi \
-            --command=node \
-            --args=benchmarks/gemini-direct-proxy.js \
             --set-env-vars="BENCHMARK_PROXY_TOKEN=${proxy_token}" \
-            --allow-unauthenticated \
+            --no-invoker-iam-check \
             --quiet
 
           proxy_url="$(gcloud run services describe "$GCP_PROXY_SERVICE" \
@@ -137,7 +136,7 @@ jobs:
           [[ -n "$proxy_url" ]] || { echo 'GEMINI_DIRECT_PROXY_URL=missing'; exit 1; }
 
           for attempt in $(seq 1 30); do
-            if curl -fsS "${proxy_url}/health" | jq -e '.ok == true' >/dev/null; then
+            if curl -fsS -H "Authorization: Bearer ${proxy_token}" "${proxy_url}/health" | jq -e '.ok == true' >/dev/null; then
               echo 'GEMINI_DIRECT_PROXY_HEALTH=success'
               break
             fi
@@ -145,8 +144,6 @@ jobs:
             sleep 2
           done
 
-          # The existing Vertex adapter now targets the raw-semantics proxy. The bearer token
-          # is only proxy authorization; the proxy itself calls Vertex with the runtime SA metadata token.
           echo "VERTEX_API_ENDPOINT=$proxy_url" >> "$GITHUB_ENV"
           echo "GCP_ACCESS_TOKEN=$proxy_token" >> "$GITHUB_ENV"
           echo "GEMINI_DIRECT_PROXY_URL=$proxy_url" >> "$GITHUB_ENV"
