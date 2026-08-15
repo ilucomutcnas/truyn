@@ -1,5 +1,6 @@
 import http from 'node:http';
 import { randomBytes } from 'node:crypto';
+import { WebSocket, WebSocketServer } from 'ws';
 import { compactStageRequestId, verifyCompactFrame, verifyEnvelope } from '../../core/protocol/index.js';
 import { trustabilityLite } from '../../core/trust/index.js';
 
@@ -43,6 +44,7 @@ export function createRelay({ nodeFreshnessMs = 15_000 } = {}) {
   const events = new Map();
   const fastEvents = new Map();
   const fastWaiters = new Map();
+  const providerSockets = new Map();
   const resultWaiters = new Map();
   const requests = new Map();
   const chains = new Map();
@@ -59,7 +61,13 @@ export function createRelay({ nodeFreshnessMs = 15_000 } = {}) {
     return Number.isFinite(seenAt) ? seenAt : 0;
   }
 
+  function connectedSocket(nodeId) {
+    const socket = providerSockets.get(nodeId);
+    return socket?.readyState === WebSocket.OPEN ? socket : null;
+  }
+
   function isNodeFresh(nodeId, now = Date.now()) {
+    if (connectedSocket(nodeId)) return true;
     const seenAt = nodeSeenAtMs(nodeId);
     return seenAt > 0 && now - seenAt <= nodeFreshnessMs;
   }
@@ -87,7 +95,20 @@ export function createRelay({ nodeFreshnessMs = 15_000 } = {}) {
     if (waiter.timer) clearTimeout(waiter.timer);
   }
 
+  function sendSocketEvent(nodeId, event) {
+    const socket = connectedSocket(nodeId);
+    if (!socket) return false;
+    try {
+      socket.send(JSON.stringify(event));
+      touch(nodeId);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   function queueFast(nodeId, event) {
+    if (sendSocketEvent(nodeId, event)) return;
     const waiter = fastWaiters.get(nodeId);
     if (waiter && !waiter.res.writableEnded) {
       removeFastWaiter(nodeId, waiter);
@@ -211,6 +232,58 @@ export function createRelay({ nodeFreshnessMs = 15_000 } = {}) {
     return true;
   }
 
+  function processFastResult(providerNodeId, frame, payload) {
+    const provider = nodes.get(providerNodeId);
+    if (!provider) return { status: 401, body: { ok: false, error: 'node_not_registered' } };
+    const verification = verifyCompactFrame(frame, payload, provider.publicKey, { allowedTypes: ['RESULT'] });
+    if (!verification.ok) return { status: 400, body: { ok: false, error: verification.reason } };
+
+    const request = requests.get(frame.i);
+    if (!request) return { status: 404, body: { ok: false, error: 'request_not_found' } };
+    if (request.provider !== providerNodeId) return { status: 403, body: { ok: false, error: 'provider_mismatch' } };
+    if (request.status === 'completed') return { status: 409, body: { ok: false, error: 'request_already_completed' } };
+
+    const trust = completeRequest(request, providerNodeId);
+    const event = { kind: 'RESULT', frame, payload, from: providerNodeId, trust };
+
+    if (request.mode === 'chain-stage') {
+      const chain = chains.get(request.chainId);
+      if (!chain || chain.status !== 'running') return { status: 409, body: { ok: false, error: 'chain_not_running' } };
+      chain.results[request.stageIndex] = event;
+      if (payload?.metadata?.failed) {
+        closeChain(chain, 200, {
+          ok: true,
+          chainId: chain.chainId,
+          results: chain.results,
+          providers: chain.providers,
+          providerTrust: chain.providerTrust,
+          failedStage: request.stageIndex
+        });
+      } else if (request.stageIndex + 1 < chain.payload.stages.length) {
+        dispatchChainStage(chain, request.stageIndex + 1);
+      } else {
+        closeChain(chain, 200, {
+          ok: true,
+          chainId: chain.chainId,
+          results: chain.results,
+          providers: chain.providers,
+          providerTrust: chain.providerTrust
+        });
+      }
+      return { status: 200, body: { ok: true, requestId: frame.i, chainId: request.chainId } };
+    }
+
+    const waiter = resultWaiters.get(frame.i);
+    if (waiter && !waiter.res.writableEnded) {
+      resultWaiters.delete(frame.i);
+      clearTimeout(waiter.timer);
+      json(waiter.res, 200, { ok: true, result: event });
+    } else {
+      queueFast(request.requester, event);
+    }
+    return { status: 200, body: { ok: true, requestId: frame.i } };
+  }
+
   const server = http.createServer(async (req, res) => {
     try {
       const url = new URL(req.url, 'http://relay.local');
@@ -223,8 +296,10 @@ export function createRelay({ nodeFreshnessMs = 15_000 } = {}) {
           offers: offers.size,
           pendingRequests: [...requests.values()].filter((request) => request.status !== 'completed').length,
           pendingChains: [...chains.values()].filter((chain) => chain.status === 'running').length,
+          providerSockets: [...providerSockets.values()].filter((socket) => socket.readyState === WebSocket.OPEN).length,
           fastPath: true,
-          chainPath: true
+          chainPath: true,
+          socketPath: true
         });
       }
 
@@ -235,6 +310,11 @@ export function createRelay({ nodeFreshnessMs = 15_000 } = {}) {
 
         const previousToken = nodes.get(envelope.from)?.sessionToken;
         if (previousToken) sessions.delete(previousToken);
+        const oldSocket = providerSockets.get(envelope.from);
+        if (oldSocket) {
+          providerSockets.delete(envelope.from);
+          try { oldSocket.close(4001, 'session_replaced'); } catch {}
+        }
         const sessionToken = randomBytes(32).toString('hex');
         nodes.set(envelope.from, {
           nodeId: envelope.from,
@@ -279,10 +359,7 @@ export function createRelay({ nodeFreshnessMs = 15_000 } = {}) {
       if (req.method === 'GET' && url.pathname === '/v1/offers') {
         const capability = url.searchParams.get('capability');
         const matches = matchingOffers({ capability })
-          .map((offer) => ({
-            ...offer.envelope,
-            trust: trustFor(offer.envelope.from)
-          }));
+          .map((offer) => ({ ...offer.envelope, trust: trustFor(offer.envelope.from) }));
         return json(res, 200, { ok: true, offers: matches });
       }
 
@@ -360,12 +437,7 @@ export function createRelay({ nodeFreshnessMs = 15_000 } = {}) {
 
         const waitMs = boundedWaitMs(url, 120_000);
         if (waitMs > 0) registerResultWaiter(req, res, frame.i, waitMs);
-        queueFast(match.envelope.from, {
-          kind: 'NEED',
-          frame,
-          payload,
-          from: requesterNodeId
-        });
+        queueFast(match.envelope.from, { kind: 'NEED', frame, payload, from: requesterNodeId });
 
         if (waitMs === 0) {
           return json(res, 200, {
@@ -381,55 +453,9 @@ export function createRelay({ nodeFreshnessMs = 15_000 } = {}) {
       if (req.method === 'POST' && url.pathname === '/v1/fast/results') {
         const providerNodeId = authenticatedNodeId(req);
         if (!providerNodeId) return json(res, 401, { ok: false, error: 'unauthorized' });
-        const provider = nodes.get(providerNodeId);
         const { frame, payload } = await readJson(req);
-        const verification = verifyCompactFrame(frame, payload, provider.publicKey, { allowedTypes: ['RESULT'] });
-        if (!verification.ok) return json(res, 400, { ok: false, error: verification.reason });
-
-        const request = requests.get(frame.i);
-        if (!request) return json(res, 404, { ok: false, error: 'request_not_found' });
-        if (request.provider !== providerNodeId) return json(res, 403, { ok: false, error: 'provider_mismatch' });
-        if (request.status === 'completed') return json(res, 409, { ok: false, error: 'request_already_completed' });
-
-        const trust = completeRequest(request, providerNodeId);
-        const event = { kind: 'RESULT', frame, payload, from: providerNodeId, trust };
-
-        if (request.mode === 'chain-stage') {
-          const chain = chains.get(request.chainId);
-          if (!chain || chain.status !== 'running') return json(res, 409, { ok: false, error: 'chain_not_running' });
-          chain.results[request.stageIndex] = event;
-          if (payload?.metadata?.failed) {
-            closeChain(chain, 200, {
-              ok: true,
-              chainId: chain.chainId,
-              results: chain.results,
-              providers: chain.providers,
-              providerTrust: chain.providerTrust,
-              failedStage: request.stageIndex
-            });
-          } else if (request.stageIndex + 1 < chain.payload.stages.length) {
-            dispatchChainStage(chain, request.stageIndex + 1);
-          } else {
-            closeChain(chain, 200, {
-              ok: true,
-              chainId: chain.chainId,
-              results: chain.results,
-              providers: chain.providers,
-              providerTrust: chain.providerTrust
-            });
-          }
-          return json(res, 200, { ok: true, requestId: frame.i, chainId: request.chainId });
-        }
-
-        const waiter = resultWaiters.get(frame.i);
-        if (waiter && !waiter.res.writableEnded) {
-          resultWaiters.delete(frame.i);
-          clearTimeout(waiter.timer);
-          json(waiter.res, 200, { ok: true, result: event });
-        } else {
-          queueFast(request.requester, event);
-        }
-        return json(res, 200, { ok: true, requestId: frame.i });
+        const processed = processFastResult(providerNodeId, frame, payload);
+        return json(res, processed.status, processed.body);
       }
 
       if (req.method === 'GET' && url.pathname === '/v1/fast/events') {
@@ -455,7 +481,6 @@ export function createRelay({ nodeFreshnessMs = 15_000 } = {}) {
 
         const capability = envelope.payload?.capability?.name || envelope.payload?.capability;
         if (!capability || typeof capability !== 'string') return json(res, 400, { ok: false, error: 'invalid_capability' });
-
         const match = matchingOffers({ capability, requesterNodeId: envelope.from })[0];
         if (!match) return json(res, 404, { ok: false, error: 'no_matching_provider' });
 
@@ -470,7 +495,6 @@ export function createRelay({ nodeFreshnessMs = 15_000 } = {}) {
         });
         queue(match.envelope.from, { kind: 'NEED', envelope });
         touch(envelope.from);
-
         return json(res, 200, {
           ok: true,
           needId: envelope.id,
@@ -523,15 +547,99 @@ export function createRelay({ nodeFreshnessMs = 15_000 } = {}) {
     }
   });
 
+  const wss = new WebSocketServer({ noServer: true, perMessageDeflate: false });
+
+  server.on('upgrade', (req, socket, head) => {
+    try {
+      const url = new URL(req.url, 'http://relay.local');
+      if (url.pathname !== '/v1/fast/socket') {
+        socket.destroy();
+        return;
+      }
+      const nodeId = url.searchParams.get('nodeId');
+      const authenticated = authenticatedNodeId(req);
+      if (!nodeId || authenticated !== nodeId || !nodes.has(nodeId)) {
+        socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n');
+        socket.destroy();
+        return;
+      }
+      wss.handleUpgrade(req, socket, head, (ws) => {
+        wss.emit('connection', ws, req, nodeId);
+      });
+    } catch {
+      socket.destroy();
+    }
+  });
+
+  wss.on('connection', (socket, req, nodeId) => {
+    const previous = providerSockets.get(nodeId);
+    if (previous && previous !== socket) {
+      try { previous.close(4001, 'socket_replaced'); } catch {}
+    }
+    providerSockets.set(nodeId, socket);
+    socket.isAlive = true;
+    touch(nodeId);
+
+    const queued = fastEvents.get(nodeId) || [];
+    fastEvents.set(nodeId, []);
+    for (const event of queued) sendSocketEvent(nodeId, event);
+
+    socket.on('pong', () => {
+      socket.isAlive = true;
+      touch(nodeId);
+    });
+    socket.on('message', (data) => {
+      try {
+        touch(nodeId);
+        const message = JSON.parse(data.toString());
+        if (message?.kind !== 'RESULT') throw new Error('unsupported_socket_message');
+        const processed = processFastResult(nodeId, message.frame, message.payload);
+        if (socket.readyState === WebSocket.OPEN) {
+          socket.send(JSON.stringify({ kind: 'ACK', ...processed.body, status: processed.status }));
+        }
+      } catch (error) {
+        if (socket.readyState === WebSocket.OPEN) {
+          socket.send(JSON.stringify({ kind: 'ERROR', ok: false, error: error.message }));
+        }
+      }
+    });
+    socket.on('close', () => {
+      if (providerSockets.get(nodeId) === socket) providerSockets.delete(nodeId);
+    });
+    socket.on('error', () => {});
+  });
+
+  const heartbeat = setInterval(() => {
+    for (const [nodeId, socket] of providerSockets) {
+      if (socket.readyState !== WebSocket.OPEN) {
+        providerSockets.delete(nodeId);
+        continue;
+      }
+      if (socket.isAlive === false) {
+        providerSockets.delete(nodeId);
+        socket.terminate();
+        continue;
+      }
+      socket.isAlive = false;
+      try { socket.ping(); } catch {}
+    }
+  }, 10_000);
+  heartbeat.unref?.();
+
   return {
     server,
-    state: { nodes, sessions, offers, events, fastEvents, requests, chains, stats },
+    state: { nodes, sessions, offers, events, fastEvents, providerSockets, requests, chains, stats },
     async listen({ port = 8787, host = '127.0.0.1' } = {}) {
       await new Promise((resolve) => server.listen(port, host, resolve));
       const address = server.address();
       return `http://${host}:${address.port}`;
     },
     async close() {
+      clearInterval(heartbeat);
+      for (const socket of providerSockets.values()) {
+        try { socket.close(1001, 'relay_closing'); } catch {}
+      }
+      providerSockets.clear();
       for (const waiter of fastWaiters.values()) {
         clearTimeout(waiter.timer);
         json(waiter.res, 503, { ok: false, error: 'relay_closing' });
@@ -545,6 +653,7 @@ export function createRelay({ nodeFreshnessMs = 15_000 } = {}) {
       for (const chain of chains.values()) {
         if (chain.status === 'running') closeChain(chain, 503, { ok: false, error: 'relay_closing', chainId: chain.chainId });
       }
+      wss.close();
       if (!server.listening) return;
       await new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
     }
