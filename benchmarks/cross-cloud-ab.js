@@ -48,17 +48,15 @@ const researchInput = {
   task: 'In one concise sentence, explain what an intelligence network is. End with marker TRUYN_AB_AZURE_OK.'
 };
 const researchPolicy = {
-  purpose: 'cross-cloud-ab-v2-compact-hot-path',
+  purpose: 'cross-cloud-ab-v2-single-request-chain',
   expectedProvider: 'azure-openai'
 };
+const reviewTask = 'Review the candidate for clarity and factual coherence in no more than two sentences. End with marker TRUYN_AB_GEMINI_OK.';
 const reviewPolicy = {
-  purpose: 'cross-cloud-ab-v2-compact-hot-path',
+  purpose: 'cross-cloud-ab-v2-single-request-chain',
   expectedProvider: 'vertex-gemini'
 };
-const makeReviewInput = (candidate) => ({
-  task: 'Review the candidate for clarity and factual coherence in no more than two sentences. End with marker TRUYN_AB_GEMINI_OK.',
-  candidate
-});
+const makeReviewInput = (candidate) => ({ task: reviewTask, candidate });
 
 function parseRate(name) {
   const raw = process.env[name];
@@ -204,78 +202,89 @@ const requester = new TruynNode({ relayUrl, identity: createIdentity() });
 const routeCache = new Map();
 
 async function prepareTruynHotPath(timeoutMs = 180_000) {
-  await requester.register({ name: 'cross-cloud-ab-v2-requester' });
+  await requester.register({ name: 'cross-cloud-ab-v2-chain-requester' });
   const capabilities = ['research', 'review'];
   const startedAt = Date.now();
   for (const capability of capabilities) {
     while (Date.now() - startedAt < timeoutMs) {
       const found = await relayRead(`bootstrap-find-${capability}`, () => requester.find(capability));
-      const fastOffers = (found.offers || []).filter((offer) => offer.payload?.metadata?.fastPath === true);
-      if (fastOffers.length > 0) {
-        routeCache.set(capability, fastOffers);
+      const chainOffers = (found.offers || []).filter((offer) => offer.payload?.metadata?.fastPath === true);
+      if (chainOffers.length > 0) {
+        routeCache.set(capability, chainOffers);
         break;
       }
       await sleep(1_000);
     }
-    if (!routeCache.has(capability)) throw new Error(`Timed out waiting for fast-path OFFER ${capability}`);
+    if (!routeCache.has(capability)) throw new Error(`Timed out waiting for chain-path OFFER ${capability}`);
   }
   const researchProvider = routeCache.get('research')[0].from;
   const reviewProvider = routeCache.get('review')[0].from;
   if (researchProvider === reviewProvider) throw new Error('TRUYN benchmark requires distinct Azure and Gemini provider identities');
-  console.error(`TRUYN compact hot path ready: research=${researchProvider}; review=${reviewProvider}`);
-}
-
-async function truynTransact(capability, input, policy) {
-  const cachedOffers = routeCache.get(capability) || [];
-  const result = await requester.compactNeed(capability, input, policy, { waitMs: 120_000 });
-  if (result.verification?.ok !== true) throw new Error(`${capability} compact RESULT signature verification failed`);
-  if (!cachedOffers.some((offer) => offer.from === result.provider)) {
-    throw new Error(`${capability} RESULT provider is outside the preflight route cache`);
-  }
-  if (result.metadata?.failed) throw new Error(`${capability} provider failed: ${result.metadata.error || 'unknown error'}`);
-
-  const matchedOffer = cachedOffers.find((offer) => offer.from === result.provider);
-  return {
-    output: result.output,
-    metadata: result.metadata,
-    providerNodeId: result.provider,
-    offersSeen: cachedOffers.length,
-    signatureVerified: true,
-    matchTrustability: matchedOffer?.trust || null,
-    resultTrustability: result.trust || null,
-    needFrameBytes: result.needFrameBytes,
-    resultFrameBytes: result.resultFrameBytes,
-    protocolOverheadBytes: result.protocolOverheadBytes,
-    truynPayloadBytes: result.truynPayloadBytes
-  };
+  console.error(`TRUYN single-request chain ready: research=${researchProvider}; review=${reviewProvider}`);
 }
 
 async function truynChain() {
+  const stages = [
+    {
+      capability: { name: 'research' },
+      input: researchInput,
+      policy: researchPolicy
+    },
+    {
+      capability: { name: 'review' },
+      inputTemplate: {
+        task: reviewTask,
+        candidate: { $previous: 'output' }
+      },
+      policy: reviewPolicy
+    }
+  ];
+
   const startedAt = Date.now();
-  const azureTx = await truynTransact('research', researchInput, researchPolicy);
-  if (!String(azureTx.output).includes('TRUYN_AB_AZURE_OK')) throw new Error(`TRUYN Azure marker missing: ${azureTx.output}`);
-  const geminiTx = await truynTransact('review', makeReviewInput(azureTx.output), reviewPolicy);
-  if (!String(geminiTx.output).includes('TRUYN_AB_GEMINI_OK')) throw new Error(`TRUYN Gemini marker missing: ${geminiTx.output}`);
-  if (azureTx.providerNodeId === geminiTx.providerNodeId) throw new Error('TRUYN benchmark requires distinct Azure and Gemini provider identities');
-
-  const azure = summarizeProvider(azureTx, 'azure');
-  const gemini = summarizeProvider(geminiTx, 'gemini');
-  const providerBodyBytes = (azure.providerBodyBytes || 0) + (gemini.providerBodyBytes || 0);
-  const protocolOverheadBytes = azureTx.protocolOverheadBytes + geminiTx.protocolOverheadBytes;
-  const truynPayloadBytes = azureTx.truynPayloadBytes + geminiTx.truynPayloadBytes;
-  const providerLatencyMs = (azure.providerLatencyMs || 0) + (gemini.providerLatencyMs || 0);
+  const chain = await requester.compactChain(stages, { waitMs: 120_000 });
   const endToEndLatencyMs = Date.now() - startedAt;
+  if (chain.results.length < 1) throw new Error('TRUYN CHAIN returned no provider results');
 
+  const azureEvent = chain.results[0];
+  if (azureEvent.verification?.ok !== true) throw new Error('research compact CHAIN RESULT signature verification failed');
+  if (!routeCache.get('research').some((offer) => offer.from === azureEvent.from)) {
+    throw new Error('research CHAIN RESULT provider is outside the preflight route cache');
+  }
+  const azureRaw = { output: azureEvent.payload?.output, metadata: azureEvent.payload?.metadata || {} };
+  if (azureRaw.metadata.failed) throw new Error(`research provider failed: ${azureRaw.metadata.error || 'unknown error'}`);
+  if (!String(azureRaw.output).includes('TRUYN_AB_AZURE_OK')) throw new Error(`TRUYN Azure marker missing: ${azureRaw.output}`);
+
+  if (chain.results.length < 2) throw new Error('TRUYN CHAIN stopped before Gemini review stage');
+  const geminiEvent = chain.results[1];
+  if (geminiEvent.verification?.ok !== true) throw new Error('review compact CHAIN RESULT signature verification failed');
+  if (!routeCache.get('review').some((offer) => offer.from === geminiEvent.from)) {
+    throw new Error('review CHAIN RESULT provider is outside the preflight route cache');
+  }
+  const geminiRaw = { output: geminiEvent.payload?.output, metadata: geminiEvent.payload?.metadata || {} };
+  if (geminiRaw.metadata.failed) throw new Error(`review provider failed: ${geminiRaw.metadata.error || 'unknown error'}`);
+  if (!String(geminiRaw.output).includes('TRUYN_AB_GEMINI_OK')) throw new Error(`TRUYN Gemini marker missing: ${geminiRaw.output}`);
+  if (azureEvent.from === geminiEvent.from) throw new Error('TRUYN benchmark requires distinct Azure and Gemini provider identities');
+
+  const azure = summarizeProvider(azureRaw, 'azure');
+  const gemini = summarizeProvider(geminiRaw, 'gemini');
+  const providerBodyBytes = (azure.providerBodyBytes || 0) + (gemini.providerBodyBytes || 0);
+  const providerLatencyMs = (azure.providerLatencyMs || 0) + (gemini.providerLatencyMs || 0);
+  const protocolOverheadBytes = chain.protocolOverheadBytes;
+  const truynPayloadBytes = chain.truynPayloadBytes;
+
+  const azureOffer = routeCache.get('research').find((offer) => offer.from === azureEvent.from);
+  const geminiOffer = routeCache.get('review').find((offer) => offer.from === geminiEvent.from);
   return {
     mode: 'truyn',
     requesterNodeId: requester.identity.nodeId,
-    providerNodeIds: { azure: azureTx.providerNodeId, gemini: geminiTx.providerNodeId },
-    signaturesVerified: { azure: azureTx.signatureVerified, gemini: geminiTx.signatureVerified },
+    chainId: chain.chainId,
+    providerNodeIds: { azure: azureEvent.from, gemini: geminiEvent.from },
+    signaturesVerified: { azure: true, gemini: true },
     trustability: {
-      azureMatch: azureTx.matchTrustability,
-      azureResult: azureTx.resultTrustability,
-      geminiMatch: geminiTx.matchTrustability,
-      geminiResult: geminiTx.resultTrustability
+      azureMatch: azureOffer?.trust || null,
+      azureResult: azureEvent.trust || null,
+      geminiMatch: geminiOffer?.trust || null,
+      geminiResult: geminiEvent.trust || null
     },
     endToEndLatencyMs,
     providerLatencyMs,
@@ -422,17 +431,19 @@ const optimizationGate = {
 optimizationGate.passed = optimizationGate.pass.protocolOverhead8x && optimizationGate.pass.orchestrationOverhead8x;
 
 const report = {
-  benchmark: 'TRUYN cross-cloud A/B v2 compact hot path',
+  benchmark: 'TRUYN cross-cloud A/B v2 single-request chain',
   status: 'success',
   generatedAt: new Date().toISOString(),
   methodology: {
     baseline: 'Direct GitHub runner -> Azure OpenAI -> Vertex Gemini, no TRUYN relay/envelopes.',
-    candidate: 'Persistent registered requester -> session-bound compact signed NEED -> synchronous relay wait -> long-poll provider -> compact signed RESULT; repeated for Azure then Gemini.',
+    candidate: 'One persistent requester session sends one signed compact CHAIN through relay.truyn.org. Relay dispatches Azure then Gemini internally over provider long-poll backchannels and returns both signed provider RESULTs in one public HTTP response.',
     sameModels: { azure: azureModel, gemini: geminiModel },
     sameTaskAndAdapterPrompt: true,
     alternatingOrder: true,
-    bootstrapOutsideMeasuredArm: 'Requester registration, OFFER discovery, provider public-key caching and identity bootstrap happen before warm-up/measured arm timing. This is the steady-state session path; provider inference remains fully measured.',
-    compactFrame: 'Each NEED/RESULT hot-path control frame contains only type code, 96-bit request id and Ed25519 signature. Sender identity/public key/protocol version are bound to the authenticated persistent session and are not repeated. Payload remains signed but is detached from the control frame.',
+    bootstrapOutsideMeasuredArm: 'Requester registration, OFFER discovery and provider public-key caching happen before warm-up/measured timing. Provider inference remains fully measured.',
+    chainProvenance: 'The requester Ed25519-signs the complete two-stage chain plan. Each provider verifies that requester CHAIN signature. Stage 2 also verifies the prior provider signed RESULT before materializing its signed inputTemplate reference to the previous output. Both provider outputs are independently Ed25519-signed.',
+    compactFrame: 'The measured chain uses one CHAIN control frame plus two RESULT control frames. Session-bound identity/public key/protocol metadata are not repeated on the hot path.',
+    providerBackchannel: 'Providers use the relay origin directly; the public requester remains on canonical relay.truyn.org / Front Door.',
     warmups,
     measuredPairs: iterations,
     pacingMs,
@@ -440,7 +451,7 @@ const report = {
     rateLimitRetryEvents: rateLimitRetries,
     relayBootstrapNetworkRetryEvents: relayNetworkRetries,
     retryAccounting: 'Rate-limited attempts are not counted as measured samples. Pacing and rate-limit retry sleep occur outside successful-arm latency. Relay read retries apply only to pre-measurement bootstrap discovery and cannot replay provider work.',
-    byteMetric: 'protocolOverheadBytes is the exact serialized compact signed control-frame bytes for four messages (two NEED + two RESULT). truynPayloadBytes is reported separately and includes the detached signed TRUYN payloads. measuredApplicationBodyBytes = provider JSON bodies + compact control frames + TRUYN payloads. The v1 field called protocolEnvelopeBytes contained both protocol metadata and payload; v2 separates them so protocol overhead is no longer conflated with application data.',
+    byteMetric: 'protocolOverheadBytes is the exact serialized signed control-frame bytes for three messages (one CHAIN + two RESULT). truynPayloadBytes is reported separately. measuredApplicationBodyBytes = provider JSON bodies + compact control frames + detached TRUYN payloads.',
     costMetric: 'Estimated variable model inference cost from measured billable tokens and the price snapshot embedded by the workflow; infrastructure fixed costs are excluded.'
   },
   relayUrl,
