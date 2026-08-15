@@ -155,7 +155,13 @@ jobs:
             .methodology.baseline = "Direct GitHub runner -> Azure OpenAI; Gemini request -> ephemeral Cloud Run runtime-identity proxy -> Vertex Gemini; no TRUYN relay/envelopes." |
             .methodology.directAzureAuthentication = "Azure OpenAI account key fetched at run time through Azure OIDC management access; no TRUYN relay/envelope involved." |
             .methodology.directGeminiProxy = $proxy |
-            .methodology.directGeminiProxySemantics = "Raw Vertex generateContent request/response preserved; proxy only supplies the same runtime service-account identity used by truyn-gemini."
+            .methodology.directGeminiProxySemantics = "Raw Vertex generateContent request/response preserved; proxy only supplies the same runtime service-account identity used by truyn-gemini." |
+            ([.samples.direct[].aggregate.estimatedCost.totalUsd] | add / length) as $directCost |
+            ([.samples.truyn[].aggregate.estimatedCost.totalUsd] | add / length) as $truynCost |
+            .aggregate.direct.estimatedCostUsd.mean = $directCost |
+            .aggregate.truyn.estimatedCostUsd.mean = $truynCost |
+            .claims.costReductionPercent = (((($directCost - $truynCost) / $directCost) * 100000) | round) / 1000) |
+            .methodology.costClaimCalculation = "Cost reduction is calculated from raw per-sample USD means before display rounding."
           ' cross-cloud-ab.json > "$tmp"
           mv "$tmp" cross-cloud-ab.json
 
