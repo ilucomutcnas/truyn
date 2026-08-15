@@ -22,6 +22,4 @@ jobs:
           cache: npm
       - run: npm ci --ignore-scripts --no-audit --no-fund
       - run: npm test
-        env:
-          TRUYN_LOCAL_DEVELOPMENT: '1'
       - run: git diff --check
