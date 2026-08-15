@@ -1,0 +1,99 @@
+name: GCP Access Recheck
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/gcp-access-recheck.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GCP_PROJECT_ID_VALUE: ${{ vars.GCP_PROJECT_ID || secrets.GCP_PROJECT_ID }}
+      GCP_PROJECT_NUMBER_VALUE: ${{ vars.GCP_PROJECT_NUMBER || secrets.GCP_PROJECT_NUMBER }}
+      GCP_WIF_PROVIDER_VALUE: ${{ vars.GCP_WIF_PROVIDER || secrets.GCP_WIF_PROVIDER }}
+      GCP_DEPLOYER_SA_VALUE: ${{ vars.GCP_DEPLOYER_SERVICE_ACCOUNT_EMAIL || secrets.GCP_DEPLOYER_SERVICE_ACCOUNT_EMAIL }}
+      GCP_RUNTIME_SA_VALUE: ${{ vars.GCP_RUNTIME_SERVICE_ACCOUNT_EMAIL || secrets.GCP_RUNTIME_SERVICE_ACCOUNT_EMAIL }}
+      GCP_REGION_CONFIGURED: ${{ vars.GCP_REGION || secrets.GCP_REGION }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          for key in GCP_PROJECT_ID_VALUE GCP_PROJECT_NUMBER_VALUE GCP_WIF_PROVIDER_VALUE GCP_DEPLOYER_SA_VALUE GCP_RUNTIME_SA_VALUE GCP_REGION_CONFIGURED; do
+            [[ -n "${!key:-}" ]] || { echo "MISSING_${key}=true"; exit 1; }
+          done
+          region="$(printf '%s' "$GCP_REGION_CONFIGURED" | grep -oE '[a-z]+-[a-z0-9]+[0-9]' | head -n1 || true)"
+          [[ -n "$region" ]] || { echo 'GCP_REGION_FORMAT=invalid'; exit 1; }
+          echo "GCP_REGION_VALUE=${region}" >> "$GITHUB_ENV"
+          echo 'GCP_CONFIG_PRESENT=ok'
+
+      - name: Authenticate to Google Cloud using WIF
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID_VALUE }}
+          workload_identity_provider: ${{ env.GCP_WIF_PROVIDER_VALUE }}
+          service_account: ${{ env.GCP_DEPLOYER_SA_VALUE }}
+          create_credentials_file: true
+          export_environment_variables: true
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID_VALUE }}
+
+      - name: Verify deployment permissions
+        shell: bash
+        run: |
+          set -euo pipefail
+          project="$GCP_PROJECT_ID_VALUE"
+          region="$GCP_REGION_VALUE"
+          runtime_sa="$GCP_RUNTIME_SA_VALUE"
+
+          gcloud auth list --filter=status:ACTIVE --format='value(account)' >/dev/null
+          echo 'GCP_AUTH=ok'
+          gcloud projects describe "$project" --format='value(projectId)' >/dev/null
+          echo 'PROJECT_READ=ok'
+
+          token="$(gcloud auth print-access-token)"
+          curl -fsS -H "Authorization: Bearer ${token}" "https://run.googleapis.com/v2/projects/${project}/locations/${region}/services?pageSize=1" >/dev/null
+          echo 'CLOUD_RUN_READ=ok'
+          curl -fsS -H "Authorization: Bearer ${token}" "https://artifactregistry.googleapis.com/v1/projects/${project}/locations/${region}/repositories?pageSize=1" >/dev/null
+          echo 'ARTIFACT_REGISTRY_READ=ok'
+          gcloud iam service-accounts describe "$runtime_sa" --project="$project" --format='value(email)' >/dev/null
+          echo 'RUNTIME_SERVICE_ACCOUNT_READ=ok'
+
+          perms_json="$(curl -fsS -X POST -H "Authorization: Bearer ${token}" -H 'Content-Type: application/json' "https://iam.googleapis.com/v1/projects/-/serviceAccounts/${runtime_sa}:testIamPermissions" -d '{"permissions":["iam.serviceAccounts.actAs","iam.serviceAccounts.get"]}')"
+          jq -e '.permissions | index("iam.serviceAccounts.actAs")' <<<"$perms_json" >/dev/null
+          echo 'RUNTIME_SERVICE_ACCOUNT_ACTAS=ok'
+
+          project_perms="$(curl -fsS -X POST -H "Authorization: Bearer ${token}" -H 'Content-Type: application/json' "https://cloudresourcemanager.googleapis.com/v1/projects/${project}:testIamPermissions" -d '{"permissions":["run.services.create","run.services.update","artifactregistry.repositories.create","artifactregistry.repositories.delete"]}')"
+          for permission in run.services.create run.services.update artifactregistry.repositories.create artifactregistry.repositories.delete; do
+            jq -e --arg p "$permission" '.permissions | index($p)' <<<"$project_perms" >/dev/null
+          done
+          echo 'CLOUD_RUN_WRITE_PERMISSION=ok'
+          echo 'ARTIFACT_REGISTRY_WRITE_PERMISSION=ok'
+
+      - name: Verify real Artifact Registry create/delete
+        shell: bash
+        run: |
+          set -euo pipefail
+          repo="truyn-access-recheck-${GITHUB_RUN_ID}"
+          cleanup() { gcloud artifacts repositories delete "$repo" --project="$GCP_PROJECT_ID_VALUE" --location="$GCP_REGION_VALUE" --quiet >/dev/null 2>&1 || true; }
+          trap cleanup EXIT
+          gcloud artifacts repositories create "$repo" --project="$GCP_PROJECT_ID_VALUE" --location="$GCP_REGION_VALUE" --repository-format=docker --description='Ephemeral TRUYN access recheck' --quiet >/dev/null
+          echo 'ARTIFACT_REGISTRY_CREATE=ok'
+          gcloud artifacts repositories delete "$repo" --project="$GCP_PROJECT_ID_VALUE" --location="$GCP_REGION_VALUE" --quiet >/dev/null
+          trap - EXIT
+          echo 'ARTIFACT_REGISTRY_DELETE=ok'
+          echo 'GCP_DEPLOYMENT_ACCESS=complete'
