@@ -28,6 +28,9 @@ jobs:
       BENCHMARK_WARMUPS: '1'
       BENCHMARK_ITERATIONS: '5'
       BENCHMARK_OUTPUT: cross-cloud-ab.json
+      TRUYN_BASELINE_PROTOCOL_BYTES: '4143.4'
+      TRUYN_BASELINE_ORCHESTRATION_MS: '1491.2'
+      TRUYN_REQUIRED_IMPROVEMENT_FACTOR: '8'
       AZURE_INPUT_USD_PER_M: '0.44'
       AZURE_OUTPUT_USD_PER_M: '1.76'
       AZURE_PRICE_SOURCE: 'Azure Retail Prices API; eastus; gpt 4.1 mini Inp/Outp regnl; 2026-08-15 snapshot'
@@ -169,7 +172,17 @@ jobs:
         if: ${{ success() }}
         shell: bash
         run: |
-          jq '{benchmark,status,generatedAt,relayUrl,methodology,pricing,aggregate,claims}' cross-cloud-ab.json
+          jq '{
+            benchmark,
+            status,
+            generatedAt,
+            relayUrl,
+            methodology,
+            pricing,
+            optimizationGate,
+            aggregate,
+            claims
+          }' cross-cloud-ab.json
 
       - name: Upload benchmark evidence
         if: ${{ always() && hashFiles('cross-cloud-ab.json') != '' }}
@@ -179,6 +192,14 @@ jobs:
           path: cross-cloud-ab.json
           if-no-files-found: error
           retention-days: 30
+
+      - name: Enforce 8x optimization gate
+        if: ${{ hashFiles('cross-cloud-ab.json') != '' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          jq -e '.optimizationGate.passed == true' cross-cloud-ab.json >/dev/null
+          echo 'TRUYN_8X_OPTIMIZATION_GATE=passed'
 
       - name: Delete ephemeral direct Gemini proxy
         if: ${{ always() }}
