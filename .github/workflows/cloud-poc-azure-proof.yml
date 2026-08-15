@@ -1,0 +1,105 @@
+name: Cloud PoC Azure Proof
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/cloud-poc-azure-proof.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  prove:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      AZURE_RG: truyn
+      AZURE_RELAY_APP: truyn-relay
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login with OIDC
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID || secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Resolve deployed relay
+        shell: bash
+        run: |
+          set -euo pipefail
+          fqdn="$(az containerapp show -g "$AZURE_RG" -n "$AZURE_RELAY_APP" --query properties.configuration.ingress.fqdn -o tsv)"
+          [[ -n "$fqdn" ]] || { echo 'TRUYN_RELAY_FQDN=missing'; exit 1; }
+          relay="https://${fqdn}"
+          curl -fsS "${relay}/health" | tee relay-health.json | jq -e '.ok == true' >/dev/null
+          echo "TRUYN_RELAY=${relay}" >> "$GITHUB_ENV"
+          echo "TRUYN_RELAY=${relay}"
+          jq . relay-health.json
+
+      - name: Prove signed NEED to Azure GPT to RESULT
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import { TruynNode } from './node/client.js';
+          import { createIdentity } from './core/identity/index.js';
+
+          const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+          const requester = new TruynNode({ relayUrl: process.env.TRUYN_RELAY, identity: createIdentity() });
+          await requester.register({ name: 'azure-proof-requester' });
+
+          let offer = null;
+          const discoveryStartedAt = Date.now();
+          for (let i = 0; i < 60; i += 1) {
+            const found = await requester.find('research');
+            offer = found.offers?.[0] || null;
+            if (offer) break;
+            await sleep(1000);
+          }
+          if (!offer) throw new Error('Azure research OFFER not found');
+
+          const startedAt = Date.now();
+          const need = await requester.need('research', {
+            task: 'Return marker TRUYN_AZURE_NODE_OK and one short sentence confirming this was handled as a TRUYN task.'
+          }, { purpose: 'azure-node-proof' });
+          if (!need.needId) throw new Error('Relay did not return needId');
+
+          let resultEvent = null;
+          for (let i = 0; i < 120; i += 1) {
+            const polled = await requester.poll();
+            resultEvent = polled.events.find((event) =>
+              event.kind === 'RESULT' && event.envelope?.payload?.requestId === need.needId
+            ) || null;
+            if (resultEvent) break;
+            await sleep(500);
+          }
+          if (!resultEvent) throw new Error(`Azure RESULT not returned for ${need.needId}`);
+          if (!resultEvent.verification?.ok) throw new Error('Azure RESULT signature verification failed');
+          const metadata = resultEvent.envelope.payload?.metadata || {};
+          if (metadata.failed) throw new Error(`Azure provider failed: ${metadata.error || 'unknown error'}`);
+          const output = resultEvent.envelope.payload?.output;
+          if (!String(output).includes('TRUYN_AZURE_NODE_OK')) throw new Error(`Unexpected Azure output: ${output}`);
+          if (offer.from !== resultEvent.envelope.from) throw new Error('Provider identity changed between OFFER and RESULT');
+
+          console.log(JSON.stringify({
+            proof: 'azure-truyn-node',
+            status: 'success',
+            relayUrl: process.env.TRUYN_RELAY,
+            requesterNodeId: requester.identity.nodeId,
+            providerNodeId: resultEvent.envelope.from,
+            offerNodeId: offer.from,
+            signatureVerified: true,
+            matchTrustability: need.providerTrust,
+            resultTrustability: resultEvent.trust,
+            discoveryLatencyMs: Date.now() - discoveryStartedAt,
+            endToEndLatencyMs: Date.now() - startedAt,
+            providerMetadata: metadata,
+            resultEnvelopeBytes: Buffer.byteLength(JSON.stringify(resultEvent.envelope)),
+            output
+          }, null, 2));
+          NODE
