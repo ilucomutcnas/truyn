@@ -1,0 +1,115 @@
+name: Cloud PoC Vertex Claude Cloud Run Job
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'runtime/vertex-claude-probe.js'
+      - '.github/workflows/cloud-poc-vertex-claude-cloudrun-job.yml'
+      - 'Dockerfile'
+      - 'package.json'
+      - 'package-lock.json'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  prove:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      GCP_PROJECT_ID_VALUE: ${{ vars.GCP_PROJECT_ID || secrets.GCP_PROJECT_ID }}
+      GCP_WIF_PROVIDER_VALUE: ${{ vars.GCP_WIF_PROVIDER || secrets.GCP_WIF_PROVIDER }}
+      GCP_DEPLOYER_SA_VALUE: ${{ vars.GCP_DEPLOYER_SERVICE_ACCOUNT_EMAIL || secrets.GCP_DEPLOYER_SERVICE_ACCOUNT_EMAIL }}
+      GCP_RUNTIME_SA_VALUE: ${{ vars.GCP_RUNTIME_SERVICE_ACCOUNT_EMAIL || secrets.GCP_RUNTIME_SERVICE_ACCOUNT_EMAIL }}
+      GCP_RUNTIME_REGION: us-east4
+      GCP_AR_REPO: truyn-poc
+      GCP_JOB: truyn-claude-probe
+      CLAUDE_VERTEX_MODEL: claude-sonnet-4-6
+      CLAUDE_VERTEX_LOCATION: global
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Authenticate deployer through WIF
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID_VALUE }}
+          workload_identity_provider: ${{ env.GCP_WIF_PROVIDER_VALUE }}
+          service_account: ${{ env.GCP_DEPLOYER_SA_VALUE }}
+          create_credentials_file: true
+          export_environment_variables: true
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID_VALUE }}
+
+      - name: Build and push probe image
+        shell: bash
+        run: |
+          set -euo pipefail
+          registry="${GCP_RUNTIME_REGION}-docker.pkg.dev"
+          image="${registry}/${GCP_PROJECT_ID_VALUE}/${GCP_AR_REPO}/truyn-claude-probe:${GITHUB_SHA}"
+          gcloud auth configure-docker "$registry" --quiet
+          docker build -t "$image" .
+          docker push "$image"
+          echo "CLAUDE_PROBE_IMAGE=$image" >> "$GITHUB_ENV"
+
+      - name: Deploy one-off Claude probe as runtime identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          gcloud run jobs deploy "$GCP_JOB" \
+            --project="$GCP_PROJECT_ID_VALUE" \
+            --region="$GCP_RUNTIME_REGION" \
+            --image="$CLAUDE_PROBE_IMAGE" \
+            --service-account="$GCP_RUNTIME_SA_VALUE" \
+            --command=node \
+            --args=runtime/vertex-claude-probe.js \
+            --set-env-vars="GCP_PROJECT_ID=${GCP_PROJECT_ID_VALUE},CLAUDE_VERTEX_MODEL=${CLAUDE_VERTEX_MODEL},CLAUDE_VERTEX_LOCATION=${CLAUDE_VERTEX_LOCATION}" \
+            --max-retries=0 \
+            --task-timeout=120s \
+            --cpu=1 \
+            --memory=512Mi \
+            --quiet
+          echo 'VERTEX_CLAUDE_JOB_DEPLOY=success'
+
+      - name: Execute Claude runtime proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          gcloud run jobs execute "$GCP_JOB" \
+            --project="$GCP_PROJECT_ID_VALUE" \
+            --region="$GCP_RUNTIME_REGION" \
+            --wait \
+            --quiet
+          echo 'VERTEX_CLAUDE_CLOUDRUN_JOB=success'
+          echo 'VERTEX_CLAUDE_IDENTITY=runtime-service-account'
+          echo 'VERTEX_CLAUDE_PUBLIC_RELAY_EXPOSURE=false'
+
+      - name: Print probe logs
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          set +e
+          gcloud logging read \
+            "resource.type=cloud_run_job AND resource.labels.job_name=${GCP_JOB} AND resource.labels.location=${GCP_RUNTIME_REGION}" \
+            --project="$GCP_PROJECT_ID_VALUE" \
+            --freshness=15m \
+            --limit=40 \
+            --order=desc \
+            --format='value(textPayload,jsonPayload.message)' || true
+
+      - name: Remove one-off Claude probe job
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          set +e
+          gcloud run jobs delete "$GCP_JOB" \
+            --project="$GCP_PROJECT_ID_VALUE" \
+            --region="$GCP_RUNTIME_REGION" \
+            --quiet >/dev/null 2>&1 || true
+          echo 'VERTEX_CLAUDE_JOB_CLEANUP=done'
