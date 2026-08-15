@@ -7,6 +7,7 @@ import { createProviderAdapter } from '../adapters/providers/index.js';
 import { createRuntimeProviderAccessPolicy } from './security-config.js';
 import { createRuntimeProviderBillingPolicy } from './billing-config.js';
 import { createRuntimeRelaySecurityConfig } from './relay-security-config.js';
+import { createOriginGuard, createRuntimeOriginGuardConfig } from './origin-guard.js';
 
 const role = process.env.TRUYN_ROLE || 'provider';
 const host = process.env.HOST || '0.0.0.0';
@@ -41,6 +42,7 @@ function writeJson(res, status, body) {
 
 async function runRelay() {
   const relaySecurity = createRuntimeRelaySecurityConfig(process.env);
+  const originGuardConfig = createRuntimeOriginGuardConfig(process.env);
   const relay = createRelay({
     allowedNodeIds: csvSet(process.env.TRUYN_ALLOWED_NODE_IDS),
     trustedRequesterNodeIds: csvSet(process.env.TRUYN_TRUSTED_REQUESTER_NODE_IDS),
@@ -48,10 +50,31 @@ async function runRelay() {
     allowPublicDispatch: relaySecurity.allowPublicDispatch,
     exposeDiagnostics: process.env.TRUYN_PRIVATE_DIAGNOSTICS === '1'
   });
-  await relay.listen({ host, port });
-  process.stdout.write(`${JSON.stringify({ ok: true, role: 'relay', ready: true })}\n`);
+
+  let originGuard = null;
+  try {
+    if (originGuardConfig.enabled) {
+      const internalUrl = await relay.listen({ host: '127.0.0.1', port: 0 });
+      const internalPort = Number(new URL(internalUrl).port);
+      originGuard = createOriginGuard({
+        targetHost: '127.0.0.1',
+        targetPort: internalPort,
+        token: originGuardConfig.token
+      });
+      await originGuard.listen({ host, port });
+    } else {
+      await relay.listen({ host, port });
+    }
+  } catch (error) {
+    await originGuard?.close().catch(() => {});
+    await relay.close().catch(() => {});
+    throw error;
+  }
+
+  process.stdout.write(`${JSON.stringify({ ok: true, role: 'relay', ready: true, originGuard: originGuardConfig.enabled })}\n`);
 
   const shutdown = async () => {
+    await originGuard?.close();
     await relay.close();
     process.exit(0);
   };
