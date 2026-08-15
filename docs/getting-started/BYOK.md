@@ -1,6 +1,6 @@
 # Bring Your Own Intelligence (BYOK)
 
-**Status:** first official CLI BYOK flow implemented for OpenAI, OpenAI-compatible, Anthropic, Azure OpenAI and Vertex Gemini profiles.
+**Status:** official CLI BYOK flow implemented for OpenAI, OpenAI-compatible, local OpenAI-compatible runtimes, Anthropic, Azure OpenAI, Vertex Gemini and generic custom HTTP providers.
 
 TRUYN is designed around **BYOK — Bring Your Own Intelligence / Bring Your Own Provider**.
 
@@ -57,27 +57,87 @@ The current setup implementation supports:
 ```text
 openai
 openai-compatible
+local
 anthropic
 azure-openai
 vertex-gemini
+custom-http
 ```
 
-Examples of provider-specific options:
+### OpenAI-compatible endpoint
 
 ```bash
-# OpenAI-compatible endpoint
 truyn setup \
   --provider openai-compatible \
   --base-url https://example.invalid \
   --model <model> \
   --credential-env MY_PROVIDER_KEY \
   --test
+```
 
-# Anthropic
+If an OpenAI-compatible endpoint intentionally requires no authentication, add `--no-auth`. Authentication is never silently disabled for normal OpenAI profiles.
+
+### Local model runtime
+
+`local` is an OpenAI Responses-compatible local endpoint with no authentication by default:
+
+```bash
+truyn setup \
+  --provider local \
+  --base-url http://127.0.0.1:11434 \
+  --model <local-model> \
+  --test
+```
+
+TRUYN sends the request to `<base-url>/v1/responses` and does not add an `Authorization` header for the `local` profile.
+
+### Generic custom HTTP provider
+
+`custom-http` sends a normalized JSON POST to the endpoint supplied by the user:
+
+```json
+{
+  "capability": "reasoning.general",
+  "input": "...",
+  "policy": {}
+}
+```
+
+The endpoint may return plain text, any JSON value, or a JSON object containing `output` and optional `metadata.usage`.
+
+No-auth example:
+
+```bash
+truyn setup \
+  --provider custom-http \
+  --endpoint http://127.0.0.1:9000/agent \
+  --capability reasoning.general \
+  --test
+```
+
+Optional bearer authentication is enabled only when the user explicitly provides a credential environment-variable name:
+
+```bash
+export MY_AGENT_TOKEN='...'
+truyn setup \
+  --provider custom-http \
+  --endpoint https://agent.example.test/v1/execute \
+  --credential-env MY_AGENT_TOKEN \
+  --test
+```
+
+The token value is resolved only by the provider runtime and is not persisted in the BYOK profile or returned in provider metadata.
+
+### Anthropic
+
+```bash
 export ANTHROPIC_API_KEY='...'
 truyn setup --provider anthropic --model <model> --test
+```
 
-# Azure OpenAI
+### Azure OpenAI
+
+```bash
 export AZURE_OPENAI_API_KEY='...'
 truyn setup \
   --provider azure-openai \
@@ -88,9 +148,13 @@ truyn setup \
 
 Azure OpenAI may also use the existing runtime managed-identity path when it is available.
 
+### Vertex Gemini
+
 The current Vertex Gemini adapter obtains its token from the Google metadata-service runtime path. Therefore `vertex-gemini` setup is suitable in that configured Google runtime environment; this implementation does **not** yet claim a universal desktop Google ADC/login flow.
 
-Local-model and arbitrary custom HTTP/MCP provider profiles remain future onboarding work. MCP and HTTP are already TRUYN interoperability surfaces, but they are not yet implemented as `truyn setup` provider profile types.
+## What is not yet a setup profile
+
+A generic custom MCP **provider profile** is not yet implemented in `truyn setup`. MCP is already a TRUYN interoperability/requester surface, but custom MCP provider onboarding remains a separate future slice.
 
 ## Credential rule
 
@@ -102,7 +166,8 @@ The persisted profile contains non-secret configuration such as:
 provider type
 model
 base URL / endpoint where applicable
-credential environment-variable name
+auth mode
+credential environment-variable name where applicable
 capabilities
 requester node ID
 provider node ID
@@ -111,7 +176,7 @@ accessMode = owner-only
 billingMode = byok
 ```
 
-It does **not** contain the resolved API-key value.
+It does **not** contain the resolved API-key/bearer-token value.
 
 The current implementation relies on the user's environment or cloud runtime identity for secret material. OS credential/key-store integration is not yet implemented, so this document does not claim it.
 
