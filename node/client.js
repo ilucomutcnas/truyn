@@ -146,6 +146,42 @@ export class TruynNode {
     };
   }
 
+  async compactChain(stages, { waitMs = 120_000 } = {}) {
+    if (!this.sessionToken) throw new Error('Node must register before compact CHAIN');
+    if (!Array.isArray(stages) || stages.length < 2) throw new Error('compactChain requires at least two stages');
+    const payload = { stages };
+    const frame = this.compactFrame('CHAIN', payload);
+    const response = await requestJson(`${this.relayUrl}/v1/fast/chains?waitMs=${Math.max(0, Math.floor(waitMs))}`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${this.sessionToken}` },
+      body: JSON.stringify({ frame, payload })
+    });
+
+    const verifiedResults = [];
+    for (const event of response.results || []) {
+      const publicKey = await this.resolveIdentity(event.from);
+      const verification = verifyCompactFrame(event.frame, event.payload, publicKey, { allowedTypes: ['RESULT'] });
+      if (!verification.ok) throw new Error(`Compact CHAIN RESULT verification failed: ${verification.reason}`);
+      verifiedResults.push({ ...event, verification });
+    }
+
+    const chainFrameBytes = compactFrameBytes(frame);
+    const resultFrameBytes = verifiedResults.map((event) => compactFrameBytes(event.frame));
+    const resultPayloadBytes = verifiedResults.map((event) => bytes(event.payload));
+    return {
+      ...response,
+      frame,
+      payload,
+      results: verifiedResults,
+      chainFrameBytes,
+      resultFrameBytes,
+      protocolOverheadBytes: chainFrameBytes + resultFrameBytes.reduce((sum, value) => sum + value, 0),
+      chainPayloadBytes: bytes(payload),
+      resultPayloadBytes,
+      truynPayloadBytes: bytes(payload) + resultPayloadBytes.reduce((sum, value) => sum + value, 0)
+    };
+  }
+
   async result(requestId, output, metadata = {}) {
     const envelope = this.envelope('RESULT', {
       requestId,
@@ -209,10 +245,19 @@ export class TruynNode {
 
     const events = await Promise.all((result.events || []).map(async (event) => {
       const publicKey = await this.resolveIdentity(event.from);
-      return {
-        ...event,
-        verification: verifyCompactFrame(event.frame, event.payload, publicKey, { allowedTypes: [event.kind] })
-      };
+      const signedType = event.signedType || event.kind;
+      const verification = verifyCompactFrame(event.frame, event.payload, publicKey, { allowedTypes: [signedType] });
+      let priorVerification = null;
+      if (event.priorResult) {
+        const priorPublicKey = await this.resolveIdentity(event.priorResult.from);
+        priorVerification = verifyCompactFrame(
+          event.priorResult.frame,
+          event.priorResult.payload,
+          priorPublicKey,
+          { allowedTypes: ['RESULT'] }
+        );
+      }
+      return { ...event, verification, priorVerification };
     }));
     return { ...result, events };
   }
