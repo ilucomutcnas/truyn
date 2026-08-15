@@ -1,0 +1,35 @@
+name: Clean relay trace generated artifacts
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/cleanup-relay-trace-generated.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Remove generated install artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          git rm -r node_modules
+          git rm package-lock.json
+          git rm .github/workflows/cleanup-relay-trace-generated.yml
+          git diff --check
+      - name: Commit cleanup
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'Remove generated relay trace patch artifacts'
+          git push origin HEAD:main
