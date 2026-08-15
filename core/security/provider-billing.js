@@ -5,6 +5,13 @@ function nonNegativeInteger(value, fallback = 0) {
   return Number.isInteger(number) && number >= 0 ? number : fallback;
 }
 
+function optionalNonNegativeInteger(value) {
+  if (value === null || value === undefined || String(value).trim() === '') return null;
+  const number = Number(value);
+  if (!Number.isInteger(number) || number < 0) throw new Error('ownerDailyRequestLimit must be a non-negative integer');
+  return number;
+}
+
 function utcDayKey(date = new Date()) {
   return date.toISOString().slice(0, 10);
 }
@@ -14,6 +21,7 @@ export function createProviderBillingPolicy({
   sponsoredAccess = false,
   freeDailyRequests = 0,
   freeDailyTokens = 0,
+  ownerDailyRequestLimit = null,
   now = () => new Date()
 } = {}) {
   const normalizedMode = String(mode).trim().toLowerCase();
@@ -21,6 +29,7 @@ export function createProviderBillingPolicy({
 
   const requestLimit = nonNegativeInteger(freeDailyRequests);
   const tokenLimit = nonNegativeInteger(freeDailyTokens);
+  const ownerRequestLimit = optionalNonNegativeInteger(ownerDailyRequestLimit);
   const usage = new Map();
 
   function usageFor(requesterId) {
@@ -58,6 +67,23 @@ export function createProviderBillingPolicy({
     if (normalizedMode === 'owner-funded') {
       if (accessPolicy.mode !== 'owner-only') {
         return { ok: false, mode: normalizedMode, reason: 'owner_paid_external_access_disabled' };
+      }
+      if (ownerRequestLimit !== null) {
+        if (ownerRequestLimit <= 0) {
+          return { ok: false, mode: normalizedMode, reason: 'owner_request_quota_zero' };
+        }
+        const current = usageFor(requesterId);
+        if (current.requests >= ownerRequestLimit) {
+          return { ok: false, mode: normalizedMode, reason: 'owner_request_quota_exhausted' };
+        }
+        current.requests += 1;
+        return {
+          ok: true,
+          mode: normalizedMode,
+          requesterId,
+          billingResponsibility: 'provider-owner',
+          remainingOwnerRequests: ownerRequestLimit - current.requests
+        };
       }
       return {
         ok: true,
@@ -101,6 +127,7 @@ export function createProviderBillingPolicy({
     sponsoredAccess: Boolean(sponsoredAccess),
     freeDailyRequests: requestLimit,
     freeDailyTokens: tokenLimit,
+    ownerDailyRequestLimit: ownerRequestLimit,
     authorize
   };
 }
