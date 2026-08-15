@@ -1,0 +1,34 @@
+name: Dispatch unchanged context efficiency rerun
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/dispatch-context-efficiency-rerun.yml'
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Verify canonical context relay and dispatch exact benchmark
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          curl -fsS https://relay.truyn.org/health | jq -e '.ok == true and .fastPath == true and .chainPath == true and .socketPath == true and (.contexts != null)' >/dev/null
+          gh workflow run cloud-poc-context-efficiency-ab.yml --repo inn-media/truyn --ref main
+      - name: Remove one-shot dispatcher
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git rm .github/workflows/dispatch-context-efficiency-rerun.yml
+          git commit -m 'Remove context efficiency rerun dispatcher'
+          git push origin HEAD:main
