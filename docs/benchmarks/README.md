@@ -19,7 +19,7 @@ Credentials, private keys, privileged cloud identities, private origins, secret-
 
 Deleting or replacing a measured report with a summary/stub is not an acceptable security response. If a published report is proven invalid or duplicated, retain an explicit tombstone/correction that points to the superseding evidence rather than silently removing the record.
 
-The repository regression suite treats the baseline evidence files below as protected and fails if they disappear or are replaced by trivial stubs.
+The repository regression suite treats the evidence files below as protected and fails if they disappear or are replaced by trivial stubs.
 
 ## Current evidence ledger
 
@@ -29,6 +29,7 @@ The repository regression suite treats the baseline evidence files below as prot
 - [`CROSS_CLOUD_8X_OPTIMIZATION_2026-08-15.md`](CROSS_CLOUD_8X_OPTIMIZATION_2026-08-15.md) — fixed 8× hot-path optimization gate; measured protocol and orchestration overhead.
 - [`CONTEXT_EFFICIENCY_2026-08-15.md`](CONTEXT_EFFICIENCY_2026-08-15.md) — content-addressed context and signed-delta economic A/B gate.
 - [`SEMANTIC_RETRIEVAL_GATE_2026-08-15.md`](SEMANTIC_RETRIEVAL_GATE_2026-08-15.md) — question + root CID semantic retrieval, provenance, token and cost gate.
+- [`SEMANTIC_RETRIEVAL_MULTI_ACTOR_2026-08-15.md`](SEMANTIC_RETRIEVAL_MULTI_ACTOR_2026-08-15.md) — seven heterogeneous actor extension: 192/192 retrieval, 56/56 provider stages and 97.313% mean input-token reduction.
 
 ### Methodology / planned parity
 
