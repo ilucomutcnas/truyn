@@ -127,7 +127,7 @@ test('compact long-poll NEED returns signed RESULT synchronously with <= 250 pro
   assert.ok(result.protocolOverheadBytes <= 250, `compact transaction overhead was ${result.protocolOverheadBytes} bytes`);
 });
 
-test('single signed CHAIN executes two providers in one requester round trip with <= 375 protocol bytes', async (t) => {
+test('single signed CHAIN executes two providers over persistent sockets with <= 375 protocol bytes', async (t) => {
   const relay = createRelay();
   const relayUrl = await relay.listen({ port: 0 });
   t.after(() => relay.close());
@@ -135,12 +135,14 @@ test('single signed CHAIN executes two providers in one requester round trip wit
   const researchNode = new TruynNode({ relayUrl });
   const reviewNode = new TruynNode({ relayUrl });
   const requester = new TruynNode({ relayUrl });
+  t.after(() => researchNode.closeFastSocket());
+  t.after(() => reviewNode.closeFastSocket());
   let reviewedCandidate = null;
 
   const researchHost = new TruynAdapterHost({
     node: researchNode,
     fastPath: true,
-    longPollMs: 2_000,
+    socketPath: true,
     adapter: createFunctionAdapter({
       name: 'research-test',
       capabilities: ['research'],
@@ -150,7 +152,7 @@ test('single signed CHAIN executes two providers in one requester round trip wit
   const reviewHost = new TruynAdapterHost({
     node: reviewNode,
     fastPath: true,
-    longPollMs: 2_000,
+    socketPath: true,
     adapter: createFunctionAdapter({
       name: 'review-test',
       capabilities: ['review'],
@@ -189,6 +191,7 @@ test('single signed CHAIN executes two providers in one requester round trip wit
   assert.equal(reviewedCandidate, 'candidate:TRUYN');
   assert.notEqual(result.results[0].from, result.results[1].from);
   assert.ok(result.protocolOverheadBytes <= 375, `chain protocol overhead was ${result.protocolOverheadBytes} bytes`);
+  assert.equal(relay.state.providerSockets.size, 2);
 });
 
 test('relay excludes stale OFFERs and routes to the live replacement provider', async (t) => {
