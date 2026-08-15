@@ -192,6 +192,16 @@ test('single signed CHAIN executes two providers over persistent sockets with <=
   assert.notEqual(result.results[0].from, result.results[1].from);
   assert.ok(result.protocolOverheadBytes <= 375, `chain protocol overhead was ${result.protocolOverheadBytes} bytes`);
   assert.equal(relay.state.providerSockets.size, 2);
+
+  const traceResponse = await fetch(`${relayUrl}/v1/fast/chains/${encodeURIComponent(result.chainId)}/trace`, {
+    headers: { authorization: `Bearer ${requester.sessionToken}` }
+  });
+  assert.equal(traceResponse.status, 200);
+  const traceBody = await traceResponse.json();
+  assert.equal(traceBody.ok, true);
+  assert.deepEqual(traceBody.trace.stageTransport, ['socket', 'socket']);
+  assert.ok(Number.isFinite(traceBody.trace.relayTotalMs));
+  for (const value of Object.values(traceBody.trace.segments)) assert.ok(Number.isFinite(value));
 });
 
 test('relay excludes stale OFFERs and routes to the live replacement provider', async (t) => {

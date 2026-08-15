@@ -201,6 +201,20 @@ async function relayRead(label, operation) {
 const requester = new TruynNode({ relayUrl, identity: createIdentity() });
 const routeCache = new Map();
 
+async function fetchRelayChainTrace(chainId) {
+  const traceUrl = `${relayUrl}/v1/fast/chains/${encodeURIComponent(chainId)}/trace`;
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const response = await fetch(traceUrl, {
+      headers: { authorization: `Bearer ${requester.sessionToken}` }
+    });
+    const body = await response.json();
+    if (response.ok) return body.trace;
+    if (response.status !== 409) throw new Error(body.error || `Trace HTTP ${response.status}`);
+    await sleep(10);
+  }
+  throw new Error('Timed out waiting for relay chain trace flush');
+}
+
 async function prepareTruynHotPath(timeoutMs = 180_000) {
   await requester.register({ name: 'cross-cloud-ab-v2-chain-requester' });
   const capabilities = ['research', 'review'];
@@ -269,6 +283,16 @@ async function truynChain() {
   const gemini = summarizeProvider(geminiRaw, 'gemini');
   const providerBodyBytes = (azure.providerBodyBytes || 0) + (gemini.providerBodyBytes || 0);
   const providerLatencyMs = (azure.providerLatencyMs || 0) + (gemini.providerLatencyMs || 0);
+  const relayTrace = await fetchRelayChainTrace(chain.chainId);
+  const relaySegments = relayTrace.segments || {};
+  const orchestrationBreakdown = {
+    edgeIngressEgressResidualMs: round(Math.max(0, endToEndLatencyMs - (relayTrace.relayTotalMs || 0)), 3),
+    relayIngressToStage1DispatchMs: relaySegments.publicRequestToStage1SocketDispatchMs,
+    stage1SocketNonProviderMs: round(Math.max(0, (relaySegments.stage1SocketDispatchToResultReceivedMs || 0) - (azure.providerLatencyMs || 0)), 3),
+    relayStageTransitionMs: relaySegments.stage1ResultToStage2SocketDispatchMs,
+    stage2SocketNonProviderMs: round(Math.max(0, (relaySegments.stage2SocketDispatchToResultReceivedMs || 0) - (gemini.providerLatencyMs || 0)), 3),
+    relayStage2ResultToResponseFlushedMs: relaySegments.stage2ResultToResponseFlushedMs
+  };
   const protocolOverheadBytes = chain.protocolOverheadBytes;
   const truynPayloadBytes = chain.truynPayloadBytes;
 
@@ -289,6 +313,8 @@ async function truynChain() {
     endToEndLatencyMs,
     providerLatencyMs,
     orchestrationOverheadMs: endToEndLatencyMs - providerLatencyMs,
+    relayTrace,
+    orchestrationBreakdown,
     azure,
     gemini,
     aggregate: {
@@ -337,7 +363,23 @@ function aggregateMode(samples) {
     protocolOverheadBytes: stats(samples, (sample) => sample.aggregate.protocolOverheadBytes),
     truynPayloadBytes: stats(samples, (sample) => sample.aggregate.truynPayloadBytes),
     measuredApplicationBodyBytes: stats(samples, (sample) => sample.aggregate.measuredApplicationBodyBytes),
-    estimatedCostUsd: stats(samples, (sample) => sample.aggregate.estimatedCost?.totalUsd, 9)
+    estimatedCostUsd: stats(samples, (sample) => sample.aggregate.estimatedCost?.totalUsd, 9),
+    relayTrace: {
+      relayTotalMs: stats(samples, (sample) => sample.relayTrace?.relayTotalMs),
+      publicRequestToStage1SocketDispatchMs: stats(samples, (sample) => sample.relayTrace?.segments?.publicRequestToStage1SocketDispatchMs),
+      stage1SocketDispatchToResultReceivedMs: stats(samples, (sample) => sample.relayTrace?.segments?.stage1SocketDispatchToResultReceivedMs),
+      stage1ResultToStage2SocketDispatchMs: stats(samples, (sample) => sample.relayTrace?.segments?.stage1ResultToStage2SocketDispatchMs),
+      stage2SocketDispatchToResultReceivedMs: stats(samples, (sample) => sample.relayTrace?.segments?.stage2SocketDispatchToResultReceivedMs),
+      stage2ResultToResponseFlushedMs: stats(samples, (sample) => sample.relayTrace?.segments?.stage2ResultToResponseFlushedMs)
+    },
+    orchestrationBreakdown: {
+      edgeIngressEgressResidualMs: stats(samples, (sample) => sample.orchestrationBreakdown?.edgeIngressEgressResidualMs),
+      relayIngressToStage1DispatchMs: stats(samples, (sample) => sample.orchestrationBreakdown?.relayIngressToStage1DispatchMs),
+      stage1SocketNonProviderMs: stats(samples, (sample) => sample.orchestrationBreakdown?.stage1SocketNonProviderMs),
+      relayStageTransitionMs: stats(samples, (sample) => sample.orchestrationBreakdown?.relayStageTransitionMs),
+      stage2SocketNonProviderMs: stats(samples, (sample) => sample.orchestrationBreakdown?.stage2SocketNonProviderMs),
+      relayStage2ResultToResponseFlushedMs: stats(samples, (sample) => sample.orchestrationBreakdown?.relayStage2ResultToResponseFlushedMs)
+    }
   };
 }
 function reductionPercent(baseline, candidate) {
@@ -408,6 +450,11 @@ const protocolFactor = improvementFactor(optimizationBaseline.protocolOverheadBy
 const orchestrationFactor = improvementFactor(optimizationBaseline.orchestrationOverheadMs, truyn.orchestrationOverheadMs.mean);
 const directCost = direct.estimatedCostUsd.mean;
 const truynCost = truyn.estimatedCostUsd.mean;
+const orchestrationComponentMeans = Object.entries(truyn.orchestrationBreakdown || {})
+  .map(([name, value]) => ({ name, meanMs: value?.mean }))
+  .filter((entry) => Number.isFinite(entry.meanMs))
+  .sort((a, b) => b.meanMs - a.meanMs);
+const orchestrationBottleneck = orchestrationComponentMeans[0] || null;
 
 const optimizationGate = {
   baseline: optimizationBaseline,
@@ -457,6 +504,18 @@ const report = {
   relayUrl,
   pricing: rates,
   optimizationGate,
+  diagnostics: {
+    relayTraceAvailable: true,
+    traceSegments: [
+      'public request received -> stage1 socket dispatch',
+      'stage1 socket dispatch -> stage1 result received',
+      'stage1 result received -> stage2 socket dispatch',
+      'stage2 socket dispatch -> stage2 result received',
+      'stage2 result received -> HTTP response flushed'
+    ],
+    orchestrationBottleneck,
+    orchestrationComponentMeans
+  },
   aggregate: { direct, truyn },
   claims: {
     tokenReductionPercent: reductionPercent(direct.providerTotalTokens.mean, truyn.providerTotalTokens.mean),

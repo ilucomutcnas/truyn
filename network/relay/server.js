@@ -1,5 +1,6 @@
 import http from 'node:http';
 import { randomBytes } from 'node:crypto';
+import { performance } from 'node:perf_hooks';
 import { WebSocket, WebSocketServer } from 'ws';
 import { compactStageRequestId, verifyCompactFrame, verifyEnvelope } from '../../core/protocol/index.js';
 import { trustabilityLite } from '../../core/trust/index.js';
@@ -35,6 +36,37 @@ function boundedWaitMs(url, fallback = 0, max = 120_000) {
 
 function capabilityName(stage) {
   return stage?.capability?.name || stage?.capability || null;
+}
+
+const roundMs = (value) => Number(value.toFixed(3));
+
+function traceMark(chain, name, monotonicMs = performance.now(), wallTime = new Date().toISOString()) {
+  if (!chain?.trace) return;
+  chain.trace.marks[name] = { monotonicMs, wallTime };
+}
+
+function chainTraceSnapshot(chain) {
+  const marks = chain.trace?.marks || {};
+  const delta = (from, to) => {
+    const start = marks[from]?.monotonicMs;
+    const end = marks[to]?.monotonicMs;
+    return Number.isFinite(start) && Number.isFinite(end) ? roundMs(Math.max(0, end - start)) : null;
+  };
+  const segments = {
+    publicRequestToStage1SocketDispatchMs: delta('publicRequestReceived', 'stage1SocketDispatch'),
+    stage1SocketDispatchToResultReceivedMs: delta('stage1SocketDispatch', 'stage1ResultReceived'),
+    stage1ResultToStage2SocketDispatchMs: delta('stage1ResultReceived', 'stage2SocketDispatch'),
+    stage2SocketDispatchToResultReceivedMs: delta('stage2SocketDispatch', 'stage2ResultReceived'),
+    stage2ResultToResponseFlushedMs: delta('stage2ResultReceived', 'responseFlushed')
+  };
+  return {
+    chainId: chain.chainId,
+    status: chain.status,
+    marks,
+    stageTransport: chain.trace?.stageTransport || [],
+    segments,
+    relayTotalMs: delta('publicRequestReceived', 'responseFlushed')
+  };
 }
 
 export function createRelay({ nodeFreshnessMs = 15_000 } = {}) {
@@ -108,17 +140,18 @@ export function createRelay({ nodeFreshnessMs = 15_000 } = {}) {
   }
 
   function queueFast(nodeId, event) {
-    if (sendSocketEvent(nodeId, event)) return;
+    if (sendSocketEvent(nodeId, event)) return 'socket';
     const waiter = fastWaiters.get(nodeId);
     if (waiter && !waiter.res.writableEnded) {
       removeFastWaiter(nodeId, waiter);
       touch(nodeId);
       json(waiter.res, 200, { ok: true, events: [event] });
-      return;
+      return 'long-poll';
     }
     const queueForNode = fastEvents.get(nodeId) || [];
     queueForNode.push(event);
     fastEvents.set(nodeId, queueForNode);
+    return 'queued';
   }
 
   function authenticatedNodeId(req) {
@@ -185,7 +218,10 @@ export function createRelay({ nodeFreshnessMs = 15_000 } = {}) {
     if (chain.timer) clearTimeout(chain.timer);
     chain.status = status === 200 ? 'completed' : 'failed';
     chain.completedAt = new Date().toISOString();
-    if (!chain.res.writableEnded) json(chain.res, status, body);
+    if (!chain.res.writableEnded) {
+      chain.res.once('finish', () => traceMark(chain, 'responseFlushed'));
+      json(chain.res, status, body);
+    }
   }
 
   function dispatchChainStage(chain, stageIndex) {
@@ -219,7 +255,7 @@ export function createRelay({ nodeFreshnessMs = 15_000 } = {}) {
     chain.providerTrust[stageIndex] = trustFor(match.envelope.from);
     chain.currentStage = stageIndex;
 
-    queueFast(match.envelope.from, {
+    const transport = queueFast(match.envelope.from, {
       kind: 'CHAIN_STAGE',
       signedType: 'CHAIN',
       frame: chain.frame,
@@ -229,10 +265,12 @@ export function createRelay({ nodeFreshnessMs = 15_000 } = {}) {
       requestId,
       priorResult: stageIndex > 0 ? chain.results[stageIndex - 1] : null
     });
+    chain.trace.stageTransport[stageIndex] = transport;
+    traceMark(chain, stageIndex === 0 ? 'stage1SocketDispatch' : 'stage2SocketDispatch');
     return true;
   }
 
-  function processFastResult(providerNodeId, frame, payload) {
+  function processFastResult(providerNodeId, frame, payload, receivedAtMs = performance.now()) {
     const provider = nodes.get(providerNodeId);
     if (!provider) return { status: 401, body: { ok: false, error: 'node_not_registered' } };
     const verification = verifyCompactFrame(frame, payload, provider.publicKey, { allowedTypes: ['RESULT'] });
@@ -249,6 +287,7 @@ export function createRelay({ nodeFreshnessMs = 15_000 } = {}) {
     if (request.mode === 'chain-stage') {
       const chain = chains.get(request.chainId);
       if (!chain || chain.status !== 'running') return { status: 409, body: { ok: false, error: 'chain_not_running' } };
+      traceMark(chain, request.stageIndex === 0 ? 'stage1ResultReceived' : 'stage2ResultReceived', receivedAtMs);
       chain.results[request.stageIndex] = event;
       if (payload?.metadata?.failed) {
         closeChain(chain, 200, {
@@ -285,6 +324,8 @@ export function createRelay({ nodeFreshnessMs = 15_000 } = {}) {
   }
 
   const server = http.createServer(async (req, res) => {
+    const requestReceivedAtMs = performance.now();
+    const requestReceivedWallTime = new Date().toISOString();
     try {
       const url = new URL(req.url, 'http://relay.local');
 
@@ -397,7 +438,16 @@ export function createRelay({ nodeFreshnessMs = 15_000 } = {}) {
           currentStage: -1,
           providers: [],
           providerTrust: [],
-          results: []
+          results: [],
+          trace: {
+            marks: {
+              publicRequestReceived: {
+                monotonicMs: requestReceivedAtMs,
+                wallTime: requestReceivedWallTime
+              }
+            },
+            stageTransport: []
+          }
         };
         chain.timer = setTimeout(() => {
           if (chain.status !== 'running') return;
@@ -454,8 +504,20 @@ export function createRelay({ nodeFreshnessMs = 15_000 } = {}) {
         const providerNodeId = authenticatedNodeId(req);
         if (!providerNodeId) return json(res, 401, { ok: false, error: 'unauthorized' });
         const { frame, payload } = await readJson(req);
-        const processed = processFastResult(providerNodeId, frame, payload);
+        const processed = processFastResult(providerNodeId, frame, payload, requestReceivedAtMs);
         return json(res, processed.status, processed.body);
+      }
+
+      if (req.method === 'GET' && url.pathname.startsWith('/v1/fast/chains/') && url.pathname.endsWith('/trace')) {
+        const requesterNodeId = authenticatedNodeId(req);
+        if (!requesterNodeId) return json(res, 401, { ok: false, error: 'unauthorized' });
+        const encodedChainId = url.pathname.slice('/v1/fast/chains/'.length, -'/trace'.length);
+        const chainId = decodeURIComponent(encodedChainId);
+        const chain = chains.get(chainId);
+        if (!chain) return json(res, 404, { ok: false, error: 'chain_not_found' });
+        if (chain.requester !== requesterNodeId) return json(res, 403, { ok: false, error: 'requester_mismatch' });
+        if (!chain.trace?.marks?.responseFlushed) return json(res, 409, { ok: false, error: 'chain_trace_not_flushed' });
+        return json(res, 200, { ok: true, trace: chainTraceSnapshot(chain) });
       }
 
       if (req.method === 'GET' && url.pathname === '/v1/fast/events') {
@@ -589,11 +651,12 @@ export function createRelay({ nodeFreshnessMs = 15_000 } = {}) {
       touch(nodeId);
     });
     socket.on('message', (data) => {
+      const receivedAtMs = performance.now();
       try {
         touch(nodeId);
         const message = JSON.parse(data.toString());
         if (message?.kind !== 'RESULT') throw new Error('unsupported_socket_message');
-        const processed = processFastResult(nodeId, message.frame, message.payload);
+        const processed = processFastResult(nodeId, message.frame, message.payload, receivedAtMs);
         if (socket.readyState === WebSocket.OPEN) {
           socket.send(JSON.stringify({ kind: 'ACK', ...processed.body, status: processed.status }));
         }
