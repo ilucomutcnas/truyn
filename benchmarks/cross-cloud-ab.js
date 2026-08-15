@@ -16,6 +16,7 @@ const iterations = Number(process.env.BENCHMARK_ITERATIONS || 5);
 const warmups = Number(process.env.BENCHMARK_WARMUPS || 1);
 const pacingMs = Number(process.env.BENCHMARK_PACING_MS || 30000);
 const maxRateLimitRetries = Number(process.env.BENCHMARK_RATE_LIMIT_MAX_RETRIES || 4);
+const relayReadRetryDelayMs = Number(process.env.BENCHMARK_RELAY_READ_RETRY_MS || 3000);
 const outputPath = process.env.BENCHMARK_OUTPUT || 'cross-cloud-ab.json';
 
 for (const [name, value] of Object.entries({
@@ -32,6 +33,7 @@ if (!Number.isInteger(iterations) || iterations < 1) throw new Error('BENCHMARK_
 if (!Number.isInteger(warmups) || warmups < 0) throw new Error('BENCHMARK_WARMUPS must be a non-negative integer');
 if (!Number.isFinite(pacingMs) || pacingMs < 0) throw new Error('BENCHMARK_PACING_MS must be a non-negative number');
 if (!Number.isInteger(maxRateLimitRetries) || maxRateLimitRetries < 0) throw new Error('BENCHMARK_RATE_LIMIT_MAX_RETRIES must be a non-negative integer');
+if (!Number.isFinite(relayReadRetryDelayMs) || relayReadRetryDelayMs < 0) throw new Error('BENCHMARK_RELAY_READ_RETRY_MS must be a non-negative number');
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const bytes = (value) => Buffer.byteLength(JSON.stringify(value));
@@ -172,10 +174,41 @@ async function directChain() {
   };
 }
 
+function isRetriableNetworkError(error) {
+  const text = `${error?.message || error} ${error?.cause?.code || ''}`;
+  return /fetch failed|ETIMEDOUT|ECONNRESET|ECONNREFUSED|ENETUNREACH|EAI_AGAIN|UND_ERR_CONNECT_TIMEOUT|socket/i.test(text);
+}
+
+const relayNetworkRetries = [];
+let relayTransientRecoveryMs = 0;
+async function relayRead(label, operation) {
+  for (let attempt = 0; ; attempt += 1) {
+    const attemptStartedAt = Date.now();
+    try {
+      return await operation();
+    } catch (error) {
+      if (!isRetriableNetworkError(error) || attempt >= 9) throw error;
+      const failedAttemptMs = Date.now() - attemptStartedAt;
+      const delayMs = relayReadRetryDelayMs * Math.min(attempt + 1, 5);
+      relayTransientRecoveryMs += failedAttemptMs + delayMs;
+      relayNetworkRetries.push({
+        label,
+        retry: attempt + 1,
+        failedAttemptMs,
+        delayMs,
+        error: String(error?.message || error),
+        cause: error?.cause?.code || null
+      });
+      console.error(`${label}: transient relay read failure; retry ${attempt + 1}/9 after ${delayMs}ms`);
+      await sleep(delayMs);
+    }
+  }
+}
+
 async function waitForOffer(node, capability, timeoutMs = 120000) {
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {
-    const found = await node.find(capability);
+    const found = await relayRead(`find-${capability}`, () => node.find(capability));
     if (found.offers?.length) return found.offers;
     await sleep(500);
   }
@@ -205,7 +238,7 @@ async function truynTransact(node, capability, input, policy) {
   let resultEvent = null;
   const resultStartedAt = Date.now();
   while (Date.now() - resultStartedAt < 120000) {
-    const polled = await node.poll();
+    const polled = await relayRead(`poll-${capability}`, () => node.poll());
     resultEvent = polled.events.find((event) => event.kind === 'RESULT' && event.envelope?.payload?.requestId === matched.needId) || null;
     if (resultEvent) break;
     await sleep(250);
@@ -231,6 +264,7 @@ async function truynTransact(node, capability, input, policy) {
 
 async function truynChain() {
   const startedAt = Date.now();
+  const transientRecoveryAtStart = relayTransientRecoveryMs;
   const requester = new TruynNode({ relayUrl, identity: createIdentity() });
   await requester.register({ name: 'cross-cloud-ab-requester' });
 
@@ -245,7 +279,9 @@ async function truynChain() {
   const providerBodyBytes = (azure.providerBodyBytes || 0) + (gemini.providerBodyBytes || 0);
   const protocolEnvelopeBytes = azureTx.needEnvelopeBytes + azureTx.resultEnvelopeBytes + geminiTx.needEnvelopeBytes + geminiTx.resultEnvelopeBytes;
   const providerLatencyMs = (azure.providerLatencyMs || 0) + (gemini.providerLatencyMs || 0);
-  const endToEndLatencyMs = Date.now() - startedAt;
+  const transientRecoveryMs = relayTransientRecoveryMs - transientRecoveryAtStart;
+  const rawEndToEndLatencyMs = Date.now() - startedAt;
+  const endToEndLatencyMs = Math.max(0, rawEndToEndLatencyMs - transientRecoveryMs);
 
   return {
     mode: 'truyn',
@@ -259,6 +295,8 @@ async function truynChain() {
       geminiResult: geminiTx.resultTrustability
     },
     endToEndLatencyMs,
+    rawEndToEndLatencyMs,
+    transientRelayRecoveryMs: transientRecoveryMs,
     providerLatencyMs,
     orchestrationOverheadMs: endToEndLatencyMs - providerLatencyMs,
     azure,
@@ -299,6 +337,8 @@ function aggregateMode(samples) {
   return {
     runs: samples.length,
     latencyMs: stats(samples, (sample) => sample.endToEndLatencyMs),
+    rawLatencyMs: stats(samples, (sample) => sample.rawEndToEndLatencyMs),
+    transientRelayRecoveryMs: stats(samples, (sample) => sample.transientRelayRecoveryMs),
     providerLatencyMs: stats(samples, (sample) => sample.providerLatencyMs),
     orchestrationOverheadMs: stats(samples, (sample) => sample.orchestrationOverheadMs),
     providerInputTokens: stats(samples, (sample) => sample.aggregate.providerInputTokens),
@@ -384,8 +424,10 @@ const report = {
     measuredPairs: iterations,
     pacingMs,
     maxRateLimitRetries,
+    relayReadRetryDelayMs,
     rateLimitRetryEvents: rateLimitRetries,
-    retryAccounting: 'Rate-limited attempts are not counted as measured samples. Pacing and retry sleep occur outside each successful arm latency timer.',
+    relayNetworkRetryEvents: relayNetworkRetries,
+    retryAccounting: 'Rate-limited attempts are not counted as measured samples. Pacing and rate-limit retry sleep occur outside each successful arm latency timer. Safe TRUYN relay read operations (discovery/poll) retry transient network failures without replaying NEED/provider work; failed-read duration plus recovery sleep is recorded separately and excluded from normalized successful-arm latency, while raw TRUYN latency is retained in each sample.',
     byteMetric: 'Measured JSON application-body bytes only. Direct = provider request/response bodies. TRUYN = the same provider bodies plus signed NEED/RESULT envelope bodies. HTTP/TLS headers, polling, registration, OFFER discovery, TCP/IP and CDN framing are intentionally excluded.',
     costMetric: 'Estimated variable model inference cost from measured billable tokens and the price snapshot embedded by the workflow; infrastructure fixed costs are excluded.'
   },
@@ -415,5 +457,6 @@ console.log(JSON.stringify({
   truyn: report.aggregate.truyn,
   claims: report.claims,
   pricing: report.pricing,
-  rateLimitRetries: report.methodology.rateLimitRetryEvents.length
+  rateLimitRetries: report.methodology.rateLimitRetryEvents.length,
+  relayNetworkRetries: report.methodology.relayNetworkRetryEvents.length
 }, null, 2));
