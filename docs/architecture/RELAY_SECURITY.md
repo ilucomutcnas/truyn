@@ -1,6 +1,6 @@
 # TRUYN Relay Security Architecture
 
-**Status:** relay/provider authorization core and an optional reference origin guard are implemented; deployment-specific edge/origin activation remains operational work.
+**Status:** relay/provider authorization core, an optional reference origin guard, and a generic Cloudflare edge proxy are implemented; deployment-specific edge/origin activation remains operational work.
 
 ## Public relay, private intelligence
 
@@ -60,7 +60,7 @@ The owner control plane SHOULD NOT share the same trust assumptions as the publi
 
 ## Reference origin guard
 
-The reference runtime now contains an optional origin-guard layer for deployments that expose the relay through a trusted edge.
+The reference runtime contains an optional origin-guard layer for deployments that expose the relay through a trusted edge.
 
 When enabled:
 
@@ -75,6 +75,23 @@ When enabled:
 The comparison is constant-time for equal-length tokens. The regression suite covers HTTP denial, WebSocket denial, secret stripping, minimal health output and runtime loopback wiring.
 
 This is an **implementation capability**, not a claim that a particular production origin is already protected. Edge configuration, token provisioning/rotation, firewall/tunnel policy and direct-origin denial remain deployment-specific operational controls and must be verified separately.
+
+## Reference Cloudflare edge proxy
+
+The public reference code also contains a generic Cloudflare Worker-compatible proxy that pairs with the origin guard without making the origin secret a TRUYN client credential.
+
+Its fail-closed behavior is:
+
+- the origin URL and origin-guard token must both be supplied through Worker bindings;
+- only an HTTPS origin without embedded credentials or path/query configuration is accepted;
+- any origin-proof header supplied by the public requester is discarded and replaced with the Worker secret;
+- request path, query, method, body, requester authorization and WebSocket upgrade headers are preserved for the origin;
+- redirects are handled manually so the origin proof is not automatically forwarded to a redirect target;
+- proxy failures return a sanitized error without binding values or upstream exception details.
+
+Cloudflare Workers supports secrets through the request `env` binding and supports upstream WebSocket establishment through `fetch` with an Upgrade request. The TRUYN implementation deliberately reads bindings per request so secret rotation is not hidden behind cached module-global configuration.
+
+No concrete Worker name, route, origin hostname or secret value belongs in the public repository. Deployment and proof that the production DNS path actually traverses the Worker remain private operational steps.
 
 ## Legacy-route rule
 
@@ -94,7 +111,7 @@ The architecture reserves explicit operational kill switches for owner-funded ex
 
 ## Origin protection
 
-Where a public domain is fronted by an edge provider, the origin should be protected against direct bypass. The optional reference origin guard makes edge-authenticated origin access possible without turning the edge token into a TRUYN user credential.
+Where a public domain is fronted by an edge provider, the origin should be protected against direct bypass. The optional reference origin guard plus edge proxy make edge-authenticated origin access possible without turning the edge token into a TRUYN user credential.
 
 Exact origin hostnames, edge application IDs, secret values, firewall rules and bypass configuration are private operational data and are not documented here.
 
