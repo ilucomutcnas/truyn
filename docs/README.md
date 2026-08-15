@@ -19,13 +19,23 @@ Human-facing documentation for TRUYN architecture, concepts, setup, operations, 
 
 - [Multi-Cloud Provider Architecture](architecture/MULTI_CLOUD_PROVIDER_ARCHITECTURE.md) — public Google Cloud / Microsoft Azure capability architecture without private deployment identifiers.
 - [Public Edge Domains](architecture/PUBLIC_EDGE_DOMAINS.md) — intentionally public hostname roles and the public/control-plane separation; live origin/resource identifiers are deliberately excluded.
+
+### Benchmarks and evidence
+
+- [Benchmark evidence policy and index](benchmarks/README.md) — append-only evidence rules and the current public benchmark record.
+- [Cross-Cloud A/B — 2026-08-15](benchmarks/CROSS_CLOUD_AB_2026-08-15.md) — immutable measured baseline.
+- [Cross-Cloud 8× Optimization — 2026-08-15](benchmarks/CROSS_CLOUD_8X_OPTIMIZATION_2026-08-15.md) — fixed hot-path optimization gate.
+- [Context Efficiency — 2026-08-15](benchmarks/CONTEXT_EFFICIENCY_2026-08-15.md) — content-addressed context economic gate.
+- [Semantic Retrieval Gate — 2026-08-15](benchmarks/SEMANTIC_RETRIEVAL_GATE_2026-08-15.md) — question + root CID retrieval/provenance gate.
 - [Multimodal Provider Parity Benchmark](benchmarks/MULTIMODAL_PROVIDER_PARITY.md) — public apples-to-apples methodology for reasoning, image and video comparisons.
 
 ### Benchmark documentation boundary
 
-Public benchmark documentation contains methodology, reproducible local logic and non-sensitive claims only. Live cloud run identifiers, private provider topology, cloud identities, privileged deployment workflows, quota/billing details and raw operational evidence are intentionally outside the public repository.
+Published benchmark reports are part of TRUYN's verification record and are preserved in the repository. A sanitized public report should retain the methodology, measured results, limitations, public model versions, tested commit SHA, workflow/run identity where safe, artifact identity/digest where safe, and provenance needed to audit the claim.
 
-Historical measured results may be summarized publicly only after sanitization and independent review. Publication of a benchmark result never grants access to the provider accounts used to produce it.
+Security review must **redact sensitive fields rather than delete the report**. Credentials, private keys, privileged cloud identities, private deployment/resource names, private origins, customer data, secret-bearing URLs, live allowlists and exact operational quota/cost ceilings remain forbidden. Raw artifacts or logs that contain those details stay outside the public repository; their non-sensitive identifiers and cryptographic digests may remain in the report as evidence.
+
+A benchmark result never grants access to the provider accounts used to produce it.
 
 ### Getting started
 
