@@ -10,6 +10,7 @@ import { createOriginGuard, createRuntimeOriginGuardConfig } from './origin-guar
 import { createRuntimeBackchannelConfig } from './backchannel-config.js';
 import { createProviderBackchannelGuard } from './provider-backchannel-guard.js';
 import { ProviderTruynNode } from './provider-node.js';
+import { enforceOwnerProviderRuntimeLock } from './owner-provider-lock.js';
 
 const role = process.env.TRUYN_ROLE || 'provider';
 const host = process.env.HOST || '0.0.0.0';
@@ -130,9 +131,10 @@ async function runProvider() {
     identity,
     backchannelToken: backchannelConfig.providerBackchannelToken
   });
-  const adapter = createProviderAdapter(providerName, { capabilities });
   const accessPolicy = createRuntimeProviderAccessPolicy(process.env);
   const billingPolicy = createRuntimeProviderBillingPolicy(process.env);
+  enforceOwnerProviderRuntimeLock(process.env, { accessPolicy, billingPolicy });
+  const adapter = createProviderAdapter(providerName, { capabilities });
   const fastPath = process.env.TRUYN_FAST_PATH !== '0';
   const socketPath = fastPath && process.env.TRUYN_SOCKET_PATH !== '0';
   const longPollMs = Number(process.env.TRUYN_LONG_POLL_MS || 10_000);
