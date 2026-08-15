@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - '.github/workflows/smoke-video-providers.yml'
+      - 'scripts/smoke/provision-azure-video.sh'
   workflow_dispatch:
 
 permissions:
@@ -21,7 +22,6 @@ jobs:
     timeout-minutes: 20
     env:
       AZURE_RG: truyn
-      AZURE_VIDEO_LOCATION: eastus2
       AZURE_SUBSCRIPTION_ID_VALUE: ${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}
       GCP_PROJECT_ID_VALUE: ${{ vars.GCP_PROJECT_ID || secrets.GCP_PROJECT_ID }}
       GCP_WIF_PROVIDER_VALUE: ${{ vars.GCP_WIF_PROVIDER || secrets.GCP_WIF_PROVIDER }}
