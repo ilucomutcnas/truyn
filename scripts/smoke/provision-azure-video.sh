@@ -8,6 +8,19 @@ mkdir -p smoke-artifacts/video
 suffix="$(printf '%s' "$AZURE_SUBSCRIPTION_ID_VALUE" | sha256sum | cut -c1-8)"
 deployment="truyn-sora"
 attempts='[]'
+selected_model=""
+selected_region=""
+
+record_attempt() {
+  local region="$1" stage="$2" status="$3" model="$4" detail="$5"
+  local tmp
+  tmp="$(mktemp)"
+  jq --arg region "$region" --arg stage "$stage" --arg status "$status" --arg model "$model" --arg detail "$detail" \
+    '. + [({region:$region,stage:$stage,status:$status} + (if ($model|length)>0 then {model:$model} else {} end) + (if ($detail|length)>0 then {detail:$detail} else {} end))]' \
+    <<<"$attempts" > "$tmp"
+  attempts="$(cat "$tmp")"
+  rm -f "$tmp"
+}
 
 try_region() {
   local region="$1"
@@ -63,6 +76,8 @@ try_region() {
   fi
 
   record_attempt "$region" "$stage" "ready" "$model" ""
+  selected_model="$model"
+  selected_region="$region"
   echo "AZURE_VIDEO_ACCOUNT=$account" >> "$GITHUB_ENV"
   echo "AZURE_VIDEO_DEPLOYMENT=$deployment" >> "$GITHUB_ENV"
   echo "AZURE_VIDEO_ENDPOINT=$endpoint" >> "$GITHUB_ENV"
@@ -74,20 +89,9 @@ try_region() {
   return 0
 }
 
-record_attempt() {
-  local region="$1" stage="$2" status="$3" model="$4" detail="$5"
-  local tmp
-  tmp="$(mktemp)"
-  jq --arg region "$region" --arg stage "$stage" --arg status "$status" --arg model "$model" --arg detail "$detail" \
-    '. + [({region:$region,stage:$stage,status:$status} + (if ($model|length)>0 then {model:$model} else {} end) + (if ($detail|length)>0 then {detail:$detail} else {} end))]' \
-    <<<"$attempts" > "$tmp"
-  attempts="$(cat "$tmp")"
-  rm -f "$tmp"
-}
-
 for region in eastus2 swedencentral; do
   if try_region "$region"; then
-    jq -n --argjson attempts "$attempts" --arg region "$region" --arg model "$AZURE_VIDEO_MODEL" \
+    jq -n --argjson attempts "$attempts" --arg region "$selected_region" --arg model "$selected_model" \
       '{ok:true,modality:"video",provider:"azure-openai-video",status:"ready",region:$region,model:$model,attempts:$attempts}' \
       > smoke-artifacts/video/azure-video-preflight.json
     exit 0
