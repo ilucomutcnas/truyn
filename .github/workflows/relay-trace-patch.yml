@@ -24,6 +24,17 @@ jobs:
         with:
           node-version: 20
 
+      - name: Repair helper interpolation escaping
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('scripts/relay-trace-patch.mjs')
+          source = path.read_text()
+          source = source.replace(r"\`${relayUrl}", r"\`\${relayUrl}")
+          path.write_text(source)
+          PY
+
       - name: Apply trace instrumentation patch
         run: node scripts/relay-trace-patch.mjs
 
