@@ -4,6 +4,18 @@ All notable factual repository changes should be recorded here.
 
 ## Unreleased
 
+### Provider ownership / BYOK security architecture — documentation only
+- Defined the approved target principle **open protocol does not mean open billing account**.
+- Added public architecture for provider ownership, tenant/visibility policy, BYOK, central server-side authorization, relay/control-plane separation, billing/quota attribution and provider threat modeling.
+- Added draft TRUYN/1 provider-policy semantics: private-by-default providers, authoritative server-side ownership binding, authorization-aware discovery and fail-closed chargeable execution.
+- Added the required negative security matrix proving that foreign requesters, known private provider IDs, forged owner/tenant fields and legacy routes cannot cause owner-funded upstream calls.
+- Defined BYOK as the default user model and documented that raw upstream provider credentials stay at the user/provider runtime rather than in TRUYN envelopes/relay state.
+- Defined sponsored/free owner-funded access as an explicit future entitlement with a default allowance of zero/disabled, not an implicit public-network feature.
+- Defined a public/private documentation boundary: protocol/security invariants are public; live credentials, private origins, privileged cloud identities, allowlists, quotas/cost ceilings and other operational details remain private.
+- Removed live Azure edge resource names from the current public edge architecture document while preserving intentionally public `truyn.org` service hostnames.
+- Updated README, security policy, roadmap, repository structure, protocol docs, network/adapters docs and MVP quickstarts to distinguish implemented MVP behavior from the approved-but-not-yet-implemented provider-security target.
+- **No runtime, relay, provider adapter, workflow, cloud IAM, quota or provider execution implementation is introduced by this documentation change.**
+
 ### AI interoperability MVP
 - Added a shared Adapter SDK with a provider execution host that publishes capabilities, polls signed `NEED` events, executes an adapter, and returns signed `RESULT` messages.
 - Added a universal local HTTP adapter for identity, discovery, offers, needs, events, and results.
