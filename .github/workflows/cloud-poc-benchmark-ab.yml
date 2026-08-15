@@ -76,10 +76,17 @@ jobs:
           [[ -n "$endpoint" ]] || { echo 'AZURE_OPENAI_ENDPOINT=missing'; exit 1; }
           echo "AZURE_OPENAI_ENDPOINT=$endpoint" >> "$GITHUB_ENV"
 
+          # Keep the short-lived AAD token for evidence, but use the account data-plane key
+          # because the GitHub deployment principal intentionally lacks OpenAI responses/write.
           token="$(az account get-access-token --resource https://cognitiveservices.azure.com/ --query accessToken -o tsv)"
           [[ -n "$token" ]] || { echo 'AZURE_OPENAI_ACCESS_TOKEN=missing'; exit 1; }
           echo "::add-mask::$token"
           echo "AZURE_OPENAI_ACCESS_TOKEN=$token" >> "$GITHUB_ENV"
+
+          key="$(az cognitiveservices account keys list -g "$AZURE_RG" -n "$AZURE_OPENAI_NAME" --query key1 -o tsv)"
+          [[ -n "$key" ]] || { echo 'AZURE_OPENAI_API_KEY=missing'; exit 1; }
+          echo "::add-mask::$key"
+          echo "AZURE_OPENAI_API_KEY=$key" >> "$GITHUB_ENV"
           echo 'AZURE_DIRECT_CREDENTIALS=ready'
 
       - name: Authenticate GCP deployer using WIF
@@ -158,6 +165,7 @@ jobs:
           tmp="$(mktemp)"
           jq --arg proxy "$GEMINI_DIRECT_PROXY_URL" '
             .methodology.baseline = "Direct GitHub runner -> Azure OpenAI; Gemini request -> ephemeral Cloud Run runtime-identity proxy -> Vertex Gemini; no TRUYN relay/envelopes." |
+            .methodology.directAzureAuthentication = "Azure OpenAI account key fetched at run time through Azure OIDC management access; no TRUYN relay/envelope involved." |
             .methodology.directGeminiProxy = $proxy |
             .methodology.directGeminiProxySemantics = "Raw Vertex generateContent request/response preserved; proxy only supplies the same runtime service-account identity used by truyn-gemini."
           ' cross-cloud-ab.json > "$tmp"
