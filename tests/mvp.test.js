@@ -12,6 +12,7 @@ import {
 import { trustabilityLite } from '../core/trust/index.js';
 import { createRelay } from '../network/relay/server.js';
 import { TruynNode } from '../node/client.js';
+import { createFunctionAdapter, TruynAdapterHost } from '../adapters/sdk/index.js';
 
 test('node identity is derived from its public key', () => {
   const identity = createIdentity();
@@ -124,6 +125,70 @@ test('compact long-poll NEED returns signed RESULT synchronously with <= 250 pro
   assert.equal(result.verification.ok, true);
   assert.equal(result.provider, provider.identity.nodeId);
   assert.ok(result.protocolOverheadBytes <= 250, `compact transaction overhead was ${result.protocolOverheadBytes} bytes`);
+});
+
+test('single signed CHAIN executes two providers in one requester round trip with <= 375 protocol bytes', async (t) => {
+  const relay = createRelay();
+  const relayUrl = await relay.listen({ port: 0 });
+  t.after(() => relay.close());
+
+  const researchNode = new TruynNode({ relayUrl });
+  const reviewNode = new TruynNode({ relayUrl });
+  const requester = new TruynNode({ relayUrl });
+  let reviewedCandidate = null;
+
+  const researchHost = new TruynAdapterHost({
+    node: researchNode,
+    fastPath: true,
+    longPollMs: 2_000,
+    adapter: createFunctionAdapter({
+      name: 'research-test',
+      capabilities: ['research'],
+      execute: async ({ input }) => ({ output: `candidate:${input.query}`, metadata: { providerLatencyMs: 1 } })
+    })
+  });
+  const reviewHost = new TruynAdapterHost({
+    node: reviewNode,
+    fastPath: true,
+    longPollMs: 2_000,
+    adapter: createFunctionAdapter({
+      name: 'review-test',
+      capabilities: ['review'],
+      execute: async ({ input }) => {
+        reviewedCandidate = input.candidate;
+        return { output: `reviewed:${input.candidate}`, metadata: { providerLatencyMs: 1 } };
+      }
+    })
+  });
+
+  await researchHost.publishCapabilities();
+  await reviewHost.publishCapabilities();
+  await requester.register();
+  const researchWork = researchHost.runOnce();
+  const reviewWork = reviewHost.runOnce();
+
+  const result = await requester.compactChain([
+    {
+      capability: { name: 'research' },
+      input: { query: 'TRUYN' },
+      policy: { expectedProvider: 'research-test' }
+    },
+    {
+      capability: { name: 'review' },
+      inputTemplate: { candidate: { $previous: 'output' } },
+      policy: { expectedProvider: 'review-test' }
+    }
+  ], { waitMs: 2_000 });
+
+  await Promise.all([researchWork, reviewWork]);
+  assert.equal(result.results.length, 2);
+  assert.equal(result.results[0].verification.ok, true);
+  assert.equal(result.results[1].verification.ok, true);
+  assert.equal(result.results[0].payload.output, 'candidate:TRUYN');
+  assert.equal(result.results[1].payload.output, 'reviewed:candidate:TRUYN');
+  assert.equal(reviewedCandidate, 'candidate:TRUYN');
+  assert.notEqual(result.results[0].from, result.results[1].from);
+  assert.ok(result.protocolOverheadBytes <= 375, `chain protocol overhead was ${result.protocolOverheadBytes} bytes`);
 });
 
 test('relay excludes stale OFFERs and routes to the live replacement provider', async (t) => {
