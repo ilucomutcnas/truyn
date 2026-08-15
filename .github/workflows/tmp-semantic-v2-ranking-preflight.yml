@@ -32,16 +32,24 @@ jobs:
       - uses: google-github-actions/setup-gcloud@v3
         with:
           project_id: ${{ env.GCP_PROJECT_ID_VALUE }}
-      - name: Check Discovery Engine API state
+      - name: Enable Discovery Engine API if required
         shell: bash
         run: |
           set -euo pipefail
           enabled="$(gcloud services list --enabled --project="$GCP_PROJECT_ID_VALUE" --filter='config.name:discoveryengine.googleapis.com' --format='value(config.name)')"
           if [[ "$enabled" != "discoveryengine.googleapis.com" ]]; then
-            echo 'RANKING_API_STATE=api_disabled' | tee ranking-preflight.txt
-            exit 2
+            echo 'RANKING_API_PREVIOUS_STATE=api_disabled' | tee ranking-preflight.txt
+            gcloud services enable discoveryengine.googleapis.com --project="$GCP_PROJECT_ID_VALUE" --quiet
+          else
+            echo 'RANKING_API_PREVIOUS_STATE=api_enabled' | tee ranking-preflight.txt
           fi
-          echo 'RANKING_API_STATE=api_enabled' | tee ranking-preflight.txt
+          for attempt in $(seq 1 30); do
+            enabled="$(gcloud services list --enabled --project="$GCP_PROJECT_ID_VALUE" --filter='config.name:discoveryengine.googleapis.com' --format='value(config.name)')"
+            [[ "$enabled" == "discoveryengine.googleapis.com" ]] && break
+            [[ "$attempt" -lt 30 ]] || exit 2
+            sleep 2
+          done
+          echo 'RANKING_API_STATE=api_enabled' | tee -a ranking-preflight.txt
       - name: Run two-record semantic rank preflight
         shell: bash
         run: |
