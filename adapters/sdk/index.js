@@ -1,3 +1,5 @@
+import { createProviderAccessPolicy } from '../../core/security/provider-access.js';
+
 function normalizeCapabilities(capabilities) {
   const values = typeof capabilities === 'function' ? capabilities() : capabilities;
   if (!Array.isArray(values) || values.length === 0) throw new Error('Adapter must expose at least one capability');
@@ -33,7 +35,7 @@ export function createFunctionAdapter({ name = 'function-adapter', version = '0.
 }
 
 export class TruynAdapterHost {
-  constructor({ node, adapter, pollIntervalMs = 500, fastPath = false, longPollMs = 25_000, socketPath = false }) {
+  constructor({ node, adapter, pollIntervalMs = 500, fastPath = false, longPollMs = 25_000, socketPath = false, accessPolicy } = {}) {
     if (!node) throw new Error('node is required');
     this.node = node;
     this.adapter = validateAdapter(adapter);
@@ -41,6 +43,7 @@ export class TruynAdapterHost {
     this.fastPath = fastPath;
     this.longPollMs = longPollMs;
     this.socketPath = socketPath;
+    this.accessPolicy = accessPolicy || createProviderAccessPolicy();
     this.running = false;
     this.registered = false;
     this.offerIds = [];
@@ -64,7 +67,8 @@ export class TruynAdapterHost {
         description: capability.description || null,
         fastPath: this.fastPath,
         chainPath: this.fastPath,
-        socketPath: this.socketPath
+        socketPath: this.socketPath,
+        accessMode: this.accessPolicy.mode
       });
       this.offerIds.push(result.offerId);
     }
@@ -75,11 +79,8 @@ export class TruynAdapterHost {
     if (event.kind === 'NEED') {
       if (!event.verification?.ok) return null;
       const compact = Boolean(event.frame);
-      return compact
-        ? { id: event.frame.i, from: event.from, payload: event.payload, compact: true }
-        : event.envelope;
+      return compact ? { id: event.frame.i, from: event.from, payload: event.payload, compact: true } : event.envelope;
     }
-
     if (event.kind === 'CHAIN_STAGE') {
       if (!event.verification?.ok) return null;
       if (!Number.isInteger(event.stageIndex) || !event.requestId) return null;
@@ -105,28 +106,45 @@ export class TruynAdapterHost {
         priorResult: event.priorResult || null
       };
     }
-
     return null;
+  }
+
+  async sendResult(need, output, metadata) {
+    if (need.compact) return this.node.compactResult(need.id, output, metadata);
+    return this.node.result(need.id, output, metadata);
   }
 
   async runOnce() {
     await this.publishCapabilities();
     let polled;
-    if (this.fastPath && this.socketPath) {
-      polled = { events: [await this.node.nextCompactSocketEvent()] };
-    } else if (this.fastPath) {
-      polled = await this.node.pollCompact({ waitMs: this.longPollMs });
-    } else {
-      polled = await this.node.poll();
-    }
-    let handled = 0;
+    if (this.fastPath && this.socketPath) polled = { events: [await this.node.nextCompactSocketEvent()] };
+    else if (this.fastPath) polled = await this.node.pollCompact({ waitMs: this.longPollMs });
+    else polled = await this.node.poll();
 
+    let handled = 0;
     for (const event of polled.events) {
       const need = this.normalizeEvent(event);
       if (!need) continue;
-      const compact = Boolean(need.compact);
       const capability = need.payload?.capability?.name || need.payload?.capability;
       if (!this.adapter.capabilities.some((item) => item.name === capability)) continue;
+
+      const access = this.accessPolicy.authorize(need);
+      if (!access?.ok) {
+        const metadata = {
+          adapter: this.adapter.name,
+          adapterVersion: this.adapter.version,
+          latencyMs: 0,
+          error: 'PROVIDER_ACCESS_DENIED',
+          errorClass: 'authorization',
+          accessDenied: true,
+          accessMode: this.accessPolicy.mode,
+          failed: true
+        };
+        if (need.chain) metadata.chainStage = need.stageIndex;
+        await this.sendResult(need, null, metadata);
+        handled += 1;
+        continue;
+      }
 
       const startedAt = Date.now();
       try {
@@ -137,16 +155,8 @@ export class TruynAdapterHost {
           input = resolved.value;
           if ((resolved.stats?.contextRefs || 0) > 0) contextResolution = resolved.stats;
         }
-        const execution = await this.adapter.execute({
-          capability,
-          input,
-          policy: need.payload?.policy || {},
-          need,
-          node: this.node
-        });
-        const normalized = execution && typeof execution === 'object' && 'output' in execution
-          ? execution
-          : { output: execution, metadata: {} };
+        const execution = await this.adapter.execute({ capability, input, policy: need.payload?.policy || {}, need, node: this.node });
+        const normalized = execution && typeof execution === 'object' && 'output' in execution ? execution : { output: execution, metadata: {} };
         const metadata = {
           adapter: this.adapter.name,
           adapterVersion: this.adapter.version,
@@ -155,19 +165,18 @@ export class TruynAdapterHost {
         };
         if (contextResolution) metadata.contextResolution = contextResolution;
         if (need.chain) metadata.chainStage = need.stageIndex;
-        if (compact) await this.node.compactResult(need.id, normalized.output, metadata);
-        else await this.node.result(need.id, normalized.output, metadata);
-      } catch (error) {
+        await this.sendResult(need, normalized.output, metadata);
+      } catch {
         const metadata = {
           adapter: this.adapter.name,
           adapterVersion: this.adapter.version,
           latencyMs: Date.now() - startedAt,
-          error: error.message,
+          error: 'PROVIDER_EXECUTION_FAILED',
+          errorClass: 'provider_execution',
           failed: true
         };
         if (need.chain) metadata.chainStage = need.stageIndex;
-        if (compact) await this.node.compactResult(need.id, null, metadata);
-        else await this.node.result(need.id, null, metadata);
+        await this.sendResult(need, null, metadata);
       }
       handled += 1;
     }
@@ -182,9 +191,7 @@ export class TruynAdapterHost {
       while (this.running) {
         await this.runOnce();
         if (!this.running) break;
-        if (!this.fastPath && this.pollIntervalMs > 0) {
-          await new Promise((resolve) => setTimeout(resolve, this.pollIntervalMs));
-        }
+        if (!this.fastPath && this.pollIntervalMs > 0) await new Promise((resolve) => setTimeout(resolve, this.pollIntervalMs));
       }
     })();
   }
