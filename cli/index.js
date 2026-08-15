@@ -54,7 +54,7 @@ async function requireNetworkByok(relayUrl, requesterIdentity) {
 async function configureByok(requesterIdentity) {
   const provider = argValue('--provider');
   if (!provider) {
-    throw new Error('Usage: truyn setup --provider <openai|openai-compatible|anthropic|azure-openai|vertex-gemini> [options] [--test]');
+    throw new Error('Usage: truyn setup --provider <openai|openai-compatible|local|anthropic|azure-openai|vertex-gemini|custom-http> [options] [--no-auth] [--test]');
   }
   const providerIdentity = await ensureProviderIdentity();
   const profile = createByokProfile({
@@ -67,7 +67,8 @@ async function configureByok(requesterIdentity) {
     credentialEnv: argValue('--credential-env'),
     capabilities: (argValue('--capability', 'reasoning.general') || 'reasoning.general').split(','),
     requesterNodeId: requesterIdentity.nodeId,
-    providerNodeId: providerIdentity.nodeId
+    providerNodeId: providerIdentity.nodeId,
+    noAuth: argFlag('--no-auth')
   });
 
   await savePrivateJson(BYOK_PROFILE_FILE, profile);
@@ -77,6 +78,7 @@ async function configureByok(requesterIdentity) {
       configured: true,
       verified: false,
       provider: profile.provider,
+      authMode: profile.authMode,
       credentialEnv: profile.credentialEnv,
       providerNodeId: profile.providerNodeId,
       next: 'Re-run the same setup command with --test before remote AI workload.'
@@ -104,6 +106,7 @@ async function configureByok(requesterIdentity) {
     verified: true,
     provider: verified.provider,
     model: verified.model,
+    authMode: verified.authMode,
     credentialEnv: verified.credentialEnv,
     requesterNodeId: verified.requesterNodeId,
     providerNodeId: verified.providerNodeId,
@@ -137,6 +140,7 @@ async function main() {
       verified: Boolean(profile.verifiedAt),
       provider: profile.provider,
       model: profile.model,
+      authMode: profile.authMode,
       credentialEnv: profile.credentialEnv,
       requesterNodeId: profile.requesterNodeId,
       providerNodeId: profile.providerNodeId,
@@ -201,7 +205,7 @@ async function main() {
   if (command === 'result') { await node.register(); await saveSession({ relayUrl, nodeId: identity.nodeId, sessionToken: node.sessionToken }); const requestId = process.argv[3]; const output = process.argv[4]; if (!requestId || output === undefined) throw new Error('Usage: truyn result <requestId> <output> [--relay URL]'); print(await node.result(requestId, output)); return; }
   if (command === 'poll') { const session = await loadSession(); node.sessionToken = session.sessionToken; print(await node.poll()); return; }
 
-  print(`TRUYN MVP CLI\n\nCommands:\n  truyn init\n  truyn identity\n  truyn setup --provider <provider> [--model MODEL] [--credential-env NAME] [--test]\n  truyn setup-status\n  truyn relay [--host 127.0.0.1] [--port 8787]  # loopback only\n  truyn register [--relay URL]\n  truyn offer <capability> [--relay URL]\n  truyn find <capability> [--relay URL]\n  truyn need <capability> <input> [--relay URL]  # remote requires verified BYOK\n  truyn result <requestId> <output> [--relay URL]\n  truyn poll [--relay URL]\n  truyn bridge [--port 8790] [--relay URL]        # remote requires verified BYOK\n  truyn mcp [--relay URL]                        # remote requires verified BYOK\n  truyn mcp-http [--port 8791] [--relay URL]     # remote requires verified BYOK\n  truyn provider [--relay URL]                   # verified BYOK provider\n  truyn provider --provider <provider> --capability <name[,name]>  # local development only`);
+  print(`TRUYN MVP CLI\n\nCommands:\n  truyn init\n  truyn identity\n  truyn setup --provider <provider> [--model MODEL] [--base-url URL] [--endpoint URL] [--credential-env NAME] [--no-auth] [--test]\n    providers: openai, openai-compatible, local, anthropic, azure-openai, vertex-gemini, custom-http\n  truyn setup-status\n  truyn relay [--host 127.0.0.1] [--port 8787]  # loopback only\n  truyn register [--relay URL]\n  truyn offer <capability> [--relay URL]\n  truyn find <capability> [--relay URL]\n  truyn need <capability> <input> [--relay URL]  # remote requires verified BYOK\n  truyn result <requestId> <output> [--relay URL]\n  truyn poll [--relay URL]\n  truyn bridge [--port 8790] [--relay URL]        # remote requires verified BYOK\n  truyn mcp [--relay URL]                        # remote requires verified BYOK\n  truyn mcp-http [--port 8791] [--relay URL]     # remote requires verified BYOK\n  truyn provider [--relay URL]                   # verified BYOK provider\n  truyn provider --provider <provider> --capability <name[,name]>  # local development only`);
 }
 
 main().catch((error) => {
