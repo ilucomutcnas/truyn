@@ -1,6 +1,6 @@
 # Bring Your Own Intelligence (BYOK)
 
-**Status:** official CLI BYOK flow implemented for OpenAI, OpenAI-compatible, local OpenAI-compatible runtimes, Anthropic, Azure OpenAI, Vertex Gemini and generic custom HTTP providers.
+**Status:** official CLI BYOK flow implemented for OpenAI, OpenAI-compatible, local OpenAI-compatible runtimes, Anthropic, Azure OpenAI, Vertex Gemini, generic custom HTTP providers, and stateless MCP HTTP tool providers.
 
 TRUYN is designed around **BYOK — Bring Your Own Intelligence / Bring Your Own Provider**.
 
@@ -62,6 +62,7 @@ anthropic
 azure-openai
 vertex-gemini
 custom-http
+custom-mcp
 ```
 
 ### OpenAI-compatible endpoint
@@ -128,6 +129,43 @@ truyn setup \
 
 The token value is resolved only by the provider runtime and is not persisted in the BYOK profile or returned in provider metadata.
 
+### Custom MCP HTTP tool provider
+
+`custom-mcp` uses MCP `2026-07-28` stateless HTTP `tools/call`. The user supplies the MCP endpoint and the exact tool that should satisfy the TRUYN capability:
+
+```bash
+truyn setup \
+  --provider custom-mcp \
+  --endpoint https://mcp.example.test/mcp \
+  --tool research \
+  --capability reasoning.general \
+  --test
+```
+
+The provider sends a self-contained MCP JSON-RPC request with:
+
+```text
+MCP-Protocol-Version: 2026-07-28
+Mcp-Method: tools/call
+Mcp-Name: <configured tool>
+```
+
+TRUYN passes `{ capability, input, policy }` as the tool arguments. The adapter accepts MCP `structuredContent` or content blocks as the provider result.
+
+Bearer authentication is optional and explicit:
+
+```bash
+export MY_MCP_TOKEN='...'
+truyn setup \
+  --provider custom-mcp \
+  --endpoint https://mcp.example.test/mcp \
+  --tool research \
+  --credential-env MY_MCP_TOKEN \
+  --test
+```
+
+The token value is resolved only at provider runtime and is not persisted or included in normalized result metadata. This profile targets stateless MCP HTTP tool endpoints; legacy stateful MCP session negotiation is not part of this BYOK provider adapter.
+
 ### Anthropic
 
 ```bash
@@ -152,10 +190,6 @@ Azure OpenAI may also use the existing runtime managed-identity path when it is 
 
 The current Vertex Gemini adapter obtains its token from the Google metadata-service runtime path. Therefore `vertex-gemini` setup is suitable in that configured Google runtime environment; this implementation does **not** yet claim a universal desktop Google ADC/login flow.
 
-## What is not yet a setup profile
-
-A generic custom MCP **provider profile** is not yet implemented in `truyn setup`. MCP is already a TRUYN interoperability/requester surface, but custom MCP provider onboarding remains a separate future slice.
-
 ## Credential rule
 
 Raw upstream credentials remain outside TRUYN protocol messages and outside the persisted BYOK profile.
@@ -166,6 +200,7 @@ The persisted profile contains non-secret configuration such as:
 provider type
 model
 base URL / endpoint where applicable
+MCP tool name where applicable
 auth mode
 credential environment-variable name where applicable
 capabilities
