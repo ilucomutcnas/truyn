@@ -13,6 +13,7 @@ const forbiddenPathFragments = [
   '.github/workflows/cloud-poc-',
   '.github/workflows/owner-identity-',
   '.github/workflows/smoke-',
+  '.github/workflows/deploy-protected-owner-',
   'config/owner-benchmark',
   'docs/benchmarks/CROSS_CLOUD_AB_',
   'docs/benchmarks/CROSS_CLOUD_8X_OPTIMIZATION_',
@@ -25,6 +26,9 @@ const forbiddenPathFragments = [
   'benchmarks/semantic-retrieval-ab',
   'examples/cross-cloud-ai-proof',
   'runtime/vertex-claude-probe',
+  'scripts/deploy/azure-owner-',
+  'scripts/deploy/gcp-owner-',
+  'scripts/prove-owner-fleet',
   'scripts/smoke/'
 ];
 
