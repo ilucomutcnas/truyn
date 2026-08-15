@@ -2,7 +2,13 @@
 
 Status: **PASSED**.
 
-This document records the first passing economic A/B benchmark for TRUYN content-addressed context references and signed delta transfer across the production Azure OpenAI → Vertex Gemini chain.
+This document records the first passing economic A/B benchmark for TRUYN content-addressed context references and signed delta transfer across the production-authorized Azure OpenAI → Vertex Gemini reference chain.
+
+## Security and disclosure scope
+
+The measured providers were project-authorized benchmark resources. This public result does not grant network users access to the underlying cloud/provider accounts.
+
+The report preserves measured usage, public model versions, content CIDs and GitHub evidence while omitting unnecessary private deployment names, privileged cloud identities and exact live quota configuration.
 
 ## Fixed gate
 
@@ -46,8 +52,10 @@ The base corpus contains a different authoritative `FACT_VALUE` in every section
 
 Models are unchanged between arms:
 
-- Azure: `truyn-gpt-4-1-mini` / GPT-4.1-mini
+- Azure OpenAI: GPT-4.1-mini
 - Google Vertex AI: `gemini-2.5-flash`
+
+The private Azure deployment resource name is intentionally not part of the public benchmark contract.
 
 ## Compared paths
 
@@ -66,7 +74,7 @@ For every measured query:
 3. Each benchmark query carries a signed `$context` reference containing the new root CID and one selected block ID.
 4. Each provider resolves only that selected block before inference.
 5. The provider verifies the root manifest and the selected block CID before using the materialized context.
-6. Requester CHAIN transport uses the persistent canonical WebSocket and provider stages use persistent relay-origin WebSockets.
+6. Requester CHAIN transport uses the persistent canonical WebSocket and provider stages use persistent authenticated relay backchannels.
 
 ## Content identity and delta evidence
 
@@ -105,11 +113,13 @@ The monetary result is an **estimate using the benchmark's embedded 2026-08-15 p
 
 Infrastructure fixed costs are not included. The comparison is variable model inference cost derived from measured provider usage metadata.
 
+Private credits, negotiated billing terms and live account balances are not represented by these public list-price assumptions.
+
 ## Azure benchmark capacity note
 
-The first full-context control attempt exposed an unrelated benchmark-capacity limitation: the Azure GPT-4.1-mini Standard deployment had been provisioned at capacity `1`, which was insufficient for the 48-block direct prompt. The deployment capacity was increased to `100` while retaining the same model, version, Standard deployment type, and per-token benchmark pricing assumptions. The passing run had zero rate-limit retries.
+The first full-context control attempt exposed a benchmark-capacity limitation: the initial Azure reference deployment did not have enough provisioned capacity for the 48-block direct prompt. Benchmark capacity was increased while retaining the same model family/version, deployment class and per-token pricing assumptions. The passing run had zero rate-limit retries.
 
-This capacity change removes an artificial request-rate ceiling; it is not part of the measured token or cost reduction.
+The exact live capacity/quota allocation is operational data and is intentionally omitted from the current public document. The capacity adjustment removed an artificial request-rate ceiling; it is not part of the measured token or cost reduction.
 
 ## What this result proves
 
@@ -129,6 +139,8 @@ For this workload, the result directly demonstrates:
 
 This run does **not** prove automatic semantic retrieval, automatic relevance ranking, or general RAG quality. The benchmark explicitly supplies the target block ID in each `$context` reference. Therefore the measured gain is the economics of **content-addressed sparse context delivery**, not the accuracy of an automatic retrieval algorithm.
 
+It also does **not** prove the provider-ownership security gate. The benchmark ran under authorized project-controlled providers. Public-user isolation from owner-funded provider quota requires the separate negative tests defined in `../architecture/THREAT_MODEL.md`.
+
 A future retrieval benchmark must add an automatic selector/retriever, compare retrieval quality against full-context answers, and keep the same requirement that economic savings cannot be achieved by losing required information.
 
 ## Conclusion
@@ -140,4 +152,4 @@ The content-addressed/context-reference/delta economic gate is closed successful
 - **82.372% less amortized context transfer**
 - **100% benchmark quality preserved**
 
-The next research/engineering gate should focus on selecting the right context automatically while retaining these economic gains: semantic retrieval/routing quality, false-negative rate, citation/provenance correctness, and end-to-end utility on realistic heterogeneous corpora.
+The next research/engineering gate should focus on selecting the right context automatically while retaining these economic gains: semantic retrieval/routing quality, false-negative rate, citation/provenance correctness, end-to-end utility on realistic heterogeneous corpora, and the independent provider-authorization security gate.
