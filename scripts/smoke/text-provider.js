@@ -13,6 +13,7 @@ if (providerName === 'vertex-gemini') {
     projectId: process.env.GCP_PROJECT_ID,
     location: process.env.GCP_REGION || 'global',
     model: process.env.GEMINI_MODEL || 'gemini-2.5-flash',
+    endpoint: process.env.VERTEX_API_ENDPOINT || 'https://aiplatform.googleapis.com',
     accessTokenProvider: async () => accessToken
   };
 } else if (providerName === 'azure-openai') {
@@ -35,10 +36,14 @@ if (providerName === 'vertex-gemini') {
 
 const provider = createProviderAdapter(providerName, options);
 const startedAt = Date.now();
+const family = process.env.TRUYN_MODEL_FAMILY || '';
+const maxTokens = family === 'kimi' ? 512 : 64;
 const result = await provider.execute({
   capability: 'reasoning.general',
   input: 'Return exactly: TRUYN_TEXT_SMOKE_OK',
-  policy: providerName === 'vertex-gemini' ? { providerOptions: { thinkingBudget: 0 } } : { providerOptions: { temperature: 0, maxTokens: 64 } }
+  policy: providerName === 'vertex-gemini'
+    ? { providerOptions: { thinkingBudget: 0 } }
+    : { providerOptions: { temperature: 0, maxTokens } }
 });
 const text = typeof result.output === 'string' ? result.output.trim() : JSON.stringify(result.output);
 if (!text.includes('TRUYN_TEXT_SMOKE_OK')) throw new Error(`Unexpected provider output: ${text.slice(0, 200)}`);
