@@ -95,6 +95,51 @@ test('Vertex Gemini provider calls generateContent and reports token metadata', 
   assert.equal(calls[0].options.headers.authorization, 'Bearer gcp-token');
 });
 
+test('Vertex Gemini converts non-JSON upstream failures into bounded provider errors', async () => {
+  const provider = createVertexGeminiProvider({
+    projectId:'truyn-test-project',
+    location:'global',
+    model:'gemini-test',
+    accessTokenProvider:async () => 'gcp-token',
+    fetchImpl:async () => ({
+      ok:false,
+      status:504,
+      headers:{ get:() => null },
+      async text() { return 'upstream request timeout'; }
+    })
+  });
+
+  await assert.rejects(
+    provider.execute({ capability:'reasoning.general', input:'hello', policy:{} }),
+    (error) => {
+      assert.equal(error instanceof SyntaxError, false);
+      assert.match(error.message, /^Vertex AI HTTP 504: upstream request timeout$/);
+      assert.doesNotMatch(error.message, /gcp-token|aiplatform\.googleapis\.com/);
+      return true;
+    }
+  );
+});
+
+test('Vertex Gemini rejects a successful non-JSON response explicitly', async () => {
+  const provider = createVertexGeminiProvider({
+    projectId:'truyn-test-project',
+    location:'global',
+    model:'gemini-test',
+    accessTokenProvider:async () => 'gcp-token',
+    fetchImpl:async () => ({
+      ok:true,
+      status:200,
+      headers:{ get:() => null },
+      async text() { return 'not-json'; }
+    })
+  });
+
+  await assert.rejects(
+    provider.execute({ capability:'reasoning.general', input:'hello', policy:{} }),
+    /Vertex AI HTTP 200: invalid non-JSON response/
+  );
+});
+
 test('provider factory exposes cloud provider aliases', () => {
   const azure = createProviderAdapter('azure-openai', {
     endpoint: 'https://example.openai.azure.com',
