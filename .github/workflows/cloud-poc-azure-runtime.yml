@@ -1,0 +1,215 @@
+name: Cloud PoC Azure Relay and GPT Node
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/cloud-poc-azure-runtime.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  deploy-and-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      AZURE_RG: truyn
+      AZURE_LOCATION: eastus
+      AZURE_OPENAI_NAME: truyn-openai-1334540181
+      AZURE_OPENAI_DEPLOYMENT: truyn-gpt-4-1-mini
+      AZURE_ACR_NAME: truynacr1334540181
+      AZURE_CA_ENV: truyn-poc-env
+      AZURE_RELAY_APP: truyn-relay
+      AZURE_PROVIDER_APP: truyn-azure-gpt
+      AZURE_RUNTIME_IDENTITY: id-truyn-runtime
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login with OIDC
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID || secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Ensure Container Apps CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          az extension add --name containerapp --upgrade --yes >/dev/null
+
+      - name: Create runtime identity and registry
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! az identity show -g "$AZURE_RG" -n "$AZURE_RUNTIME_IDENTITY" >/dev/null 2>&1; then
+            az identity create -g "$AZURE_RG" -n "$AZURE_RUNTIME_IDENTITY" -l "$AZURE_LOCATION" >/dev/null
+            echo 'AZURE_RUNTIME_IDENTITY=created'
+          else
+            echo 'AZURE_RUNTIME_IDENTITY=existing'
+          fi
+          if ! az acr show -g "$AZURE_RG" -n "$AZURE_ACR_NAME" >/dev/null 2>&1; then
+            az acr create -g "$AZURE_RG" -n "$AZURE_ACR_NAME" -l "$AZURE_LOCATION" --sku Basic >/dev/null
+            echo 'AZURE_ACR=created'
+          else
+            echo 'AZURE_ACR=existing'
+          fi
+          runtime_id="$(az identity show -g "$AZURE_RG" -n "$AZURE_RUNTIME_IDENTITY" --query id -o tsv)"
+          principal_id="$(az identity show -g "$AZURE_RG" -n "$AZURE_RUNTIME_IDENTITY" --query principalId -o tsv)"
+          client_id="$(az identity show -g "$AZURE_RG" -n "$AZURE_RUNTIME_IDENTITY" --query clientId -o tsv)"
+          acr_id="$(az acr show -g "$AZURE_RG" -n "$AZURE_ACR_NAME" --query id -o tsv)"
+          openai_id="$(az cognitiveservices account show -g "$AZURE_RG" -n "$AZURE_OPENAI_NAME" --query id -o tsv)"
+          az role assignment create --assignee-object-id "$principal_id" --assignee-principal-type ServicePrincipal --role AcrPull --scope "$acr_id" >/dev/null 2>&1 || true
+          az role assignment create --assignee-object-id "$principal_id" --assignee-principal-type ServicePrincipal --role 'Cognitive Services OpenAI User' --scope "$openai_id" >/dev/null 2>&1 || true
+          echo "AZURE_RUNTIME_ID=$runtime_id" >> "$GITHUB_ENV"
+          echo "AZURE_RUNTIME_CLIENT_ID=$client_id" >> "$GITHUB_ENV"
+          echo "AZURE_ACR_LOGIN_SERVER=$(az acr show -g "$AZURE_RG" -n "$AZURE_ACR_NAME" --query loginServer -o tsv)" >> "$GITHUB_ENV"
+          echo "AZURE_OPENAI_ENDPOINT=$(az cognitiveservices account show -g "$AZURE_RG" -n "$AZURE_OPENAI_NAME" --query properties.endpoint -o tsv)" >> "$GITHUB_ENV"
+
+      - name: Build runtime image in ACR
+        shell: bash
+        run: |
+          set -euo pipefail
+          image_tag="truyn:${GITHUB_SHA}"
+          az acr build -r "$AZURE_ACR_NAME" -t "$image_tag" . --no-logs >/dev/null
+          echo "AZURE_IMAGE=${AZURE_ACR_LOGIN_SERVER}/${image_tag}" >> "$GITHUB_ENV"
+          echo 'AZURE_IMAGE_BUILD=success'
+
+      - name: Create Container Apps environment if absent
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! az containerapp env show -g "$AZURE_RG" -n "$AZURE_CA_ENV" >/dev/null 2>&1; then
+            az containerapp env create -g "$AZURE_RG" -n "$AZURE_CA_ENV" -l "$AZURE_LOCATION" >/dev/null
+            echo 'AZURE_CONTAINERAPPS_ENV=created'
+          else
+            echo 'AZURE_CONTAINERAPPS_ENV=existing'
+          fi
+
+      - name: Deploy public TRUYN relay
+        shell: bash
+        run: |
+          set -euo pipefail
+          if az containerapp show -g "$AZURE_RG" -n "$AZURE_RELAY_APP" >/dev/null 2>&1; then
+            az containerapp update -g "$AZURE_RG" -n "$AZURE_RELAY_APP" \
+              --image "$AZURE_IMAGE" \
+              --set-env-vars TRUYN_ROLE=relay \
+              --min-replicas 1 --max-replicas 1 >/dev/null
+          else
+            az containerapp create -g "$AZURE_RG" -n "$AZURE_RELAY_APP" \
+              --environment "$AZURE_CA_ENV" \
+              --image "$AZURE_IMAGE" \
+              --target-port 8080 \
+              --ingress external \
+              --min-replicas 1 --max-replicas 1 \
+              --user-assigned "$AZURE_RUNTIME_ID" \
+              --registry-server "$AZURE_ACR_LOGIN_SERVER" \
+              --registry-identity "$AZURE_RUNTIME_ID" \
+              --env-vars TRUYN_ROLE=relay >/dev/null
+          fi
+          fqdn="$(az containerapp show -g "$AZURE_RG" -n "$AZURE_RELAY_APP" --query properties.configuration.ingress.fqdn -o tsv)"
+          [[ -n "$fqdn" ]] || { echo 'AZURE_RELAY_FQDN=missing'; exit 1; }
+          echo "TRUYN_RELAY_URL=https://${fqdn}" >> "$GITHUB_ENV"
+          echo "TRUYN_RELAY_URL=https://${fqdn}"
+          for attempt in $(seq 1 30); do
+            if curl -fsS "https://${fqdn}/health" | jq -e '.ok == true' >/dev/null; then
+              echo 'TRUYN_RELAY_HEALTH=success'
+              exit 0
+            fi
+            sleep 2
+          done
+          echo 'TRUYN_RELAY_HEALTH=failed'
+          exit 1
+
+      - name: Deploy Azure GPT TRUYN provider
+        shell: bash
+        run: |
+          set -euo pipefail
+          if az containerapp show -g "$AZURE_RG" -n "$AZURE_PROVIDER_APP" >/dev/null 2>&1; then
+            az containerapp update -g "$AZURE_RG" -n "$AZURE_PROVIDER_APP" \
+              --image "$AZURE_IMAGE" \
+              --set-env-vars \
+                TRUYN_ROLE=provider \
+                TRUYN_PROVIDER=azure-openai \
+                TRUYN_CAPABILITIES=research \
+                TRUYN_RELAY="$TRUYN_RELAY_URL" \
+                AZURE_OPENAI_ENDPOINT="$AZURE_OPENAI_ENDPOINT" \
+                AZURE_OPENAI_DEPLOYMENT="$AZURE_OPENAI_DEPLOYMENT" \
+                AZURE_CLIENT_ID="$AZURE_RUNTIME_CLIENT_ID" \
+              --min-replicas 1 --max-replicas 1 >/dev/null
+          else
+            az containerapp create -g "$AZURE_RG" -n "$AZURE_PROVIDER_APP" \
+              --environment "$AZURE_CA_ENV" \
+              --image "$AZURE_IMAGE" \
+              --target-port 8080 \
+              --ingress internal \
+              --min-replicas 1 --max-replicas 1 \
+              --user-assigned "$AZURE_RUNTIME_ID" \
+              --registry-server "$AZURE_ACR_LOGIN_SERVER" \
+              --registry-identity "$AZURE_RUNTIME_ID" \
+              --env-vars \
+                TRUYN_ROLE=provider \
+                TRUYN_PROVIDER=azure-openai \
+                TRUYN_CAPABILITIES=research \
+                TRUYN_RELAY="$TRUYN_RELAY_URL" \
+                AZURE_OPENAI_ENDPOINT="$AZURE_OPENAI_ENDPOINT" \
+                AZURE_OPENAI_DEPLOYMENT="$AZURE_OPENAI_DEPLOYMENT" \
+                AZURE_CLIENT_ID="$AZURE_RUNTIME_CLIENT_ID" >/dev/null
+          fi
+          echo 'AZURE_GPT_NODE_DEPLOY=success'
+
+      - name: Prove signed TRUYN transaction through Azure GPT node
+        shell: bash
+        run: |
+          set -euo pipefail
+          export TRUYN_RELAY_URL
+          node --input-type=module <<'NODE'
+          import { TruynNode } from './node/client.js';
+          import { createIdentity } from './core/identity/index.js';
+
+          const relayUrl = process.env.TRUYN_RELAY_URL;
+          const requester = new TruynNode({ relayUrl, identity: createIdentity() });
+          await requester.register({ name: 'github-poc-requester' });
+
+          let offers = [];
+          for (let i = 0; i < 45; i += 1) {
+            const found = await requester.find('research');
+            offers = found.offers || [];
+            if (offers.length) break;
+            await new Promise((resolve) => setTimeout(resolve, 2000));
+          }
+          if (!offers.length) throw new Error('Azure research provider did not publish an OFFER');
+
+          const startedAt = Date.now();
+          const need = await requester.need('research', {
+            task: 'Return exactly TRUYN_AZURE_NODE_OK and one short sentence saying this result came through a TRUYN NEED/RESULT transaction.'
+          }, { purpose: 'azure-cross-cloud-poc' });
+
+          let resultEvent = null;
+          for (let i = 0; i < 60; i += 1) {
+            const polled = await requester.poll();
+            resultEvent = polled.events.find((event) => event.kind === 'RESULT' && event.envelope?.payload?.requestId === need.requestId) || null;
+            if (resultEvent) break;
+            await new Promise((resolve) => setTimeout(resolve, 1000));
+          }
+          if (!resultEvent) throw new Error('Azure GPT RESULT was not returned');
+          if (!resultEvent.verification?.ok) throw new Error('Azure GPT RESULT signature verification failed');
+          const output = resultEvent.envelope.payload.output;
+          if (!String(output).includes('TRUYN_AZURE_NODE_OK')) throw new Error(`Unexpected Azure GPT output: ${output}`);
+
+          console.log(JSON.stringify({
+            proof: 'azure-truyn-node',
+            requesterNodeId: requester.identity.nodeId,
+            providerNodeId: resultEvent.envelope.from,
+            signatureVerified: resultEvent.verification.ok,
+            trustability: need.trustability,
+            endToEndLatencyMs: Date.now() - startedAt,
+            providerMetadata: resultEvent.envelope.payload.metadata,
+            resultEnvelopeBytes: Buffer.byteLength(JSON.stringify(resultEvent.envelope)),
+            output
+          }, null, 2));
+          NODE
