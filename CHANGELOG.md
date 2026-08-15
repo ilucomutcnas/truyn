@@ -37,8 +37,10 @@ All notable factual repository changes should be recorded here without publishin
 - Added provider ownership, tenant/visibility policy, BYOK, server-side authorization, relay/control-plane separation, billing/quota attribution and threat-model architecture.
 - Implemented the first relay/runtime ownership boundary: signed provider identity is authoritative for provider ownership, private providers are hidden from unauthorized discovery/routing, and provider-signed requester allowlists support isolated BYOK/private providers.
 - Implemented the first provider-runtime billing boundary: access authorization is followed by a fail-closed billing decision before adapter/upstream execution.
-- Implemented the first official CLI BYOK setup flow for OpenAI, OpenAI-compatible, Anthropic, Azure OpenAI and Vertex Gemini profiles.
-- BYOK profiles persist only non-secret provider settings and credential environment-variable names; the resolved credential value is not written into the TRUYN profile or printed by setup status.
+- Implemented official CLI BYOK setup for OpenAI, OpenAI-compatible, local OpenAI-compatible runtimes, Anthropic, Azure OpenAI, Vertex Gemini and generic custom HTTP providers.
+- BYOK profiles persist only non-secret provider settings, auth mode and credential environment-variable names where required; resolved credential/token values are not written into the TRUYN profile or printed by setup status.
+- Added explicit no-auth support for user-controlled OpenAI-compatible/local runtimes without weakening the normal OpenAI credential requirement.
+- Added a generic custom HTTP JSON provider that posts `{ capability, input, policy }`, supports no-auth or explicit bearer auth, and does not return endpoint/token details in normalized result metadata.
 - BYOK requester and provider use separate cryptographic identities; remote providers publish `owner-only` access for the configured requester and run with billing mode `byok`.
 - Non-loopback official CLI AI-workload entry points require a verified private BYOK profile; loopback development remains available without the remote gate.
 - Defined BYOK as the default user model; raw upstream provider credentials remain at the provider runtime.
