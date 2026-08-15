@@ -24,7 +24,7 @@ function bearer(req) {
   return value.startsWith('Bearer ') ? value.slice(7) : null;
 }
 
-export function createRelay() {
+export function createRelay({ nodeFreshnessMs = 15_000 } = {}) {
   const nodes = new Map();
   const offers = new Map();
   const events = new Map();
@@ -34,6 +34,29 @@ export function createRelay() {
   function touch(nodeId) {
     const node = nodes.get(nodeId);
     if (node) node.lastSeenAt = new Date().toISOString();
+  }
+
+  function nodeSeenAtMs(nodeId) {
+    const value = nodes.get(nodeId)?.lastSeenAt;
+    const seenAt = value ? new Date(value).getTime() : 0;
+    return Number.isFinite(seenAt) ? seenAt : 0;
+  }
+
+  function isNodeFresh(nodeId, now = Date.now()) {
+    const seenAt = nodeSeenAtMs(nodeId);
+    return seenAt > 0 && now - seenAt <= nodeFreshnessMs;
+  }
+
+  function matchingOffers({ capability = null, requesterNodeId = null } = {}) {
+    const now = Date.now();
+    return [...offers.values()]
+      .filter((offer) =>
+        !offer.revoked &&
+        (!capability || offer.capability === capability) &&
+        (!requesterNodeId || offer.envelope.from !== requesterNodeId) &&
+        isNodeFresh(offer.envelope.from, now)
+      )
+      .sort((a, b) => nodeSeenAtMs(b.envelope.from) - nodeSeenAtMs(a.envelope.from));
   }
 
   function queue(nodeId, event) {
@@ -94,8 +117,7 @@ export function createRelay() {
 
       if (req.method === 'GET' && url.pathname === '/v1/offers') {
         const capability = url.searchParams.get('capability');
-        const matches = [...offers.values()]
-          .filter((offer) => !offer.revoked && (!capability || offer.capability === capability))
+        const matches = matchingOffers({ capability })
           .map((offer) => ({
             ...offer.envelope,
             trust: trustabilityLite({
@@ -116,9 +138,7 @@ export function createRelay() {
         const capability = envelope.payload?.capability?.name || envelope.payload?.capability;
         if (!capability || typeof capability !== 'string') return json(res, 400, { ok: false, error: 'invalid_capability' });
 
-        const match = [...offers.values()].find(
-          (offer) => !offer.revoked && offer.capability === capability && offer.envelope.from !== envelope.from
-        );
+        const match = matchingOffers({ capability, requesterNodeId: envelope.from })[0];
         if (!match) return json(res, 404, { ok: false, error: 'no_matching_provider' });
 
         requests.set(envelope.id, {
