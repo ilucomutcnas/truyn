@@ -1,26 +1,27 @@
 # Examples
 
-Runnable demonstrations live here. Every example must state whether it requires local mode, testnet, external model/API credentials, cloud identity, or mocked providers.
+Public examples are deliberately limited to **loopback local development** or **credentials supplied by the person running the example**.
 
-## Security rules for examples
+## Included demo boundary
 
-Examples are public source code and MUST NOT contain:
+- `mvp-demo.js` — local loopback relay, deterministic nodes, no paid AI.
+- `ai-mvp-demo.js` — local loopback relay with deterministic function adapters, no paid AI.
+- `live-ai-demo.js` — local loopback relay plus the local user's own OpenAI/Anthropic credentials (BYOK). It does not use or expose TRUYN-operated provider credentials.
+
+Operational cross-cloud proofs, owner-cloud deployment workflows, private provider bootstraps, and raw production benchmark execution tooling do not belong in this public examples directory.
+
+## Security rules
+
+Examples MUST NOT contain:
 
 - real API keys, private keys or client secrets;
 - live private origins/backchannels;
-- privileged cloud/service-account identity details that provide no user value;
-- private provider node IDs/tenant allowlists;
-- real quota/cost ceilings or billing identifiers;
+- owner cloud/service-account/managed-identity topology;
+- private provider node IDs or allowlists;
+- live quota/cost ceilings or billing identifiers;
+- credential-bearing URLs;
 - sensitive prompts, outputs or customer data.
 
-Use placeholders for deployment-specific values.
+A live-provider example is BYOK only. Publishing adapter code never makes any provider account a public TRUYN resource.
 
-## Paid-provider examples
-
-A live provider example demonstrates adapter interoperability only. It does not make the provider account a public TRUYN resource.
-
-Examples that call external providers must use credentials/identity supplied by the person running the example or an explicitly authorized private benchmark environment. BYOK is the default user model.
-
-Until the provider-ownership/central-authorization security gate is implemented and passes negative tests, examples involving paid/private providers should run only in controlled environments.
-
-See `../docs/getting-started/BYOK.md` and `../docs/architecture/THREAT_MODEL.md`.
+See `../docs/getting-started/BYOK.md`, `../SECURITY.md`, and `../docs/architecture/THREAT_MODEL.md`.
