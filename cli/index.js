@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { readFile, writeFile, mkdir } from 'node:fs/promises';
+import { chmod, readFile, writeFile, mkdir } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { createIdentity } from '../core/identity/index.js';
@@ -26,12 +26,25 @@ const SESSION_FILE = path.join(DEFAULT_HOME, 'session.json');
 const BYOK_PROFILE_FILE = path.join(DEFAULT_HOME, 'provider.json');
 const BYOK_IDENTITY_FILE = path.join(DEFAULT_HOME, 'provider-identity.json');
 
-async function loadIdentity() { return JSON.parse(await readFile(IDENTITY_FILE, 'utf8')); }
-async function saveIdentity(identity) { await mkdir(DEFAULT_HOME, { recursive: true }); await writeFile(IDENTITY_FILE, `${JSON.stringify(identity, null, 2)}\n`, { mode: 0o600 }); }
-async function saveSession(session) { await mkdir(DEFAULT_HOME, { recursive: true }); await writeFile(SESSION_FILE, `${JSON.stringify(session, null, 2)}\n`, { mode: 0o600 }); }
-async function loadSession() { return JSON.parse(await readFile(SESSION_FILE, 'utf8')); }
-async function savePrivateJson(file, value) { await mkdir(DEFAULT_HOME, { recursive: true }); await writeFile(file, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 }); }
-async function loadOptionalJson(file) { try { return JSON.parse(await readFile(file, 'utf8')); } catch (error) { if (error?.code === 'ENOENT') return null; throw error; } }
+async function enforcePrivateMode(file) {
+  if (process.platform !== 'win32') await chmod(file, 0o600);
+}
+async function readPrivateJson(file) {
+  const value = JSON.parse(await readFile(file, 'utf8'));
+  await enforcePrivateMode(file);
+  return value;
+}
+async function writePrivateJson(file, value) {
+  await mkdir(DEFAULT_HOME, { recursive: true });
+  await writeFile(file, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
+  await enforcePrivateMode(file);
+}
+async function loadIdentity() { return readPrivateJson(IDENTITY_FILE); }
+async function saveIdentity(identity) { await writePrivateJson(IDENTITY_FILE, identity); }
+async function saveSession(session) { await writePrivateJson(SESSION_FILE, session); }
+async function loadSession() { return readPrivateJson(SESSION_FILE); }
+async function savePrivateJson(file, value) { await writePrivateJson(file, value); }
+async function loadOptionalJson(file) { try { return await readPrivateJson(file); } catch (error) { if (error?.code === 'ENOENT') return null; throw error; } }
 function argValue(name, fallback = null) { const index = process.argv.indexOf(name); return index >= 0 ? process.argv[index + 1] : fallback; }
 function argFlag(name) { return process.argv.includes(name); }
 function print(value) { process.stdout.write(`${typeof value === 'string' ? value : JSON.stringify(value, null, 2)}\n`); }
