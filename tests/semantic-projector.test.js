@@ -108,3 +108,38 @@ test('semantic router scores each block against all projected query variants whi
   assert.equal(router.stats().cachedQueryProjections, 1);
   assert.equal(router.stats().cachedQueryVectors, 3);
 });
+
+test('semantic fusion can resist one spurious projection and exposes local fusion diagnostics', async () => {
+  const vectorByText = new Map([
+    ['original query', [1,0]],
+    ['projection one', [0,1]],
+    ['projection two', [0,1]],
+    ['distractor block', [1,0]],
+    ['target block', [0.2,0.98]]
+  ]);
+  const embedder = {
+    async embedMany(texts) { return texts.map((text) => vectorByText.get(text)); }
+  };
+  const queryProjector = {
+    name:'fusion-projector',
+    async project() { return { variants:['projection one','projection two'], metadata:null }; }
+  };
+  const router = createSemanticContextRouterV2({
+    embedder,
+    queryProjector,
+    candidateK:2,
+    fusionStrategy:'mean',
+    diagnosticFusion:true
+  });
+  const context = router.putContext([
+    { id:'a-distractor', text:'distractor block' },
+    { id:'z-target', text:'target block' }
+  ]);
+  const result = await router.retrieve(context.cid, 'original query');
+  assert.equal(result.blocks[0].id, 'z-target');
+  assert.equal(result.retrieval.fusionStrategy, 'mean');
+  assert.equal(result.retrieval.fusionDiagnostics.topByStrategy.max[0].id, 'a-distractor');
+  assert.equal(result.retrieval.fusionDiagnostics.topByStrategy.mean[0].id, 'z-target');
+  assert.equal(result.retrieval.fusionDiagnostics.topByStrategy.consensus[0].id, 'z-target');
+  assert.equal(result.retrieval.fusionDiagnostics.topByStrategy.borda[0].id, 'z-target');
+});
