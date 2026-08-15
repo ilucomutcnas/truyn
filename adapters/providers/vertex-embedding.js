@@ -36,6 +36,7 @@ export function createVertexEmbeddingClient({
   if (outputDimensionality != null && (!Number.isInteger(outputDimensionality) || outputDimensionality < 1)) {
     throw new Error('Vertex embedding outputDimensionality must be a positive integer');
   }
+  const effectiveBatchSize = /^gemini-embedding-/i.test(model) ? 1 : batchSize;
 
   const metrics = {
     requests: 0,
@@ -93,8 +94,8 @@ export function createVertexEmbeddingClient({
       throw new Error('Vertex embedding texts must be a non-empty array of strings');
     }
     const vectors = [];
-    for (let offset = 0; offset < texts.length; offset += batchSize) {
-      const batch = texts.slice(offset, offset + batchSize);
+    for (let offset = 0; offset < texts.length; offset += effectiveBatchSize) {
+      const batch = texts.slice(offset, offset + effectiveBatchSize);
       const predictions = await predict(batch.map((content) => ({ task_type: taskType, content })));
       vectors.push(...predictions);
       metrics.inputs += batch.length;
@@ -107,6 +108,6 @@ export function createVertexEmbeddingClient({
     model,
     location,
     embedMany,
-    stats: () => ({ ...metrics, model, location })
+    stats: () => ({ ...metrics, model, location, effectiveBatchSize })
   };
 }
