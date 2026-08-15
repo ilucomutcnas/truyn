@@ -27,6 +27,7 @@ Human-facing documentation for TRUYN architecture, concepts, setup, operations, 
 - [Cross-Cloud 8× Optimization — 2026-08-15](benchmarks/CROSS_CLOUD_8X_OPTIMIZATION_2026-08-15.md) — fixed hot-path optimization gate.
 - [Context Efficiency — 2026-08-15](benchmarks/CONTEXT_EFFICIENCY_2026-08-15.md) — content-addressed context economic gate.
 - [Semantic Retrieval Gate — 2026-08-15](benchmarks/SEMANTIC_RETRIEVAL_GATE_2026-08-15.md) — question + root CID retrieval/provenance gate.
+- [Semantic Retrieval 7-Actor Gate — 2026-08-15](benchmarks/SEMANTIC_RETRIEVAL_MULTI_ACTOR_2026-08-15.md) — functional scaling from two to seven heterogeneous AI actors.
 - [Multimodal Provider Parity Benchmark](benchmarks/MULTIMODAL_PROVIDER_PARITY.md) — public apples-to-apples methodology for reasoning, image and video comparisons.
 
 ### Benchmark documentation boundary
