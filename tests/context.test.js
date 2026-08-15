@@ -43,7 +43,7 @@ test('relay context ACL, delta and provider-side selection verification work end
     { op: 'replace', id: 'policy', text: 'Policy version two. ACCESS_CODE=NEW-42.' }
   ]);
   assert.notEqual(child.cid, base.cid);
-  assert.ok(child.transferBytes < base.transferBytes);
+  assert.ok(child.deltaBytes < base.serializedBytes);
 
   const selected = await provider.selectContext(child.cid, ['policy']);
   assert.equal(selected.blocks.length, 1);
