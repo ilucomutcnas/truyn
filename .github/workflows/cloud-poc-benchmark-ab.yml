@@ -6,6 +6,7 @@ on:
       - main
     paths:
       - 'benchmarks/cross-cloud-ab.js'
+      - 'benchmarks/gemini-direct-proxy.js'
       - 'adapters/providers/azure-openai.js'
       - 'adapters/providers/vertex-gemini.js'
       - '.github/workflows/cloud-poc-benchmark-ab.yml'
@@ -26,7 +27,11 @@ jobs:
       AZURE_OPENAI_DEPLOYMENT: truyn-gpt-4-1-mini
       GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID || secrets.GCP_PROJECT_ID }}
       GCP_WIF_PROVIDER_VALUE: ${{ vars.GCP_WIF_PROVIDER || secrets.GCP_WIF_PROVIDER }}
+      GCP_DEPLOYER_SA_VALUE: ${{ vars.GCP_DEPLOYER_SERVICE_ACCOUNT_EMAIL || secrets.GCP_DEPLOYER_SERVICE_ACCOUNT_EMAIL }}
       GCP_RUNTIME_SA_VALUE: ${{ vars.GCP_RUNTIME_SERVICE_ACCOUNT_EMAIL || secrets.GCP_RUNTIME_SERVICE_ACCOUNT_EMAIL }}
+      GCP_REGION_CONFIGURED: ${{ vars.GCP_REGION || secrets.GCP_REGION }}
+      GCP_AR_REPO: truyn-poc
+      GCP_PROXY_SERVICE: truyn-benchmark-gemini-direct
       GOOGLE_CLOUD_LOCATION: global
       GEMINI_MODEL: gemini-2.5-flash
       BENCHMARK_WARMUPS: '1'
@@ -74,21 +79,14 @@ jobs:
           [[ -n "$token" ]] || { echo 'AZURE_OPENAI_ACCESS_TOKEN=missing'; exit 1; }
           echo "::add-mask::$token"
           echo "AZURE_OPENAI_ACCESS_TOKEN=$token" >> "$GITHUB_ENV"
-
-          key="$(az cognitiveservices account keys list -g "$AZURE_RG" -n "$AZURE_OPENAI_NAME" --query key1 -o tsv)"
-          [[ -n "$key" ]] || { echo 'AZURE_OPENAI_API_KEY=missing'; exit 1; }
-          echo "::add-mask::$key"
-          echo "AZURE_OPENAI_API_KEY=$key" >> "$GITHUB_ENV"
           echo 'AZURE_DIRECT_CREDENTIALS=ready'
 
-      # Use the same GCP runtime service account that powers truyn-gemini.
-      # This keeps Vertex AI permissions/principal aligned between direct and TRUYN arms.
-      - name: Authenticate direct Gemini arm as runtime identity
+      - name: Authenticate GCP deployer using WIF
         uses: google-github-actions/auth@v3
         with:
           project_id: ${{ env.GCP_PROJECT_ID }}
           workload_identity_provider: ${{ env.GCP_WIF_PROVIDER_VALUE }}
-          service_account: ${{ env.GCP_RUNTIME_SA_VALUE }}
+          service_account: ${{ env.GCP_DEPLOYER_SA_VALUE }}
           create_credentials_file: true
           export_environment_variables: true
 
@@ -97,21 +95,76 @@ jobs:
         with:
           project_id: ${{ env.GCP_PROJECT_ID }}
 
-      - name: Prepare ephemeral direct GCP credential
+      - name: Prepare ephemeral direct Gemini proxy
         shell: bash
         run: |
           set -euo pipefail
-          token="$(gcloud auth print-access-token)"
-          [[ -n "$token" ]] || { echo 'GCP_ACCESS_TOKEN=missing'; exit 1; }
-          echo "::add-mask::$token"
-          echo "GCP_ACCESS_TOKEN=$token" >> "$GITHUB_ENV"
-          echo 'GCP_DIRECT_CREDENTIAL=ready'
+          region="$(printf '%s' "$GCP_REGION_CONFIGURED" | grep -oE '[a-z]+-[a-z0-9]+[0-9]' | head -n1 || true)"
+          [[ -n "$region" ]] || { echo 'GCP_REGION_FORMAT=invalid'; exit 1; }
+          echo "GCP_REGION_VALUE=$region" >> "$GITHUB_ENV"
+
+          proxy_token="$(openssl rand -hex 32)"
+          echo "::add-mask::$proxy_token"
+          echo "BENCHMARK_PROXY_TOKEN=$proxy_token" >> "$GITHUB_ENV"
+
+          registry="${region}-docker.pkg.dev"
+          image="${registry}/${GCP_PROJECT_ID}/${GCP_AR_REPO}/benchmark-ab:${GITHUB_SHA}"
+          gcloud auth configure-docker "$registry" --quiet
+          docker build -t "$image" .
+          docker push "$image"
+          echo "GCP_BENCHMARK_IMAGE=$image" >> "$GITHUB_ENV"
+
+          gcloud run deploy "$GCP_PROXY_SERVICE" \
+            --project="$GCP_PROJECT_ID" \
+            --region="$region" \
+            --image="$image" \
+            --service-account="$GCP_RUNTIME_SA_VALUE" \
+            --port=8080 \
+            --min=0 \
+            --max=1 \
+            --cpu=1 \
+            --memory=512Mi \
+            --command=node \
+            --args=benchmarks/gemini-direct-proxy.js \
+            --set-env-vars="BENCHMARK_PROXY_TOKEN=${proxy_token}" \
+            --allow-unauthenticated \
+            --quiet
+
+          proxy_url="$(gcloud run services describe "$GCP_PROXY_SERVICE" \
+            --project="$GCP_PROJECT_ID" \
+            --region="$region" \
+            --format='value(status.url)')"
+          [[ -n "$proxy_url" ]] || { echo 'GEMINI_DIRECT_PROXY_URL=missing'; exit 1; }
+
+          for attempt in $(seq 1 30); do
+            if curl -fsS "${proxy_url}/health" | jq -e '.ok == true' >/dev/null; then
+              echo 'GEMINI_DIRECT_PROXY_HEALTH=success'
+              break
+            fi
+            [[ "$attempt" -lt 30 ]] || { echo 'GEMINI_DIRECT_PROXY_HEALTH=failed'; exit 1; }
+            sleep 2
+          done
+
+          # The existing Vertex adapter now targets the raw-semantics proxy. The bearer token
+          # is only proxy authorization; the proxy itself calls Vertex with the runtime SA metadata token.
+          echo "VERTEX_API_ENDPOINT=$proxy_url" >> "$GITHUB_ENV"
+          echo "GCP_ACCESS_TOKEN=$proxy_token" >> "$GITHUB_ENV"
+          echo "GEMINI_DIRECT_PROXY_URL=$proxy_url" >> "$GITHUB_ENV"
+          echo 'GEMINI_DIRECT_PROXY=ready'
 
       - name: Run paired A/B benchmark
         shell: bash
         run: |
           set -euo pipefail
           node benchmarks/cross-cloud-ab.js
+
+          tmp="$(mktemp)"
+          jq --arg proxy "$GEMINI_DIRECT_PROXY_URL" '
+            .methodology.baseline = "Direct GitHub runner -> Azure OpenAI; Gemini request -> ephemeral Cloud Run runtime-identity proxy -> Vertex Gemini; no TRUYN relay/envelopes." |
+            .methodology.directGeminiProxy = $proxy |
+            .methodology.directGeminiProxySemantics = "Raw Vertex generateContent request/response preserved; proxy only supplies the same runtime service-account identity used by truyn-gemini."
+          ' cross-cloud-ab.json > "$tmp"
+          mv "$tmp" cross-cloud-ab.json
 
       - name: Print benchmark summary
         if: ${{ success() }}
@@ -136,3 +189,17 @@ jobs:
           path: cross-cloud-ab.json
           if-no-files-found: error
           retention-days: 30
+
+      - name: Delete ephemeral direct Gemini proxy
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          set +e
+          region="${GCP_REGION_VALUE:-$(printf '%s' "$GCP_REGION_CONFIGURED" | grep -oE '[a-z]+-[a-z0-9]+[0-9]' | head -n1)}"
+          if [[ -n "$region" ]]; then
+            gcloud run services delete "$GCP_PROXY_SERVICE" \
+              --project="$GCP_PROJECT_ID" \
+              --region="$region" \
+              --quiet >/dev/null 2>&1 || true
+          fi
+          echo 'GEMINI_DIRECT_PROXY_CLEANUP=complete'
