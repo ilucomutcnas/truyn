@@ -10,11 +10,7 @@ export function createProviderAccessPolicy({
 } = {}) {
   const normalizedMode = String(mode).trim().toLowerCase();
   const allowed = new Set(parseIds(allowedRequesterIds));
-
-  if (!['owner-only', 'public'].includes(normalizedMode)) {
-    throw new Error('Unsupported provider access mode');
-  }
-
+  if (!['owner-only', 'public'].includes(normalizedMode)) throw new Error('Unsupported provider access mode');
   return {
     mode: normalizedMode,
     authorize(need) {
@@ -24,6 +20,17 @@ export function createProviderAccessPolicy({
       if (allowed.size === 0) return { ok: false, mode: normalizedMode, reason: 'no_allowed_requesters' };
       if (!allowed.has(requesterId)) return { ok: false, mode: normalizedMode, reason: 'requester_not_allowed' };
       return { ok: true, mode: normalizedMode, requesterId };
+    }
+  };
+}
+
+export function createLocalDevelopmentAccessPolicy() {
+  return {
+    mode: 'local-development',
+    authorize(need) {
+      const requesterId = need?.from || null;
+      if (!requesterId) return { ok: false, mode: 'local-development', reason: 'missing_requester_identity' };
+      return { ok: true, mode: 'local-development', requesterId };
     }
   };
 }
