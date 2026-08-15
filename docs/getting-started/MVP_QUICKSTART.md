@@ -1,29 +1,74 @@
 # TRUYN MVP Quickstart
 
-This quickstart is deliberately **local-development only**. It proves signed identity, capability discovery, request/result routing and Trustability Lite without exposing a permissive relay to a LAN or the public Internet.
+This document describes the first executable TRUYN vertical slice. It is intentionally smaller than the target architecture: the MVP uses a dependency-free Node.js HTTP relay to prove signed agent discovery and request/result exchange before decentralized discovery, QUIC, NAT traversal, durable storage, full Trustability and production-grade provider authorization are implemented.
+
+## What is implemented
+
+The core MVP currently provides:
+
+- `TRUYN/1` signed JSON envelopes for `IDENTITY`, `OFFER`, `NEED`, `RESULT`, and `REVOKE`;
+- Ed25519 node identities whose Node ID is derived from the public key rather than an IP address;
+- signature verification and tamper rejection;
+- an in-memory HTTP relay for registration, capability discovery, request routing, result routing, and offer revocation;
+- authenticated event polling with per-registration session tokens;
+- a `TruynNode` client;
+- a minimal CLI;
+- a provisional `trustability-lite/1` signal;
+- end-to-end demos and automated tests.
+
+Additional adapter/cloud PoC work exists elsewhere in the repository. The relay and Trustability Lite formula remain MVP implementation choices, not final TRUYN network/trust/security contracts.
+
+## Provider-security warning
+
+The current MVP relay does **not** yet represent the approved production provider-ownership security model.
+
+Do not interpret successful registration/discovery as permission for an arbitrary external requester to use a private or owner-funded provider.
+
+The target security architecture requires:
+
+```text
+authenticate requester
+      ↓
+resolve authoritative requester tenant
+      ↓
+provider ownership / visibility authorization
+      ↓
+billing / quota eligibility
+      ↓
+dispatch
+```
+
+until that is implemented and passes the negative matrix in `../architecture/THREAT_MODEL.md`, keep paid/private provider experiments in trusted/controlled environments.
 
 ## Requirements
 
 - Node.js 20 or newer
-- `npm ci`
+- no external npm dependencies for the core MVP path
 
 ## Fastest proof
 
+From the repository root:
+
 ```bash
-npm ci
 npm test
 npm run demo
 ```
 
-The demo starts an ephemeral **loopback-only** relay, creates independent Ed25519 node identities, publishes a capability, routes a signed `NEED`, returns a signed `RESULT`, verifies the signature, and reports the local Trustability Lite signal.
+The demo starts an ephemeral relay, creates two independent Ed25519 node identities, publishes a `research` capability, discovers it from the second node, routes a signed `NEED`, returns a signed `RESULT`, verifies the result signature, and prints the current Trustability Lite score.
 
-## Run the local relay
+A successful run ends with output similar to:
+
+```text
+RESULT signature: VERIFIED
+Trustability Lite: <score>
+TRUYN MVP transaction complete.
+```
+
+## Run the relay
 
 ```bash
 node cli/index.js relay --host 127.0.0.1 --port 8787
 ```
-
-The permissive development relay is intentionally restricted to loopback. `localDevelopmentMode` refuses a non-loopback bind.
 
 Health endpoint:
 
@@ -31,9 +76,9 @@ Health endpoint:
 GET http://127.0.0.1:8787/health
 ```
 
-## Two local identities
+## Two-terminal / two-machine flow
 
-Use separate `TRUYN_HOME` directories.
+Use separate `TRUYN_HOME` directories when testing multiple identities on one computer.
 
 Provider:
 
@@ -51,43 +96,66 @@ TRUYN_HOME=.truyn-requester node cli/index.js find research --relay http://127.0
 TRUYN_HOME=.truyn-requester node cli/index.js need research "Analyze TRUYN" --relay http://127.0.0.1:8787
 ```
 
-Return the result with the request ID received by the provider:
+The provider's next `poll` returns the signed `NEED`. Use its envelope `id` as the request ID:
 
 ```bash
 TRUYN_HOME=.truyn-provider node cli/index.js result <request-id> "Structured answer" --relay http://127.0.0.1:8787
 ```
 
-Then poll from the requester:
+The requester then receives the signed result:
 
 ```bash
 TRUYN_HOME=.truyn-requester node cli/index.js poll --relay http://127.0.0.1:8787
 ```
 
-## Security boundary
+For testing across two computers, bind the relay only in a trusted environment and replace `127.0.0.1` with the reachable relay host address. The core MVP relay is not the final public provider-security boundary.
 
-Do **not** use this quickstart to expose a relay on `0.0.0.0`, a LAN, a tunnel, or the public Internet.
+## MVP HTTP surface
 
-The production-style reference relay is fail closed by default:
+```text
+POST /v1/register
+POST /v1/offers
+GET  /v1/offers?capability=<name>
+POST /v1/needs
+POST /v1/results
+POST /v1/revoke
+GET  /v1/events?nodeId=<node-id>
+GET  /health
+```
 
-- arbitrary node registration is denied unless the node is explicitly enrolled;
-- provider dispatch is denied unless the requester is explicitly trusted;
-- untrusted requesters cannot enumerate foreign provider offers;
-- legacy execution/mutation routes require an active bearer session bound to the signed identity;
-- registration replays and stale registration envelopes are rejected;
-- sessions and request sizes are bounded.
+All TRUYN exchange messages are signed envelopes. Event polling additionally requires the relay session token returned during registration.
 
-These controls prevent the old MVP fail-open behavior while the full multi-tenant BYOK owner/tenant/billing authorization layer is completed.
+**Security architecture requirement:** every execution-capable legacy/current route must eventually converge on central provider authorization. A future secure route does not make an older bypass safe.
 
-## Public runtime rule
+## Current boundary
 
-A public TRUYN endpoint never means “use the operator's AI account.” Normal users are BYOK. Owner-funded providers remain private unless an explicit, server-authoritative entitlement says otherwise.
+This core implementation proves:
 
-For remote/multi-machine development, deploy a properly authenticated and explicitly enrolled environment; do not bypass the reference relay's fail-closed defaults just to reproduce the local demo.
+```text
+independent identity
+      ↓
+capability OFFER
+      ↓
+capability discovery
+      ↓
+signed NEED
+      ↓
+routing
+      ↓
+signed RESULT
+      ↓
+verification + Trustability Lite metadata
+```
 
-See:
+It does **not** by itself prove:
 
-- `../../SECURITY.md`
-- `../architecture/PROVIDER_OWNERSHIP.md`
-- `../architecture/AUTHORIZATION_MODEL.md`
-- `../architecture/THREAT_MODEL.md`
-- `BYOK.md`
+- production-grade tenant/provider authorization;
+- authorization-aware private discovery;
+- BYOK onboarding/secure credential storage;
+- billing/quota enforcement;
+- private provider backchannels;
+- safe public coexistence with owner-funded provider accounts;
+- decentralized discovery / DHT / QUIC / NAT traversal;
+- full Trustability / provenance / Sybil resistance.
+
+The immediate architecture priority for public paid-provider safety is the provider-security gate defined in `ROADMAP.md`, `SECURITY.md` and `docs/architecture/THREAT_MODEL.md`.

@@ -1,7 +1,6 @@
 import { createRelay } from '../network/relay/server.js';
 import { TruynNode } from '../node/client.js';
 import { createIdentity } from '../core/identity/index.js';
-import { createLocalDevelopmentAccessPolicy } from '../core/security/provider-access.js';
 import { TruynAdapterHost } from '../adapters/sdk/index.js';
 import { createOpenAIProvider } from '../adapters/providers/openai.js';
 import { createAnthropicProvider } from '../adapters/providers/anthropic.js';
@@ -15,19 +14,10 @@ const relayUrl = await relay.listen({ port: 0 });
 const requester = new TruynNode({ relayUrl, identity: createIdentity() });
 const openaiNode = new TruynNode({ relayUrl, identity: createIdentity() });
 const anthropicNode = new TruynNode({ relayUrl, identity: createIdentity() });
-const localAccess = createLocalDevelopmentAccessPolicy();
 await requester.register({ name: 'local-live-demo-orchestrator' });
 
-const openaiHost = new TruynAdapterHost({
-  node: openaiNode,
-  accessPolicy: localAccess,
-  adapter: createOpenAIProvider({ capabilities: ['research'] })
-});
-const anthropicHost = new TruynAdapterHost({
-  node: anthropicNode,
-  accessPolicy: localAccess,
-  adapter: createAnthropicProvider({ capabilities: ['review'] })
-});
+const openaiHost = new TruynAdapterHost({ node: openaiNode, adapter: createOpenAIProvider({ capabilities: ['research'] }) });
+const anthropicHost = new TruynAdapterHost({ node: anthropicNode, adapter: createAnthropicProvider({ capabilities: ['review'] }) });
 await openaiHost.publishCapabilities();
 await anthropicHost.publishCapabilities();
 

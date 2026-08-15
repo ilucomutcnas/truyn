@@ -1,7 +1,6 @@
 import { createRelay } from '../network/relay/server.js';
 import { TruynNode } from '../node/client.js';
 import { createIdentity } from '../core/identity/index.js';
-import { createLocalDevelopmentAccessPolicy } from '../core/security/provider-access.js';
 import { createFunctionAdapter, TruynAdapterHost } from '../adapters/sdk/index.js';
 import { createMcpHandler } from '../adapters/mcp/server.js';
 
@@ -10,14 +9,12 @@ const relayUrl = await relay.listen({ port: 0 });
 const orchestrator = new TruynNode({ relayUrl, identity: createIdentity() });
 const researcherNode = new TruynNode({ relayUrl, identity: createIdentity() });
 const reviewerNode = new TruynNode({ relayUrl, identity: createIdentity() });
-const localAccess = createLocalDevelopmentAccessPolicy();
 
 await orchestrator.register({ name: 'mcp-orchestrator' });
 const mcp = createMcpHandler({ node: orchestrator });
 
 const researcher = new TruynAdapterHost({
   node: researcherNode,
-  accessPolicy: localAccess,
   adapter: createFunctionAdapter({
     name: 'demo-research-agent', capabilities: ['research'],
     execute: async ({ input }) => ({ output: `research:${input}`, metadata: { demoAgent: 'researcher' } })
@@ -25,7 +22,6 @@ const researcher = new TruynAdapterHost({
 });
 const reviewer = new TruynAdapterHost({
   node: reviewerNode,
-  accessPolicy: localAccess,
   adapter: createFunctionAdapter({
     name: 'demo-review-agent', capabilities: ['review'],
     execute: async ({ input }) => ({ output: `reviewed:${input}`, metadata: { demoAgent: 'reviewer' } })

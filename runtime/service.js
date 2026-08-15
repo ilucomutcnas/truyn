@@ -2,6 +2,7 @@ import http from 'node:http';
 import { createRelay } from '../network/relay/server.js';
 import { TruynNode } from '../node/client.js';
 import { createIdentity } from '../core/identity/index.js';
+import { createProviderAccessPolicy } from '../core/security/provider-access.js';
 import { TruynAdapterHost } from '../adapters/sdk/index.js';
 import { createProviderAdapter } from '../adapters/providers/index.js';
 
@@ -30,7 +31,8 @@ function writeJson(res, status, body) {
   res.writeHead(status, {
     'content-type': 'application/json; charset=utf-8',
     'content-length': Buffer.byteLength(data),
-    'cache-control': 'no-store'
+    'cache-control': 'no-store',
+    'x-content-type-options': 'nosniff'
   });
   res.end(data);
 }
@@ -65,12 +67,17 @@ async function runProvider() {
   const identity = loadRuntimeIdentity();
   const node = new TruynNode({ relayUrl, identity });
   const adapter = createProviderAdapter(providerName, { capabilities });
+  const accessPolicy = createProviderAccessPolicy({
+    mode: process.env.TRUYN_PROVIDER_ACCESS_MODE || 'owner-only',
+    allowedRequesterIds: process.env.TRUYN_ALLOWED_REQUESTER_IDS || ''
+  });
   const fastPath = process.env.TRUYN_FAST_PATH !== '0';
   const socketPath = fastPath && process.env.TRUYN_SOCKET_PATH !== '0';
   const longPollMs = Number(process.env.TRUYN_LONG_POLL_MS || 10_000);
   const adapterHost = new TruynAdapterHost({
     node,
     adapter,
+    accessPolicy,
     fastPath,
     socketPath,
     longPollMs,
@@ -99,7 +106,7 @@ async function runProvider() {
         await adapterHost.runOnce();
         ready = true;
         if (!fastPath && adapterHost.pollIntervalMs > 0) await sleep(adapterHost.pollIntervalMs);
-      } catch (error) {
+      } catch {
         if (stopping) break;
         ready = false;
         adapterHost.registered = false;
