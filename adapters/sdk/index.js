@@ -198,6 +198,7 @@ export class TruynAdapterHost {
   }
 
   async start() {
+    if (this.running) return;
     await this.publishCapabilities();
     this.running = true;
     this.loopPromise = (async () => {
