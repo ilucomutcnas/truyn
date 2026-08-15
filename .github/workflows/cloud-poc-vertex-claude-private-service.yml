@@ -59,23 +59,7 @@ jobs:
             --quiet
           echo 'CLAUDE_REQUIRED_APIS=enabled'
 
-      - name: Grant least privileges for partner-model bootstrap and runtime
-        shell: bash
-        run: |
-          set -euo pipefail
-          gcloud projects add-iam-policy-binding "$GCP_PROJECT_ID_VALUE" \
-            --member="serviceAccount:${GCP_DEPLOYER_SA_VALUE}" \
-            --role='roles/consumerprocurement.entitlementManager' \
-            --condition=None \
-            --quiet >/dev/null
-          gcloud projects add-iam-policy-binding "$GCP_PROJECT_ID_VALUE" \
-            --member="serviceAccount:${GCP_RUNTIME_SA_VALUE}" \
-            --role='roles/aiplatform.user' \
-            --condition=None \
-            --quiet >/dev/null
-          echo 'CLAUDE_BOOTSTRAP_IAM=ready'
-
-      - name: Accept Claude Model Garden EULA and enable model
+      - name: Accept Claude Model Garden EULA and enable model using existing IAM
         shell: bash
         run: |
           set -euo pipefail
