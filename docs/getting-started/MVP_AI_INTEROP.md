@@ -1,12 +1,12 @@
 # TRUYN MVP — AI Interoperability
 
-**Implementation status:** working local MVP.
+**Implementation status:** working MVP/interoperability code; provider-ownership security hardening remains an approved target, not a completed production claim.
 
-This document describes executable code in the repository. It does not claim that the provisional relay, Trustability Lite formula, provider adapters, or MCP compatibility layer are the final TRUYN architecture.
+This document describes executable code in the repository. It does not claim that the provisional relay, Trustability Lite formula, provider adapters, cloud PoC paths or MCP compatibility layer are the final TRUYN architecture.
 
 ## What this MVP proves
 
-The implemented path is:
+The implemented conceptual path is:
 
 ```text
 agent / MCP client / HTTP client
@@ -24,7 +24,19 @@ agent / MCP client / HTTP client
         AI provider
 ```
 
-A requester does not need the provider's API contract. It asks TRUYN for a capability. TRUYN matches an `OFFER`, routes a signed `NEED`, and returns a signed `RESULT` with Trustability Lite metadata.
+A requester does not need the provider's native API contract. TRUYN can match a capability and route signed request/result envelopes.
+
+**What this path does not prove by itself:** that every requester is authorized to use every discovered provider. Provider ownership and billing authorization are separate from capability interoperability.
+
+## BYOK rule
+
+Normal user operation is BYOK — Bring Your Own Intelligence / Bring Your Own Provider.
+
+Provider credentials used by an adapter belong to the user/provider runtime and should remain local or in an appropriate secure runtime secret store. They are not TRUYN protocol payloads and must not be distributed through relay discovery, `OFFER`, `NEED` or `RESULT` messages.
+
+Current live demos may use local environment variables for credentials. This is a development/interoperability mechanism, not the final onboarding/credential-storage UX.
+
+See `BYOK.md`.
 
 ## Verify without paid AI APIs
 
@@ -33,167 +45,86 @@ Requirements: Node.js 20 or newer.
 ```bash
 npm test
 npm run demo:ai
-npm run benchmark
 ```
 
-`npm test` covers the original protocol/identity/relay path plus AdapterHost, HTTP adapter, MCP modern/legacy behavior, and MCP HTTP routing headers.
+Where benchmark scripts are present, their methodology/result documents define whether token counts are provider-reported measurements, estimates or serialized-byte proxies. Do not interpret estimated tokens as provider billing counters.
 
-`npm run demo:ai` runs three independent TRUYN identities: an MCP-facing orchestrator, a research provider, and a review provider. The providers are deterministic local function adapters so the demo is reproducible without external credentials.
-
-`npm run benchmark` measures serialized payload bytes exactly. Its `approximateTokens` field is explicitly a `chars/4` estimate and is **not** a provider billing-token measurement.
+Deterministic/local adapters should remain the default path for reproducible no-credential tests.
 
 ## MCP adapter
 
-TRUYN exposes these tools:
+TRUYN exposes tools for identity, discovery, offers, needs, polling and results through its MCP compatibility surface.
 
-- `truyn_identity`
-- `truyn_find`
-- `truyn_offer`
-- `truyn_need`
-- `truyn_poll`
-- `truyn_result`
-
-Start the stdio server:
+Typical local start:
 
 ```bash
 truyn init
 truyn mcp --relay http://127.0.0.1:8787
 ```
 
-Start the HTTP MCP endpoint:
+HTTP MCP/local bridge surfaces should bind locally by default unless a production authentication/authorization layer is deliberately configured.
 
-```bash
-truyn mcp-http --relay http://127.0.0.1:8787 --port 8791
-```
-
-The endpoint is `/mcp`. The MVP supports MCP `2026-07-28` `server/discover`, `tools/list`, and `tools/call`, and also accepts legacy initialize-based clients for `2025-11-25` and `2025-06-18`.
-
-The HTTP implementation binds to localhost by default and validates `Origin` when supplied. Do not expose the MVP HTTP endpoint publicly without a production authentication/authorization layer.
+**MCP authorization rule:** MCP is a connection surface, not a provider-policy bypass. Provider execution reached through MCP must ultimately pass the same central provider authorization as HTTP/WebSocket/SDK paths.
 
 ## Universal HTTP adapter
 
-For software that does not speak MCP:
+The local HTTP bridge exposes identity/discovery/request/result operations for software that does not speak MCP.
 
-```bash
-truyn bridge --relay http://127.0.0.1:8787 --port 8790
-```
+It is a compatibility bridge, not a separate security domain. Execution-capable routes must converge on the same provider ownership/authorization decision as every other transport.
 
-Endpoints:
+## Live provider adapters
 
-```text
-GET  /health
-GET  /v1/identity
-GET  /v1/offers?capability=...
-POST /v1/offer
-POST /v1/need
-GET  /v1/events
-POST /v1/result
-```
+The repository contains executable provider-adapter work for multiple provider/cloud paths. Live calls require credentials/identity and provider access controlled by the person or runtime making the call.
 
-## Live OpenAI + Anthropic proof
+A live adapter demonstration proves technical interoperability with that provider API. It does **not** publish the upstream account as a public TRUYN capability.
 
-The repository includes two executable provider adapters:
+When running a provider locally, use a separate TRUYN identity/home for independently attributable provider nodes and only credentials you control.
 
-- OpenAI Responses API
-- Anthropic Messages API
+## Public relay warning
 
-No provider model is hard-coded because model availability changes. Supply explicit model IDs.
-
-```bash
-export OPENAI_API_KEY='...'
-export OPENAI_MODEL='...'
-export ANTHROPIC_API_KEY='...'
-export ANTHROPIC_MODEL='...'
-
-npm run demo:live -- "Analyze the TRUYN MVP and return the key risk."
-```
-
-The live demo performs:
+The approved architecture allows a public relay and private providers to coexist, but that safety requires the provider-security gate to be implemented:
 
 ```text
-requester
-  ↓ NEED research
-OpenAI provider node
-  ↓ signed RESULT + usage metadata
-requester
-  ↓ NEED review
-Anthropic provider node
-  ↓ signed RESULT + usage metadata
-requester
+authenticate requester
+      ↓
+resolve requester tenant
+      ↓
+authorize provider owner/visibility
+      ↓
+resolve billing / quota
+      ↓
+dispatch
 ```
 
-Each provider result records provider name, model, provider request ID when available, provider latency, and provider-reported usage metadata when returned by the API.
+Until the central ownership/default-deny/security-test gate is implemented, do not treat the current MVP/PoC relay as a general public paid-provider service.
 
-**Repository tests do not execute these paid external calls.** A live run requires valid user-supplied credentials and network access.
+A public TRUYN endpoint never means "use the operator's AI account".
 
-## Run providers as independent nodes
+## Security acceptance target
 
-Each independent node needs its own TRUYN identity. On one machine, use different `TRUYN_HOME` directories.
+The interoperability layer is ready for public paid-provider coexistence only when tests prove:
 
-OpenAI provider:
+- foreign requester → owner-private provider = denied before upstream call;
+- known private provider ID = still denied;
+- forged owner/tenant field = ignored/denied;
+- legacy HTTP/WebSocket/MCP paths = same authorization decision;
+- user → own BYOK provider = allowed when valid;
+- explicitly shared provider = allowed only within explicit policy/quota.
 
-```bash
-TRUYN_HOME=$HOME/.truyn-openai truyn init
-TRUYN_HOME=$HOME/.truyn-openai \
-OPENAI_API_KEY='...' OPENAI_MODEL='...' \
-truyn provider --provider openai --capability research \
-  --relay http://127.0.0.1:8787
-```
+See `../architecture/THREAT_MODEL.md`.
 
-Anthropic provider:
+## Current completion boundary
 
-```bash
-TRUYN_HOME=$HOME/.truyn-anthropic truyn init
-TRUYN_HOME=$HOME/.truyn-anthropic \
-ANTHROPIC_API_KEY='...' ANTHROPIC_MODEL='...' \
-truyn provider --provider anthropic --capability review \
-  --relay http://127.0.0.1:8787
-```
+Implemented/experimented paths in the repository demonstrate signed identities, capability discovery/routing, adapters, MCP/HTTP interoperability, provider execution and benchmark work.
 
-A separate requester can then use the CLI, HTTP bridge, or MCP tools to discover and call those capabilities.
+Not claimed as complete by this documentation update:
 
-## Two-machine proof
-
-For a LAN/internet experiment, run the relay on a reachable host:
-
-```bash
-truyn relay --host 0.0.0.0 --port 8787
-```
-
-Point each independent node at:
-
-```text
-http://RELAY_HOST:8787
-```
-
-This demonstrates cross-machine capability discovery and signed request/result routing. The current relay is an in-memory MVP transport with no production authentication, persistence, NAT traversal, DHT, QUIC, rate limiting, or multi-relay consensus. Use it only in a trusted test environment.
-
-## MVP completion boundary
-
-Implemented now:
-
-- signed TRUYN/1 MVP envelopes;
-- independent Ed25519 node identities;
-- capability `OFFER` / discovery;
-- `NEED` routing;
-- signed `RESULT` routing;
-- provisional Trustability Lite;
-- CLI;
-- universal Adapter SDK;
-- HTTP adapter;
-- MCP stdio + HTTP adapter;
-- OpenAI provider adapter;
-- Anthropic provider adapter;
-- reproducible local AI-interoperability demo;
-- live two-provider demo path;
-- structural payload benchmark.
-
-Not claimed as complete:
-
-- decentralized discovery / DHT;
-- QUIC/NAT traversal;
-- durable distributed relay state;
-- production authentication/authorization;
-- full Trustability / provenance graph / Sybil defense;
-- measured cross-provider token-cost reduction until a live benchmark is run with real provider usage counters;
-- public mainnet/testnet operations.
+- production provider ownership/tenant ACL;
+- authorization-aware private discovery;
+- BYOK setup UX and final secure credential storage;
+- billing/quota enforcement;
+- private provider backchannel/control-plane separation;
+- complete legacy-route convergence on central authorization;
+- safe public coexistence with owner-funded providers;
+- decentralized discovery / DHT / QUIC / NAT traversal;
+- full Trustability / provenance graph / Sybil defense.
