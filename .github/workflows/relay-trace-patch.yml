@@ -24,7 +24,7 @@ jobs:
         with:
           node-version: 20
 
-      - name: Repair helper interpolation escaping
+      - name: Repair helper for current benchmark shape
         shell: bash
         run: |
           python - <<'PY'
@@ -32,6 +32,10 @@ jobs:
           path = Path('scripts/relay-trace-patch.mjs')
           source = path.read_text()
           source = source.replace(r"\`${relayUrl}", r"\`\${relayUrl}")
+          source = source.replace(
+              "  const first = source.indexOf(before);\n  if (first < 0) throw new Error(`${path}: patch anchor not found`);\n  if (source.indexOf(before, first + before.length) >= 0) throw new Error(`${path}: patch anchor is not unique`);",
+              "  const first = source.lastIndexOf(before);\n  if (first < 0) throw new Error(`${path}: patch anchor not found`);"
+          )
           path.write_text(source)
           PY
 
