@@ -21,19 +21,27 @@ function loadRuntimeIdentity() {
   return createIdentity();
 }
 
+function csvSet(value = '') {
+  return value.split(',').map((item) => item.trim()).filter(Boolean);
+}
+
 function writeJson(res, status, body) {
   const data = JSON.stringify(body);
   res.writeHead(status, {
     'content-type': 'application/json; charset=utf-8',
-    'content-length': Buffer.byteLength(data)
+    'content-length': Buffer.byteLength(data),
+    'cache-control': 'no-store'
   });
   res.end(data);
 }
 
 async function runRelay() {
-  const relay = createRelay();
-  const url = await relay.listen({ host, port });
-  process.stdout.write(`${JSON.stringify({ ok: true, role: 'relay', url, fastPath: true, chainPath: true, socketPath: true })}\n`);
+  const relay = createRelay({
+    trustedRequesterNodeIds: csvSet(process.env.TRUYN_TRUSTED_REQUESTER_NODE_IDS),
+    exposeDiagnostics: process.env.TRUYN_PRIVATE_DIAGNOSTICS === '1'
+  });
+  await relay.listen({ host, port });
+  process.stdout.write(`${JSON.stringify({ ok: true, role: 'relay', ready: true })}\n`);
 
   const shutdown = async () => {
     await relay.close();
@@ -70,64 +78,36 @@ async function runProvider() {
 
   let stopping = false;
   let ready = false;
-  let lastError = null;
   let handled = 0;
 
   const server = http.createServer((req, res) => {
     if (req.method === 'GET' && (req.url === '/health' || req.url === '/')) {
-      return writeJson(res, 200, {
-        ok: true,
-        role: 'provider',
-        ready,
-        provider: providerName,
-        nodeId: identity.nodeId,
-        capabilities,
-        relayUrl,
-        fastPath,
-        socketPath,
-        transport: socketPath ? 'websocket' : (fastPath ? 'long-poll' : 'legacy-poll'),
-        longPollMs,
-        handled,
-        lastError
-      });
+      return writeJson(res, 200, { ok: true, role: 'provider', ready });
     }
     if (req.method === 'GET' && req.url === '/ready') {
-      return writeJson(res, ready ? 200 : 503, { ok: ready, lastError, fastPath, socketPath, longPollMs });
+      return writeJson(res, ready ? 200 : 503, { ok: ready });
     }
     return writeJson(res, 404, { ok: false, error: 'not_found' });
   });
 
   await new Promise((resolve) => server.listen(port, host, resolve));
-  process.stdout.write(`${JSON.stringify({
-    ok: true,
-    role: 'provider',
-    provider: providerName,
-    nodeId: identity.nodeId,
-    capabilities,
-    relayUrl,
-    fastPath,
-    socketPath,
-    longPollMs,
-    health: `http://${host}:${port}/health`
-  })}\n`);
+  process.stdout.write(`${JSON.stringify({ ok: true, role: 'provider', ready: false })}\n`);
 
   const loop = (async () => {
     while (!stopping) {
       try {
         const result = await adapterHost.runOnce();
         ready = true;
-        lastError = null;
         handled += result.handled;
         if (!fastPath && adapterHost.pollIntervalMs > 0) await sleep(adapterHost.pollIntervalMs);
       } catch (error) {
         if (stopping) break;
         ready = false;
-        lastError = error.message;
         adapterHost.registered = false;
         adapterHost.offerIds = [];
         node.closeFastSocket();
         node.sessionToken = null;
-        process.stderr.write(`TRUYN provider retry: ${error.message}\n`);
+        process.stderr.write('TRUYN provider retry\n');
         await sleep(Number(process.env.TRUYN_RETRY_MS || 1000));
       }
     }
