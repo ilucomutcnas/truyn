@@ -1,0 +1,18 @@
+# Build output
+target/
+dist/
+build/
+
+# Local runtime state
+.truyn/
+
+# Secrets and local configuration
+.env
+.env.*
+*.key
+*.pem
+
+# Editors / OS
+.DS_Store
+.vscode/
+.idea/

@@ -1,0 +1,19 @@
+syntax = "proto3";
+package truyn.v1;
+
+import "proto/v1/common.proto";
+
+message ContentObject {
+  bytes object_id = 1;
+  string digest_algorithm = 2;
+  bytes digest = 3;
+  string content_type = 4;
+  uint64 size_bytes = 5;
+  bytes inline_data = 6;
+  repeated Reference chunks = 7;
+  bytes source_node_id = 8;
+  repeated Reference provenance = 9;
+  uint64 created_at_unix_ms = 10;
+  uint64 expires_at_unix_ms = 11;
+  Signature signature = 12;
+}

@@ -1,0 +1,26 @@
+{
+  "name": "truyn",
+  "version": "0.1.0-mvp.2",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "truyn": "./cli/index.js"
+  },
+  "scripts": {
+    "test": "node --test tests/*.test.js",
+    "demo": "node examples/mvp-demo.js",
+    "demo:ai": "node examples/ai-mvp-demo.js",
+    "demo:live": "node examples/live-ai-demo.js",
+    "benchmark": "node benchmarks/mvp-handoff.js",
+    "relay": "node cli/index.js relay",
+    "mcp": "node cli/index.js mcp",
+    "bridge": "node cli/index.js bridge",
+    "provider": "node cli/index.js provider"
+  },
+  "dependencies": {
+    "ws": "8.21.1"
+  }
+}

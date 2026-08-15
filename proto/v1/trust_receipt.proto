@@ -1,0 +1,21 @@
+syntax = "proto3";
+package truyn.v1;
+
+import "proto/v1/common.proto";
+import "proto/v1/trust.proto";
+
+message TrustReceipt {
+  bytes receipt_id = 1;
+  bytes claim_id = 2;
+  bytes requester_node_id = 3;
+  string policy_id = 4;
+  TrustVector vector = 5;
+  uint64 raw_support_count = 6;
+  uint64 raw_dispute_count = 7;
+  uint64 independent_support_count = 8;
+  bytes evidence_root_digest = 9;
+  bytes generated_by_node_id = 10;
+  uint64 generated_at_unix_ms = 11;
+  uint64 expires_at_unix_ms = 12;
+  Signature signature = 13;
+}

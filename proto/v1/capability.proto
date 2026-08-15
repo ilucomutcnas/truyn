@@ -1,0 +1,11 @@
+syntax = "proto3";
+package truyn.v1;
+
+message CapabilityDescriptor {
+  string name = 1;
+  string version = 2;
+  string domain = 3;
+  string input_schema = 4;
+  string output_schema = 5;
+  repeated string tags = 6;
+}

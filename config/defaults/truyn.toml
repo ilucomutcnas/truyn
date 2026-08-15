@@ -1,0 +1,12 @@
+# TRUYN development configuration skeleton
+version = "0.1.0-dev"
+network = "local"
+
+[node]
+data_dir = "~/.truyn"
+
+[protocol]
+preferred = "TRUYN/1"
+
+[trustability]
+policy = "development-default"

@@ -1,0 +1,45 @@
+syntax = "proto3";
+package truyn.v1;
+
+enum Urgency {
+  URGENCY_UNSPECIFIED = 0;
+  URGENCY_BACKGROUND = 1;
+  URGENCY_NORMAL = 2;
+  URGENCY_HIGH = 3;
+  URGENCY_CRITICAL = 4;
+}
+
+message Reference {
+  string kind = 1;
+  bytes id = 2;
+  string uri = 3;
+  bytes digest = 4;
+}
+
+message Signature {
+  bytes key_id = 1;
+  string algorithm = 2;
+  bytes value = 3;
+}
+
+message Price {
+  double amount = 1;
+  string currency = 2;
+  string unit = 3;
+}
+
+message RequestPolicy {
+  double min_trustability = 1;
+  uint64 max_age_ms = 2;
+  uint64 max_latency_ms = 3;
+  Price max_cost = 4;
+  uint64 deadline_unix_ms = 5;
+  uint32 priority = 6;
+  Urgency urgency = 7;
+  double decision_value = 8;
+  string value_unit = 9;
+  string domain = 10;
+  string purpose = 11;
+  repeated string privacy_requirements = 12;
+  bool prefer_compute_near_data = 13;
+}

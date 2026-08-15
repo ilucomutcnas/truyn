@@ -1,0 +1,16 @@
+syntax = "proto3";
+package truyn.v1;
+
+import "proto/v1/common.proto";
+
+message State {
+  bytes state_id = 1;
+  string subject = 2;
+  uint64 version = 3;
+  Reference object_ref = 4;
+  bytes digest = 5;
+  bytes source_node_id = 6;
+  uint64 observed_at_unix_ms = 7;
+  uint64 expires_at_unix_ms = 8;
+  Signature signature = 9;
+}

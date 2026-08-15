@@ -1,0 +1,25 @@
+syntax = "proto3";
+package truyn.v1;
+
+import "proto/v1/common.proto";
+
+enum AttestationVerdict {
+  ATTESTATION_UNSPECIFIED = 0;
+  ATTESTATION_SUPPORTS = 1;
+  ATTESTATION_DISPUTES = 2;
+  ATTESTATION_INCONCLUSIVE = 3;
+}
+
+message Attestation {
+  bytes attestation_id = 1;
+  bytes claim_id = 2;
+  bytes attester_node_id = 3;
+  AttestationVerdict verdict = 4;
+  double confidence = 5;
+  string domain = 6;
+  bytes independence_group_id = 7;
+  repeated Reference evidence = 8;
+  repeated Reference provenance = 9;
+  uint64 created_at_unix_ms = 10;
+  Signature signature = 11;
+}

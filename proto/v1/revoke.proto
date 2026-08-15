@@ -1,0 +1,27 @@
+syntax = "proto3";
+package truyn.v1;
+
+import "proto/v1/common.proto";
+
+enum RevocationTargetKind {
+  REVOCATION_TARGET_UNSPECIFIED = 0;
+  REVOCATION_TARGET_OFFER = 1;
+  REVOCATION_TARGET_CLAIM = 2;
+  REVOCATION_TARGET_RESULT = 3;
+  REVOCATION_TARGET_SUBSCRIPTION = 4;
+  REVOCATION_TARGET_CREDENTIAL = 5;
+  REVOCATION_TARGET_KEY_BINDING = 6;
+  REVOCATION_TARGET_CAPABILITY = 7;
+  REVOCATION_TARGET_TRUST_RECEIPT = 8;
+}
+
+message Revoke {
+  bytes revocation_id = 1;
+  bytes issuer_node_id = 2;
+  RevocationTargetKind target_kind = 3;
+  bytes target_id = 4;
+  string reason = 5;
+  uint64 effective_at_unix_ms = 6;
+  Reference replacement = 7;
+  Signature signature = 8;
+}

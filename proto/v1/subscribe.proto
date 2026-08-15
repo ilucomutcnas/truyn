@@ -1,0 +1,14 @@
+syntax = "proto3";
+package truyn.v1;
+
+import "proto/v1/common.proto";
+
+message Subscription {
+  bytes subscription_id = 1;
+  bytes subscriber_node_id = 2;
+  string selector = 3;
+  string filter_expression = 4;
+  RequestPolicy policy = 5;
+  uint64 expires_at_unix_ms = 6;
+  Signature signature = 7;
+}
