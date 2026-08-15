@@ -89,13 +89,27 @@ jobs:
           echo "CLAUDE_PROBE_URL=$url" >> "$GITHUB_ENV"
           echo 'CLAUDE_PRIVATE_SERVICE_DEPLOY=success'
 
+      - name: Mint short-lived Cloud Run identity token
+        id: invoke_auth
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID_VALUE }}
+          workload_identity_provider: ${{ env.GCP_WIF_PROVIDER_VALUE }}
+          service_account: ${{ env.GCP_DEPLOYER_SA_VALUE }}
+          token_format: id_token
+          id_token_audience: ${{ env.CLAUDE_PROBE_URL }}
+          create_credentials_file: false
+          export_environment_variables: false
+
       - name: Invoke authenticated runtime probe
         shell: bash
+        env:
+          CLAUDE_PROBE_ID_TOKEN: ${{ steps.invoke_auth.outputs.id_token }}
         run: |
           set -euo pipefail
-          token="$(gcloud auth print-identity-token)"
+          [[ -n "${CLAUDE_PROBE_ID_TOKEN:-}" ]] || { echo 'CLAUDE_PROBE_ID_TOKEN=missing'; exit 1; }
           http_code="$(curl -sS -o response.json -w '%{http_code}' \
-            -H "Authorization: Bearer ${token}" \
+            -H "Authorization: Bearer ${CLAUDE_PROBE_ID_TOKEN}" \
             "${CLAUDE_PROBE_URL}/probe")"
           echo "CLAUDE_PRIVATE_PROBE_HTTP=$http_code"
           jq . response.json
