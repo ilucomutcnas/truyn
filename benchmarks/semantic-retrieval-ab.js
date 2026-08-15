@@ -301,6 +301,7 @@ async function truynRun(index) {
   ];
   const serialized = JSON.stringify(stages);
   const noBlockId = !question.includes(record.id) && !serialized.includes(record.id) && !serialized.includes('"ids"');
+  requester.closeFastSocket();
   await requester.ensureFastSocket();
   const chain = await requester.compactChain(stages);
   if (chain.requesterTransport !== 'websocket') throw new Error(`TRUYN requester transport fallback: ${chain.requesterTransport}`);
