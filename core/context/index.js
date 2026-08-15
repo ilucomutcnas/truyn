@@ -95,3 +95,126 @@ export function verifyContextSelection(manifest, blocks, expectedCid = manifest?
 export function renderContextSelection(blocks) {
   return (blocks || []).map((block) => `[${block.id}]\n${block.text}`).join('\n\n');
 }
+
+
+export const CONTEXT_RETRIEVAL_ALGORITHM = 'truyn-hybrid-bm25-chargram-v1';
+
+const RETRIEVAL_STOP_WORDS = new Set([
+  'a','an','and','are','as','at','be','by','for','from','has','have','how','in','is','it','of','on','or','that','the','this','to','was','were','what','when','where','which','who','with'
+]);
+
+export function normalizeContextQuery(value) {
+  return String(value ?? '')
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .trim();
+}
+
+function stemRetrievalToken(token) {
+  if (token.length <= 4) return token;
+  for (const suffix of ['ization','ational','fulness','ousness','iveness','tional','ments','ment','ation','ingly','edly','ing','ies','ied','ed','es','s']) {
+    if (token.endsWith(suffix) && token.length - suffix.length >= 4) {
+      if (suffix === 'ies' || suffix === 'ied') return `${token.slice(0, -suffix.length)}y`;
+      return token.slice(0, -suffix.length);
+    }
+  }
+  return token;
+}
+
+function retrievalTerms(value) {
+  const normalized = normalizeContextQuery(value);
+  if (!normalized) return [];
+  return normalized.split(/\s+/)
+    .filter((token) => token.length > 1 && !RETRIEVAL_STOP_WORDS.has(token))
+    .map(stemRetrievalToken);
+}
+
+function charTrigrams(value) {
+  const padded = `  ${value} `;
+  const grams = new Set();
+  for (let i = 0; i + 3 <= padded.length; i += 1) grams.add(padded.slice(i, i + 3));
+  return grams;
+}
+
+function trigramDice(a, b) {
+  if (!a || !b) return 0;
+  if (a === b) return 1;
+  const left = charTrigrams(a);
+  const right = charTrigrams(b);
+  let overlap = 0;
+  for (const gram of left) if (right.has(gram)) overlap += 1;
+  return (2 * overlap) / Math.max(1, left.size + right.size);
+}
+
+export function contextQueryHash(query) {
+  const normalized = normalizeContextQuery(query);
+  if (!normalized) throw new Error('context retrieval query is required');
+  return `sha256:${hashHex(canonicalize({ v: 1, q: normalized }))}`;
+}
+
+export function retrieveContextBlocks(blocks, query, { topK = 1 } = {}) {
+  const normalizedBlocks = normalizeContextBlocks(blocks).map((block) => ({
+    ...block,
+    cid: block.cid || contextBlockCid(block.id, block.text),
+    bytes: block.bytes || Buffer.byteLength(block.text)
+  }));
+  const normalizedQuery = normalizeContextQuery(query);
+  const queryTerms = retrievalTerms(query);
+  if (!normalizedQuery || queryTerms.length === 0) throw new Error('context retrieval query is required');
+  if (!Number.isInteger(topK) || topK < 1 || topK > 8) throw new Error('context retrieval topK must be between 1 and 8');
+
+  const docs = normalizedBlocks.map((block) => {
+    const terms = retrievalTerms(`${block.id} ${block.text}`);
+    const tf = new Map();
+    for (const term of terms) tf.set(term, (tf.get(term) || 0) + 1);
+    return { block, terms, tf, uniqueTerms: new Set(terms) };
+  });
+  const documentCount = docs.length;
+  const avgLength = docs.reduce((sum, doc) => sum + doc.terms.length, 0) / Math.max(1, documentCount);
+  const df = new Map();
+  for (const doc of docs) for (const term of doc.uniqueTerms) df.set(term, (df.get(term) || 0) + 1);
+
+  const uniqueQueryTerms = [...new Set(queryTerms)];
+  const idf = (term) => Math.log(1 + (documentCount - (df.get(term) || 0) + 0.5) / ((df.get(term) || 0) + 0.5));
+  const k1 = 1.2;
+  const b = 0.75;
+  const scored = docs.map((doc) => {
+    let bm25 = 0;
+    let fuzzy = 0;
+    let matched = 0;
+    for (const term of uniqueQueryTerms) {
+      const tf = doc.tf.get(term) || 0;
+      if (tf > 0) {
+        matched += 1;
+        bm25 += idf(term) * ((tf * (k1 + 1)) / (tf + k1 * (1 - b + b * (doc.terms.length / Math.max(1, avgLength)))));
+        continue;
+      }
+      let best = 0;
+      for (const candidate of doc.uniqueTerms) {
+        best = Math.max(best, trigramDice(term, candidate));
+        if (best >= 0.95) break;
+      }
+      if (best >= 0.72) {
+        matched += best >= 0.82 ? 1 : 0.5;
+        fuzzy += best * Math.max(0.1, idf(term)) * 0.35;
+      }
+    }
+    const coverage = matched / uniqueQueryTerms.length;
+    const compactText = normalizeContextQuery(doc.block.text);
+    const phraseBonus = compactText.includes(normalizedQuery) ? 2 : 0;
+    const score = bm25 + fuzzy + coverage * 2 + phraseBonus;
+    return { ...doc.block, score: Number(score.toFixed(9)), coverage: Number(coverage.toFixed(6)) };
+  }).sort((left, right) => right.score - left.score || right.coverage - left.coverage || left.id.localeCompare(right.id));
+
+  const selected = scored.slice(0, topK);
+  if (selected.length === 0 || selected[0].score <= 0) throw new Error('context retrieval produced no relevant blocks');
+  return {
+    algorithm: CONTEXT_RETRIEVAL_ALGORITHM,
+    queryHash: contextQueryHash(query),
+    topK,
+    corpusBlocks: normalizedBlocks.length,
+    blocks: selected
+  };
+}
