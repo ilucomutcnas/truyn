@@ -80,7 +80,13 @@ export function createOriginGuard({ targetHost = '127.0.0.1', targetPort, token 
       res.writeHead(upstreamRes.statusCode || 502, upstreamRes.headers);
       upstreamRes.pipe(res);
     });
-    upstream.on('error', () => writeJson(res, 502, { ok: false, error: 'origin_upstream_unavailable' }));
+    upstream.on('error', () => {
+      if (res.headersSent) {
+        res.destroy();
+        return;
+      }
+      writeJson(res, 502, { ok: false, error: 'origin_upstream_unavailable' });
+    });
     req.pipe(upstream);
   }
 
