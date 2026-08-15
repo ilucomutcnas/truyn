@@ -1,5 +1,5 @@
 name: Cloud PoC GCP Gemini Runtime
-# deployment revision: 1
+# deployment revision: 2
 
 on:
   push:
@@ -95,7 +95,7 @@ jobs:
             --no-cpu-throttling \
             --cpu=1 \
             --memory=512Mi \
-            --set-env-vars='TRUYN_ROLE=provider,TRUYN_PROVIDER=vertex-gemini,TRUYN_CAPABILITIES=review,TRUYN_RELAY=https://relay.invalid,GOOGLE_CLOUD_LOCATION=global,GEMINI_MODEL=gemini-2.5-flash' \
+            --set-env-vars="TRUYN_ROLE=provider,TRUYN_PROVIDER=vertex-gemini,TRUYN_CAPABILITIES=review,TRUYN_RELAY=https://relay.invalid,GCP_PROJECT_ID=${GCP_PROJECT_ID_VALUE},GOOGLE_CLOUD_LOCATION=global,GEMINI_MODEL=gemini-2.5-flash" \
             --quiet
           url="$(gcloud run services describe "$GCP_SERVICE" --project="$GCP_PROJECT_ID_VALUE" --region="$GCP_REGION_VALUE" --format='value(status.url)')"
           revision="$(gcloud run services describe "$GCP_SERVICE" --project="$GCP_PROJECT_ID_VALUE" --region="$GCP_REGION_VALUE" --format='value(status.latestReadyRevisionName)')"
