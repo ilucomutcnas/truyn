@@ -1,5 +1,5 @@
 name: Cloud PoC GCP Gemini Runtime
-# deployment revision: 6 — relay latency trace instrumentation
+# deployment revision: 7 — durable provider identity
 
 on:
   push:
@@ -36,6 +36,7 @@ jobs:
       GCP_RUNTIME_REGION: us-east4
       GCP_AR_REPO: truyn-poc
       GCP_SERVICE: truyn-gemini
+      GCP_IDENTITY_SECRET: truyn-gemini-identity-b64
       TRUYN_PUBLIC_RELAY: https://relay.truyn.org
       TRUYN_PROVIDER_RELAY_ORIGIN: https://truyn-relay.delightfulground-3772b9ce.eastus.azurecontainerapps.io
     steps:
@@ -63,6 +64,36 @@ jobs:
         uses: google-github-actions/setup-gcloud@v3
         with:
           project_id: ${{ env.GCP_PROJECT_ID_VALUE }}
+
+      - name: Ensure durable Gemini node identity secret
+        shell: bash
+        run: |
+          set -euo pipefail
+          gcloud services enable secretmanager.googleapis.com --project="$GCP_PROJECT_ID_VALUE" --quiet
+          if ! gcloud secrets describe "$GCP_IDENTITY_SECRET" --project="$GCP_PROJECT_ID_VALUE" >/dev/null 2>&1; then
+            identity_b64="$(node --input-type=module -e "import { createIdentity } from './core/identity/index.js'; process.stdout.write(Buffer.from(JSON.stringify(createIdentity())).toString('base64'));")"
+            echo "::add-mask::$identity_b64"
+            printf '%s' "$identity_b64" | gcloud secrets create "$GCP_IDENTITY_SECRET" \
+              --project="$GCP_PROJECT_ID_VALUE" \
+              --replication-policy=automatic \
+              --data-file=- >/dev/null
+            echo 'GCP_PROVIDER_IDENTITY_SECRET=created'
+          else
+            echo 'GCP_PROVIDER_IDENTITY_SECRET=existing'
+          fi
+          gcloud secrets add-iam-policy-binding "$GCP_IDENTITY_SECRET" \
+            --project="$GCP_PROJECT_ID_VALUE" \
+            --member="serviceAccount:${GCP_RUNTIME_SA_VALUE}" \
+            --role='roles/secretmanager.secretAccessor' \
+            --quiet >/dev/null
+          version_path="$(gcloud secrets versions list "$GCP_IDENTITY_SECRET" \
+            --project="$GCP_PROJECT_ID_VALUE" \
+            --filter='state:ENABLED' --sort-by='~createTime' --limit=1 --format='value(name)')"
+          [[ -n "$version_path" ]] || { echo 'GCP_PROVIDER_IDENTITY_VERSION=missing'; exit 1; }
+          version="${version_path##*/}"
+          [[ "$version" =~ ^[0-9]+$ ]] || { echo 'GCP_PROVIDER_IDENTITY_VERSION=invalid'; exit 1; }
+          echo "GCP_IDENTITY_SECRET_VERSION=$version" >> "$GITHUB_ENV"
+          echo "GCP_PROVIDER_IDENTITY_VERSION=$version"
 
       - name: Verify relay backchannel origin
         shell: bash
@@ -124,6 +155,7 @@ jobs:
             --cpu=1 \
             --memory=512Mi \
             --set-env-vars="TRUYN_ROLE=provider,TRUYN_PROVIDER=vertex-gemini,TRUYN_CAPABILITIES=review,TRUYN_RELAY=${TRUYN_PROVIDER_RELAY_ORIGIN},GCP_PROJECT_ID=${GCP_PROJECT_ID_VALUE},GOOGLE_CLOUD_LOCATION=global,GEMINI_MODEL=gemini-2.5-flash" \
+            --update-secrets="TRUYN_IDENTITY_B64=${GCP_IDENTITY_SECRET}:${GCP_IDENTITY_SECRET_VERSION}" \
             --quiet
           url="$(gcloud run services describe "$GCP_SERVICE" --project="$GCP_PROJECT_ID_VALUE" --region="$GCP_RUNTIME_REGION" --format='value(status.url)')"
           revision="$(gcloud run services describe "$GCP_SERVICE" --project="$GCP_PROJECT_ID_VALUE" --region="$GCP_RUNTIME_REGION" --format='value(status.latestReadyRevisionName)')"
@@ -133,6 +165,9 @@ jobs:
           echo "GCP_GEMINI_RUNTIME_REGION=$GCP_RUNTIME_REGION"
           echo "GCP_GEMINI_PUBLIC_RELAY=${TRUYN_PUBLIC_RELAY}"
           echo "GCP_GEMINI_BACKCHANNEL_RELAY=${TRUYN_PROVIDER_RELAY_ORIGIN}"
+          identity_secret_version="$(gcloud run services describe "$GCP_SERVICE" --project="$GCP_PROJECT_ID_VALUE" --region="$GCP_RUNTIME_REGION" --format='value(spec.template.spec.containers[0].env[?name=TRUYN_IDENTITY_B64].valueFrom.secretKeyRef.key)')"
+          [[ "$identity_secret_version" == "$GCP_IDENTITY_SECRET_VERSION" ]] || { echo 'GCP_PROVIDER_IDENTITY_BINDING=failed'; exit 1; }
+          echo "GCP_PROVIDER_IDENTITY_BINDING=secret-version-${identity_secret_version}"
           echo 'GCP_CLOUD_RUN_READY=true'
 
       - name: Remove old-region Gemini worker after cutover
