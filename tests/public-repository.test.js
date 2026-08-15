@@ -14,6 +14,7 @@ const forbiddenPathFragments = [
   '.github/workflows/owner-identity-',
   '.github/workflows/smoke-',
   '.github/workflows/deploy-protected-owner-',
+  '.github/workflows/deploy-owner-',
   'config/owner-benchmark',
   'docs/benchmarks/CROSS_CLOUD_AB_',
   'docs/benchmarks/CROSS_CLOUD_8X_OPTIMIZATION_',
