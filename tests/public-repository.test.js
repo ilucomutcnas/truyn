@@ -7,6 +7,7 @@ const ROOT = path.resolve(new URL('..', import.meta.url).pathname);
 const SELF = 'tests/public-repository.test.js';
 const SKIP_DIRS = new Set(['.git', 'node_modules']);
 const TEXT_EXTENSIONS = new Set(['.md', '.js', '.mjs', '.cjs', '.json', '.yml', '.yaml', '.toml', '.txt', '.proto', '.sh', '.ps1', '.cmd', '.html', '.css']);
+const EXECUTABLE_EXTENSIONS = new Set(['.js', '.mjs', '.cjs', '.sh', '.ps1', '.cmd']);
 const ALLOWED_WORKFLOWS = new Set(['.github/workflows/.gitkeep', '.github/workflows/ci.yml']);
 
 const forbiddenPathFragments = [
@@ -31,6 +32,12 @@ const forbiddenPathFragments = [
   'scripts/deploy/gcp-owner-',
   'scripts/prove-owner-fleet',
   'scripts/smoke/'
+];
+
+const forbiddenPathPatterns = [
+  /^benchmarks\/.*proxy.*\.(?:js|mjs|cjs|sh|ps1|cmd)$/i,
+  /^benchmarks\/Dockerfile\..*proxy/i,
+  /^benchmarks\/.*(?:multiactor|multi-actor).*\.(?:js|mjs|cjs|sh|ps1|cmd)$/i
 ];
 
 const forbiddenLiteralMarkers = [
@@ -79,6 +86,15 @@ const forbiddenTopologyPatterns = [
   /\bworkloadIdentityPools\/[A-Za-z0-9._-]+\/providers\/[A-Za-z0-9._-]+\b/
 ];
 
+const forbiddenOperationalExecutablePatterns = [
+  /\bGCE_METADATA_HOST\b/,
+  /computeMetadata\/v1\/instance\/service-accounts\/default\/token/,
+  /\bBENCHMARK_PROXY_TOKEN\b/,
+  /process\.env\.AZURE_OPENAI_API_KEY\b/,
+  /process\.env\.AZURE_FOUNDRY_API_KEY\b/,
+  /process\.env\.GCP_ACCESS_TOKEN\b/
+];
+
 async function collect(dir = ROOT, out = []) {
   for (const entry of await readdir(dir, { withFileTypes: true })) {
     if (entry.name === '.DS_Store') continue;
@@ -105,6 +121,9 @@ test('public repository contains no known operational/cloud leakage or credentia
     for (const fragment of forbiddenPathFragments) {
       if (file.relative.includes(fragment)) violations.push(`${file.relative}: forbidden operational path category`);
     }
+    for (const pattern of forbiddenPathPatterns) {
+      if (pattern.test(file.relative)) violations.push(`${file.relative}: forbidden operational path pattern`);
+    }
 
     const ext = path.extname(file.relative).toLowerCase();
     if (!TEXT_EXTENSIONS.has(ext) && !['Dockerfile', 'LICENSE', 'VERSION'].includes(path.basename(file.relative))) continue;
@@ -119,6 +138,11 @@ test('public repository contains no known operational/cloud leakage or credentia
     }
     for (const pattern of forbiddenTopologyPatterns) {
       if (pattern.test(content)) violations.push(`${file.relative}: live operational topology pattern detected`);
+    }
+    if ((file.relative.startsWith('benchmarks/') || file.relative.startsWith('scripts/')) && EXECUTABLE_EXTENSIONS.has(ext)) {
+      for (const pattern of forbiddenOperationalExecutablePatterns) {
+        if (pattern.test(content)) violations.push(`${file.relative}: operational cloud credential/proxy code detected`);
+      }
     }
   }
 
