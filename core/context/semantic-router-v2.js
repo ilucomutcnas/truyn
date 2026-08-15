@@ -6,6 +6,17 @@ import {
 
 export const CONTEXT_RETRIEVAL_ALGORITHM_V2 = 'truyn-dense-semantic-rerank-v2';
 
+const FUSION_STRATEGIES = Object.freeze([
+  'max',
+  'mean',
+  'median',
+  'top2_mean',
+  'original_weighted',
+  'consensus',
+  'rrf',
+  'borda'
+]);
+
 function dot(left, right) {
   let value = 0;
   const length = Math.min(left.length, right.length);
@@ -39,6 +50,21 @@ function round(value, digits = 9) {
   return Number(value.toFixed(digits));
 }
 
+function mean(values) {
+  return values.reduce((total, value) => total + value, 0) / Math.max(1, values.length);
+}
+
+function median(values) {
+  const sorted = [...values].sort((left, right) => left - right);
+  const middle = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 1 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
+}
+
+function standardDeviation(values) {
+  const average = mean(values);
+  return Math.sqrt(mean(values.map((value) => (value - average) ** 2)));
+}
+
 function normalizeRerankedIds(result) {
   if (typeof result === 'string') return [result];
   if (Array.isArray(result)) return result;
@@ -60,11 +86,62 @@ function uniqueStrings(values) {
   return result;
 }
 
+function rankMaps(records, variantCount) {
+  return Array.from({ length:variantCount }, (_, variantIndex) => {
+    const ordered = [...records].sort((left, right) =>
+      right.variantScores[variantIndex] - left.variantScores[variantIndex]
+      || left.id.localeCompare(right.id)
+    );
+    return new Map(ordered.map((record, index) => [record.id, index + 1]));
+  });
+}
+
+function fusionScore(record, strategy, ranks, corpusSize) {
+  const values = record.variantScores;
+  if (strategy === 'max') return Math.max(...values);
+  if (strategy === 'mean') return mean(values);
+  if (strategy === 'median') return median(values);
+  if (strategy === 'top2_mean') {
+    const top = [...values].sort((left, right) => right - left).slice(0, Math.min(2, values.length));
+    return mean(top);
+  }
+  if (strategy === 'original_weighted') {
+    if (values.length === 1) return values[0];
+    return (0.55 * values[0]) + (0.45 * mean(values.slice(1)));
+  }
+  if (strategy === 'consensus') return mean(values) - (0.2 * standardDeviation(values));
+  if (strategy === 'rrf') {
+    return ranks.reduce((total, rankMap) => total + (1 / (60 + rankMap.get(record.id))), 0);
+  }
+  if (strategy === 'borda') {
+    if (corpusSize <= 1) return 1;
+    return mean(ranks.map((rankMap) => 1 - ((rankMap.get(record.id) - 1) / (corpusSize - 1))));
+  }
+  throw new Error(`unsupported semantic fusion strategy: ${strategy}`);
+}
+
+function fusionDiagnostics(records, strategies, ranks, corpusSize, lexicalBonus, limit = 8) {
+  const topByStrategy = {};
+  for (const strategy of strategies) {
+    const ordered = records.map((record) => ({
+      id:record.id,
+      score:fusionScore(record, strategy, ranks, corpusSize) + (lexicalBonus.get(record.id) || 0)
+    })).sort((left, right) => right.score - left.score || left.id.localeCompare(right.id));
+    topByStrategy[strategy] = ordered.slice(0, Math.min(limit, ordered.length)).map((item, index) => ({
+      id:item.id,
+      rank:index + 1,
+      score:round(item.score)
+    }));
+  }
+  return { topByStrategy };
+}
+
 /**
  * Semantic router v2:
  *   1. optional multilingual query projection without corpus visibility;
- *   2. multilingual dense candidate retrieval over immutable content blocks;
- *   3. optional semantic reranker over only the dense candidate set.
+ *   2. dense candidate retrieval over immutable content blocks;
+ *   3. robust multi-projection score fusion;
+ *   4. optional semantic reranker over only the fused dense candidate set.
  *
  * The manifest/CID chain and the hash of the ORIGINAL requester query remain
  * the provenance source of truth. Projection/vector/reranker state is an
@@ -75,7 +152,9 @@ export function createSemanticContextRouterV2({
   reranker = null,
   queryProjector = null,
   candidateK = 64,
-  lexicalTieBreakWeight = 0
+  lexicalTieBreakWeight = 0,
+  fusionStrategy = 'max',
+  diagnosticFusion = false
 } = {}) {
   if (!embedder || typeof embedder.embedMany !== 'function') {
     throw new Error('semantic router v2 requires embedder.embedMany(texts, options)');
@@ -83,6 +162,7 @@ export function createSemanticContextRouterV2({
   if (reranker && typeof reranker.rerank !== 'function') throw new Error('semantic reranker must expose rerank(query, candidates, options)');
   if (queryProjector && typeof queryProjector.project !== 'function') throw new Error('semantic query projector must expose project(query)');
   if (!Number.isInteger(candidateK) || candidateK < 1 || candidateK > 128) throw new Error('semantic candidateK must be 1..128');
+  if (!FUSION_STRATEGIES.includes(fusionStrategy)) throw new Error(`semantic fusionStrategy must be one of: ${FUSION_STRATEGIES.join(', ')}`);
 
   const documents = new Map();
   const vectorCache = new Map();
@@ -154,7 +234,7 @@ export function createSemanticContextRouterV2({
     if (!document) throw new Error('context_not_found');
 
     const queryHash = contextQueryHash(query);
-    const cacheKey = `${cid}:${queryHash}:${topK}:${candidateK}:${queryProjector ? queryProjector.name || 'project' : 'raw'}:${reranker ? 'rerank' : 'dense'}`;
+    const cacheKey = `${cid}:${queryHash}:${topK}:${candidateK}:${fusionStrategy}:${diagnosticFusion ? 'diag' : 'plain'}:${queryProjector ? queryProjector.name || 'project' : 'raw'}:${reranker ? 'rerank' : 'dense'}`;
     if (resultCache.has(cacheKey)) return structuredClone(resultCache.get(cacheKey));
 
     await indexDocument(document);
@@ -169,22 +249,39 @@ export function createSemanticContextRouterV2({
       } catch {}
     }
 
-    const dense = document.blocks.map((block) => {
+    const records = document.blocks.map((block) => {
       const blockVector = vectorCache.get(block.cid);
       const variantScores = qVectors.map((q) => cosine(q, blockVector));
-      const semanticScore = Math.max(...variantScores);
-      const bestProjectionIndex = variantScores.indexOf(semanticScore);
+      const maxScore = Math.max(...variantScores);
       return {
-        id: block.id,
-        cid: block.cid,
-        text: block.text,
-        bytes: block.bytes,
-        score: round(semanticScore + (lexicalBonus.get(block.id) || 0)),
-        semanticScore: round(semanticScore),
-        bestProjectionIndex
+        id:block.id,
+        cid:block.cid,
+        text:block.text,
+        bytes:block.bytes,
+        variantScores,
+        bestProjectionIndex:variantScores.indexOf(maxScore)
+      };
+    });
+
+    const strategies = diagnosticFusion ? FUSION_STRATEGIES : [fusionStrategy];
+    const needsRanks = strategies.some((strategy) => strategy === 'rrf' || strategy === 'borda');
+    const ranks = needsRanks ? rankMaps(records, qVectors.length) : [];
+    const dense = records.map((record) => {
+      const semanticScore = fusionScore(record, fusionStrategy, ranks, records.length);
+      return {
+        id:record.id,
+        cid:record.cid,
+        text:record.text,
+        bytes:record.bytes,
+        score:round(semanticScore + (lexicalBonus.get(record.id) || 0)),
+        semanticScore:round(semanticScore),
+        bestProjectionIndex:record.bestProjectionIndex
       };
     }).sort((left, right) => right.score - left.score || right.semanticScore - left.semanticScore || left.id.localeCompare(right.id));
 
+    const diagnostics = diagnosticFusion
+      ? fusionDiagnostics(records, FUSION_STRATEGIES, ranks, records.length, lexicalBonus)
+      : null;
     const candidates = dense.slice(0, Math.min(candidateK, dense.length));
     let ordered = candidates;
     let reranked = false;
@@ -192,10 +289,10 @@ export function createSemanticContextRouterV2({
     if (reranker) {
       const rerankResult = await reranker.rerank(projection.rerankerQuery, candidates.map(({ id, text, cid: blockCid, score, semanticScore, bestProjectionIndex }, index) => ({
         id,
-        cid: blockCid,
+        cid:blockCid,
         text,
-        denseRank: index + 1,
-        denseScore: score,
+        denseRank:index + 1,
+        denseScore:score,
         semanticScore,
         bestProjectionIndex
       })), { topK });
@@ -214,45 +311,47 @@ export function createSemanticContextRouterV2({
       rerankerMetadata = rerankResult?.metadata || null;
     }
 
-    const selected = ordered.slice(0, topK).map((block, index) => ({ ...block, rank: index + 1 }));
+    const selected = ordered.slice(0, topK).map((block, index) => ({ ...block, rank:index + 1 }));
     if (selected.length === 0) throw new Error('context retrieval produced no relevant blocks');
     const denseRankById = new Map(candidates.map((candidate, index) => [candidate.id, index + 1]));
 
     const result = {
-      ok: true,
+      ok:true,
       cid,
-      blocks: selected,
-      retrieval: {
-        version: 2,
-        algorithm: CONTEXT_RETRIEVAL_ALGORITHM_V2,
-        rootCid: cid,
-        manifestCid: document.manifest.cid,
+      blocks:selected,
+      retrieval:{
+        version:2,
+        algorithm:CONTEXT_RETRIEVAL_ALGORITHM_V2,
+        rootCid:cid,
+        manifestCid:document.manifest.cid,
         queryHash,
         topK,
-        corpusBlocks: document.blocks.length,
-        candidateK: candidates.length,
+        corpusBlocks:document.blocks.length,
+        candidateK:candidates.length,
         queryProjected:Boolean(queryProjector),
         queryProjector:queryProjector?.name || null,
         queryProjectionCount:projection.variants.length,
         projectorMetadata:projection.metadata,
+        fusionStrategy,
+        fusionDiagnostics:diagnostics,
         reranked,
-        reranker: reranker?.name || null,
+        reranker:reranker?.name || null,
         rerankerMetadata,
-        denseCandidates: candidates.map((candidate, index) => ({
-          id: candidate.id,
-          cid: candidate.cid,
-          rank: index + 1,
-          score: candidate.score,
-          semanticScore: candidate.semanticScore,
+        denseCandidates:candidates.map((candidate, index) => ({
+          id:candidate.id,
+          cid:candidate.cid,
+          rank:index + 1,
+          score:candidate.score,
+          semanticScore:candidate.semanticScore,
           bestProjectionIndex:candidate.bestProjectionIndex
         })),
-        selected: selected.map(({ id, cid: blockCid, score, semanticScore, rank, bestProjectionIndex }) => ({
+        selected:selected.map(({ id, cid:blockCid, score, semanticScore, rank, bestProjectionIndex }) => ({
           id,
-          cid: blockCid,
+          cid:blockCid,
           score,
           semanticScore,
           rank,
-          denseRank: denseRankById.get(id) || null,
+          denseRank:denseRankById.get(id) || null,
           bestProjectionIndex
         }))
       }
@@ -262,22 +361,24 @@ export function createSemanticContextRouterV2({
   }
 
   return {
-    algorithm: CONTEXT_RETRIEVAL_ALGORITHM_V2,
+    algorithm:CONTEXT_RETRIEVAL_ALGORITHM_V2,
     putContext,
     manifest,
     retrieve,
     stats() {
       return {
-        contexts: documents.size,
-        cachedBlockVectors: vectorCache.size,
-        cachedQueryVectors: queryVectorCache.size,
+        contexts:documents.size,
+        cachedBlockVectors:vectorCache.size,
+        cachedQueryVectors:queryVectorCache.size,
         cachedQueryProjections:projectionCache.size,
-        cachedResults: resultCache.size,
+        cachedResults:resultCache.size,
         candidateK,
+        fusionStrategy,
+        diagnosticFusion,
         queryProjector:queryProjector?.name || null,
         queryProjectorStats:typeof queryProjector?.stats === 'function' ? queryProjector.stats() : null,
-        reranker: reranker?.name || null,
-        rerankerStats: typeof reranker?.stats === 'function' ? reranker.stats() : null
+        reranker:reranker?.name || null,
+        rerankerStats:typeof reranker?.stats === 'function' ? reranker.stats() : null
       };
     }
   };
