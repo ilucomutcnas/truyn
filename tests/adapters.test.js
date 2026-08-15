@@ -8,7 +8,7 @@ import { createHttpAdapterServer } from '../adapters/http/server.js';
 import { createMcpHandler, createMcpHttpServer, MCP_MODERN_VERSION } from '../adapters/mcp/server.js';
 
 async function fixture() {
-  const relay = createRelay();
+  const relay = createRelay({ localDevelopmentMode: true });
   const relayUrl = await relay.listen({ port: 0 });
   const requester = new TruynNode({ relayUrl, identity: createIdentity() });
   const provider = new TruynNode({ relayUrl, identity: createIdentity() });
@@ -42,16 +42,12 @@ test('MCP handler supports modern discovery, legacy initialize and TRUYN tools',
   const { relay, requester } = await fixture();
   t.after(() => relay.close());
   const handle = createMcpHandler({ node: requester });
-
   const discover = await handle({ jsonrpc: '2.0', id: 1, method: 'server/discover', params: { _meta: {} } });
   assert.ok(discover.result.supportedVersions.includes(MCP_MODERN_VERSION));
-
   const initialize = await handle({ jsonrpc: '2.0', id: 2, method: 'initialize', params: { protocolVersion: '2025-11-25' } });
   assert.equal(initialize.result.protocolVersion, '2025-11-25');
-
   const list = await handle({ jsonrpc: '2.0', id: 3, method: 'tools/list', params: {} });
   assert.ok(list.result.tools.some((tool) => tool.name === 'truyn_need'));
-
   const identity = await handle({ jsonrpc: '2.0', id: 4, method: 'tools/call', params: { name: 'truyn_identity', arguments: {} } });
   assert.equal(identity.result.structuredContent.nodeId, requester.identity.nodeId);
 });
@@ -62,7 +58,6 @@ test('HTTP adapter exposes local agent bridge', async (t) => {
   const bridge = createHttpAdapterServer({ node: localNode });
   const bridgeUrl = await bridge.listen({ port: 0 });
   t.after(async () => { await bridge.close(); await relay.close(); });
-
   const offerResponse = await fetch(`${bridgeUrl}/v1/offer`, {
     method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ capability: 'http-capability' })
   });
@@ -77,7 +72,6 @@ test('MCP Streamable HTTP validates modern routing headers and executes tools', 
   const mcp = createMcpHttpServer({ node: requester });
   const mcpUrl = await mcp.listen({ port: 0 });
   t.after(async () => { await mcp.close(); await relay.close(); });
-
   const response = await fetch(mcpUrl, {
     method: 'POST',
     headers: {
