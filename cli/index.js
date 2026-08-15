@@ -54,7 +54,7 @@ async function requireNetworkByok(relayUrl, requesterIdentity) {
 async function configureByok(requesterIdentity) {
   const provider = argValue('--provider');
   if (!provider) {
-    throw new Error('Usage: truyn setup --provider <openai|openai-compatible|local|anthropic|azure-openai|vertex-gemini|custom-http> [options] [--no-auth] [--test]');
+    throw new Error('Usage: truyn setup --provider <openai|openai-compatible|local|anthropic|azure-openai|vertex-gemini|custom-http|custom-mcp> [options] [--no-auth] [--test]');
   }
   const providerIdentity = await ensureProviderIdentity();
   const profile = createByokProfile({
@@ -62,6 +62,7 @@ async function configureByok(requesterIdentity) {
     model: argValue('--model'),
     baseUrl: argValue('--base-url'),
     endpoint: argValue('--endpoint'),
+    tool: argValue('--tool'),
     projectId: argValue('--project-id'),
     location: argValue('--location'),
     credentialEnv: argValue('--credential-env'),
@@ -205,7 +206,7 @@ async function main() {
   if (command === 'result') { await node.register(); await saveSession({ relayUrl, nodeId: identity.nodeId, sessionToken: node.sessionToken }); const requestId = process.argv[3]; const output = process.argv[4]; if (!requestId || output === undefined) throw new Error('Usage: truyn result <requestId> <output> [--relay URL]'); print(await node.result(requestId, output)); return; }
   if (command === 'poll') { const session = await loadSession(); node.sessionToken = session.sessionToken; print(await node.poll()); return; }
 
-  print(`TRUYN MVP CLI\n\nCommands:\n  truyn init\n  truyn identity\n  truyn setup --provider <provider> [--model MODEL] [--base-url URL] [--endpoint URL] [--credential-env NAME] [--no-auth] [--test]\n    providers: openai, openai-compatible, local, anthropic, azure-openai, vertex-gemini, custom-http\n  truyn setup-status\n  truyn relay [--host 127.0.0.1] [--port 8787]  # loopback only\n  truyn register [--relay URL]\n  truyn offer <capability> [--relay URL]\n  truyn find <capability> [--relay URL]\n  truyn need <capability> <input> [--relay URL]  # remote requires verified BYOK\n  truyn result <requestId> <output> [--relay URL]\n  truyn poll [--relay URL]\n  truyn bridge [--port 8790] [--relay URL]        # remote requires verified BYOK\n  truyn mcp [--relay URL]                        # remote requires verified BYOK\n  truyn mcp-http [--port 8791] [--relay URL]     # remote requires verified BYOK\n  truyn provider [--relay URL]                   # verified BYOK provider\n  truyn provider --provider <provider> --capability <name[,name]>  # local development only`);
+  print(`TRUYN MVP CLI\n\nCommands:\n  truyn init\n  truyn identity\n  truyn setup --provider <provider> [--model MODEL] [--base-url URL] [--endpoint URL] [--tool NAME] [--credential-env NAME] [--no-auth] [--test]\n    providers: openai, openai-compatible, local, anthropic, azure-openai, vertex-gemini, custom-http, custom-mcp\n  truyn setup-status\n  truyn relay [--host 127.0.0.1] [--port 8787]  # loopback only\n  truyn register [--relay URL]\n  truyn offer <capability> [--relay URL]\n  truyn find <capability> [--relay URL]\n  truyn need <capability> <input> [--relay URL]  # remote requires verified BYOK\n  truyn result <requestId> <output> [--relay URL]\n  truyn poll [--relay URL]\n  truyn bridge [--port 8790] [--relay URL]        # remote requires verified BYOK\n  truyn mcp [--relay URL]                        # remote requires verified BYOK\n  truyn mcp-http [--port 8791] [--relay URL]     # remote requires verified BYOK\n  truyn provider [--relay URL]                   # verified BYOK provider\n  truyn provider --provider <provider> --capability <name[,name]>  # local development only`);
 }
 
 main().catch((error) => {
