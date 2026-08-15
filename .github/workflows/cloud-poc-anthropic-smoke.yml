@@ -1,0 +1,70 @@
+name: Cloud PoC Anthropic Protected Smoke
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'adapters/providers/anthropic.js'
+      - '.github/workflows/cloud-poc-anthropic-smoke.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: owner-paid-providers
+    env:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      ANTHROPIC_MODEL: ${{ vars.ANTHROPIC_MODEL }}
+      ANTHROPIC_MAX_TOKENS: '32'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Validate protected Anthropic configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ -n "${ANTHROPIC_API_KEY:-}" ]] || { echo 'ANTHROPIC_API_KEY=missing'; exit 1; }
+          [[ -n "${ANTHROPIC_MODEL:-}" ]] || { echo 'ANTHROPIC_MODEL=missing'; exit 1; }
+          echo "ANTHROPIC_MODEL=${ANTHROPIC_MODEL}"
+          echo 'ANTHROPIC_PROTECTED_ENV=ready'
+
+      - name: Execute minimal Claude API smoke test through TRUYN adapter
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import { createAnthropicProvider } from './adapters/providers/anthropic.js';
+
+          const adapter = createAnthropicProvider({
+            capabilities: ['protected-smoke']
+          });
+
+          const result = await adapter.execute({
+            capability: 'protected-smoke',
+            input: 'Return exactly this marker and nothing else: TRUYN_CLAUDE_OK',
+            policy: { purpose: 'protected-environment-smoke' }
+          });
+
+          if (!String(result.output || '').includes('TRUYN_CLAUDE_OK')) {
+            throw new Error(`Claude smoke marker missing: ${result.output}`);
+          }
+
+          console.log(JSON.stringify({
+            status: 'success',
+            marker: 'TRUYN_CLAUDE_OK',
+            provider: result.metadata?.provider || null,
+            model: result.metadata?.model || null,
+            providerRequestId: result.metadata?.providerRequestId || null,
+            providerLatencyMs: result.metadata?.providerLatencyMs || null,
+            usage: result.metadata?.usage || null
+          }, null, 2));
+          NODE
