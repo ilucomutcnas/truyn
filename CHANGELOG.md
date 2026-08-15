@@ -37,6 +37,10 @@ All notable factual repository changes should be recorded here without publishin
 - Added provider ownership, tenant/visibility policy, BYOK, server-side authorization, relay/control-plane separation, billing/quota attribution and threat-model architecture.
 - Implemented the first relay/runtime ownership boundary: signed provider identity is authoritative for provider ownership, private providers are hidden from unauthorized discovery/routing, and provider-signed requester allowlists support isolated BYOK/private providers.
 - Implemented the first provider-runtime billing boundary: access authorization is followed by a fail-closed billing decision before adapter/upstream execution.
+- Implemented the first official CLI BYOK setup flow for OpenAI, OpenAI-compatible, Anthropic, Azure OpenAI and Vertex Gemini profiles.
+- BYOK profiles persist only non-secret provider settings and credential environment-variable names; the resolved credential value is not written into the TRUYN profile or printed by setup status.
+- BYOK requester and provider use separate cryptographic identities; remote providers publish `owner-only` access for the configured requester and run with billing mode `byok`.
+- Non-loopback official CLI AI-workload entry points require a verified private BYOK profile; loopback development remains available without the remote gate.
 - Defined BYOK as the default user model; raw upstream provider credentials remain at the provider runtime.
 - Defined sponsored/free owner-funded access as explicit future entitlement, not an implicit public-network feature.
 
