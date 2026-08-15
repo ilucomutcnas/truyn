@@ -9,6 +9,35 @@ const SKIP_DIRS = new Set(['.git', 'node_modules']);
 const TEXT_EXTENSIONS = new Set(['.md', '.js', '.mjs', '.cjs', '.json', '.yml', '.yaml', '.toml', '.txt', '.proto', '.sh', '.ps1', '.cmd', '.html', '.css']);
 const EXECUTABLE_EXTENSIONS = new Set(['.js', '.mjs', '.cjs', '.sh', '.ps1', '.cmd']);
 const ALLOWED_WORKFLOWS = new Set(['.github/workflows/.gitkeep', '.github/workflows/ci.yml']);
+const BENCHMARK_EVIDENCE_DIR = 'docs/benchmarks/';
+
+const protectedBenchmarkEvidence = [
+  {
+    path: 'docs/benchmarks/CROSS_CLOUD_AB_2026-08-15.md',
+    minBytes: 5000,
+    markers: ['# TRUYN Cross-Cloud A/B Benchmark', '## Evidence', '## Primary measured result', '## Per-sample evidence']
+  },
+  {
+    path: 'docs/benchmarks/CROSS_CLOUD_8X_OPTIMIZATION_2026-08-15.md',
+    minBytes: 3000,
+    markers: ['# TRUYN Cross-Cloud 8× Hot-Path Optimization', '## Final evidence', '## Fixed-gate result', '## Final relay trace']
+  },
+  {
+    path: 'docs/benchmarks/CONTEXT_EFFICIENCY_2026-08-15.md',
+    minBytes: 5000,
+    markers: ['# TRUYN Content-Addressed Context Economic A/B', '## Evidence', '## Economic result', '## What this result does NOT yet prove']
+  },
+  {
+    path: 'docs/benchmarks/SEMANTIC_RETRIEVAL_GATE_2026-08-15.md',
+    minBytes: 4000,
+    markers: ['# TRUYN Semantic Retrieval Gate', '## Evidence', '## Gate contract', '## Retrieval and provenance proof']
+  },
+  {
+    path: 'docs/benchmarks/MULTIMODAL_PROVIDER_PARITY.md',
+    minBytes: 3000,
+    markers: ['# TRUYN Multimodal Provider Parity Benchmark', 'Status: **planned methodology', '## Principle']
+  }
+];
 
 const forbiddenPathFragments = [
   '.github/workflows/cloud-poc-',
@@ -17,10 +46,6 @@ const forbiddenPathFragments = [
   '.github/workflows/deploy-protected-owner-',
   '.github/workflows/deploy-owner-',
   'config/owner-benchmark',
-  'docs/benchmarks/CROSS_CLOUD_AB_',
-  'docs/benchmarks/CROSS_CLOUD_8X_OPTIMIZATION_',
-  'docs/benchmarks/CONTEXT_EFFICIENCY_',
-  'docs/benchmarks/SEMANTIC_RETRIEVAL_GATE_',
   'docs/providers/MULTICLOUD_PROVIDER_IMPLEMENTATION_STATUS_',
   'benchmarks/gemini-direct-proxy',
   'benchmarks/cross-cloud-ab',
@@ -109,6 +134,22 @@ async function collect(dir = ROOT, out = []) {
   return out;
 }
 
+test('published benchmark evidence is preserved and not replaced by stubs', async () => {
+  for (const evidence of protectedBenchmarkEvidence) {
+    const absolute = path.join(ROOT, evidence.path);
+    let content;
+    try {
+      content = await readFile(absolute, 'utf8');
+    } catch (error) {
+      assert.fail(`${evidence.path}: protected benchmark evidence is missing (${error.code ?? error.message})`);
+    }
+    assert.ok(Buffer.byteLength(content, 'utf8') >= evidence.minBytes, `${evidence.path}: protected benchmark evidence was unexpectedly truncated`);
+    for (const marker of evidence.markers) {
+      assert.ok(content.includes(marker), `${evidence.path}: protected benchmark evidence lost required marker: ${marker}`);
+    }
+  }
+});
+
 test('public repository contains no known operational/cloud leakage or credential patterns', async () => {
   const files = await collect();
   const violations = [];
@@ -130,7 +171,11 @@ test('public repository contains no known operational/cloud leakage or credentia
     let content;
     try { content = await readFile(file.absolute, 'utf8'); } catch { continue; }
 
+    const isBenchmarkEvidence = file.relative.startsWith(BENCHMARK_EVIDENCE_DIR);
     for (const marker of forbiddenLiteralMarkers) {
+      // GitHub Actions run URLs are reproducibility evidence in sanitized benchmark reports.
+      // They remain forbidden elsewhere because arbitrary run links can expose operational context.
+      if (isBenchmarkEvidence && marker === 'github.com/inn-media/truyn/actions/runs/') continue;
       if (content.includes(marker)) violations.push(`${file.relative}: forbidden operational marker category`);
     }
     for (const pattern of forbiddenCredentialPatterns) {
