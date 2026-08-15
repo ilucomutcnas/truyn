@@ -4,6 +4,17 @@ All notable factual repository changes should be recorded here.
 
 ## Unreleased
 
+### AI interoperability MVP
+- Added a shared Adapter SDK with a provider execution host that publishes capabilities, polls signed `NEED` events, executes an adapter, and returns signed `RESULT` messages.
+- Added a universal local HTTP adapter for identity, discovery, offers, needs, events, and results.
+- Added MCP stdio and HTTP support with `server/discover`, `tools/list`, `tools/call`, modern `2026-07-28` request handling, and legacy initialize compatibility for `2025-11-25` / `2025-06-18` clients.
+- Added executable OpenAI Responses API and Anthropic Messages API provider adapters; live calls require user-supplied credentials and explicit model IDs.
+- Added a reproducible no-credentials AI interoperability demo and a separate live OpenAI -> TRUYN -> Anthropic demo path.
+- Added provider usage/latency metadata propagation into signed TRUYN results.
+- Added a structural handoff benchmark that measures bytes exactly and labels token counts as estimates rather than provider billing-token measurements.
+- Expanded automated coverage from 5 to 9 tests; all 9 pass in the local validation used for this implementation.
+- Added factual AI interoperability quickstart and documented the remaining MVP/non-production boundaries.
+
 ### MVP foundation
 - Added the first executable TRUYN vertical slice using dependency-free Node.js runtime code.
 - Implemented canonical signed `TRUYN/1` envelopes for `IDENTITY`, `OFFER`, `NEED`, `RESULT`, and `REVOKE`.
