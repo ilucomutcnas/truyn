@@ -12,12 +12,15 @@ permissions:
 jobs:
   preflight:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     env:
       GCP_PROJECT_ID_VALUE: ${{ vars.GCP_PROJECT_ID || secrets.GCP_PROJECT_ID }}
       GCP_WIF_PROVIDER_VALUE: ${{ vars.GCP_WIF_PROVIDER || secrets.GCP_WIF_PROVIDER }}
       GCP_DEPLOYER_SA_VALUE: ${{ vars.GCP_DEPLOYER_SERVICE_ACCOUNT_EMAIL || secrets.GCP_DEPLOYER_SERVICE_ACCOUNT_EMAIL }}
       GCP_RUNTIME_SA_VALUE: ${{ vars.GCP_RUNTIME_SERVICE_ACCOUNT_EMAIL || secrets.GCP_RUNTIME_SERVICE_ACCOUNT_EMAIL }}
+      GCP_PROXY_REGION: us-east4
+      GCP_AR_REPO: truyn-poc
+      GCP_PROXY_SERVICE: truyn-ranking-preflight-${{ github.run_id }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -40,37 +43,116 @@ jobs:
           enabled="$(gcloud services list --enabled --project="$GCP_PROJECT_ID_VALUE" --filter='config.name:discoveryengine.googleapis.com' --format='value(config.name)')"
           [[ "$enabled" == "discoveryengine.googleapis.com" ]] || exit 2
           echo 'RANKING_API_STATE=api_enabled' | tee ranking-preflight.txt
-      - name: Obtain runtime identity token and rank two records
+      - name: Build and deploy runtime-identity rank preflight
         shell: bash
         run: |
           set -euo pipefail
-          token="$(gcloud auth print-access-token --impersonate-service-account="$GCP_RUNTIME_SA_VALUE" 2>impersonation-error.txt || true)"
-          if [[ -z "$token" ]]; then
-            echo 'RANKING_RUNTIME_IMPERSONATION=denied' | tee -a ranking-preflight.txt
-            cat impersonation-error.txt
-            exit 5
-          fi
-          echo 'RANKING_RUNTIME_IMPERSONATION=success' | tee -a ranking-preflight.txt
-          echo "::add-mask::$token"
-          endpoint="https://discoveryengine.googleapis.com/v1/projects/${GCP_PROJECT_ID_VALUE}/locations/global/rankingConfigs/default_ranking_config:rank"
-          cat > request.json <<'JSON'
-          {
-            "model":"semantic-ranker-default@latest",
-            "topN":2,
-            "query":"Which rule applies after formal approval?",
-            "records":[
-              {"id":"before","content":"This operating rule applies only before formal approval."},
-              {"id":"after","content":"This operating rule applies only after formal approval."}
-            ],
-            "ignoreRecordDetailsInResponse":true
-          }
+          proxy_token="$(openssl rand -hex 32)"
+          echo "::add-mask::$proxy_token"
+          mkdir -p .tmp-ranking-preflight
+          cat > .tmp-ranking-preflight/package.json <<'JSON'
+          {"type":"module"}
           JSON
-          http_code="$(curl -sS -o response.json -w '%{http_code}' \
-            -H "Authorization: Bearer ${token}" \
-            -H "X-Goog-User-Project: ${GCP_PROJECT_ID_VALUE}" \
-            -H 'Content-Type: application/json' \
-            --data-binary @request.json "$endpoint")"
+          cat > .tmp-ranking-preflight/server.js <<'JS'
+          import http from 'node:http';
+
+          const projectId = process.env.GCP_PROJECT_ID;
+          const proxyToken = process.env.PREFLIGHT_PROXY_TOKEN;
+          if (!projectId || !proxyToken) throw new Error('missing runtime config');
+
+          async function metadataToken() {
+            const response = await fetch('http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token', {
+              headers:{ 'Metadata-Flavor':'Google' }
+            });
+            const body = await response.json();
+            if (!response.ok || !body.access_token) throw new Error('metadata token unavailable');
+            return body.access_token;
+          }
+
+          async function runRank() {
+            const token = await metadataToken();
+            const endpoint = `https://discoveryengine.googleapis.com/v1/projects/${projectId}/locations/global/rankingConfigs/default_ranking_config:rank`;
+            const payload = {
+              model:'semantic-ranker-default@latest',
+              topN:2,
+              query:'Which rule applies after formal approval?',
+              records:[
+                { id:'before', content:'This operating rule applies only before formal approval.' },
+                { id:'after', content:'This operating rule applies only after formal approval.' }
+              ],
+              ignoreRecordDetailsInResponse:true
+            };
+            const response = await fetch(endpoint, {
+              method:'POST',
+              headers:{
+                authorization:`Bearer ${token}`,
+                'x-goog-user-project':projectId,
+                'content-type':'application/json'
+              },
+              body:JSON.stringify(payload)
+            });
+            const raw = await response.text();
+            let body = null;
+            try { body = JSON.parse(raw); } catch { body = { raw:raw.slice(0,500) }; }
+            return { status:response.status, body };
+          }
+
+          const server = http.createServer(async (req, res) => {
+            res.setHeader('content-type','application/json');
+            if (req.headers.authorization !== `Bearer ${proxyToken}`) {
+              res.statusCode = 401; res.end(JSON.stringify({ error:'unauthorized' })); return;
+            }
+            if (req.url === '/health') { res.end(JSON.stringify({ ok:true })); return; }
+            if (req.url !== '/preflight') { res.statusCode = 404; res.end(JSON.stringify({ error:'not_found' })); return; }
+            try {
+              const result = await runRank();
+              res.statusCode = result.status;
+              res.end(JSON.stringify(result.body));
+            } catch (error) {
+              res.statusCode = 500;
+              res.end(JSON.stringify({ error:error.message }));
+            }
+          });
+          server.listen(Number(process.env.PORT || 8080), '0.0.0.0');
+          JS
+          cat > .tmp-ranking-preflight/Dockerfile <<'DOCKER'
+          FROM node:20-alpine
+          WORKDIR /app
+          COPY package.json ./package.json
+          COPY server.js ./server.js
+          CMD ["node","server.js"]
+          DOCKER
+
+          registry="${GCP_PROXY_REGION}-docker.pkg.dev"
+          image="${registry}/${GCP_PROJECT_ID_VALUE}/${GCP_AR_REPO}/ranking-preflight:${GITHUB_SHA}"
+          echo "RANKING_PREFLIGHT_IMAGE=$image" >> "$GITHUB_ENV"
+          gcloud auth configure-docker "$registry" --quiet
+          docker build -t "$image" .tmp-ranking-preflight
+          docker push "$image" >/dev/null
+          gcloud run deploy "$GCP_PROXY_SERVICE" \
+            --project="$GCP_PROJECT_ID_VALUE" \
+            --region="$GCP_PROXY_REGION" \
+            --image="$image" \
+            --service-account="$GCP_RUNTIME_SA_VALUE" \
+            --port=8080 --min=0 --max=1 --cpu=1 --memory=256Mi \
+            --set-env-vars="GCP_PROJECT_ID=${GCP_PROJECT_ID_VALUE},PREFLIGHT_PROXY_TOKEN=${proxy_token}" \
+            --no-invoker-iam-check --quiet >/dev/null
+          url="$(gcloud run services describe "$GCP_PROXY_SERVICE" --project="$GCP_PROJECT_ID_VALUE" --region="$GCP_PROXY_REGION" --format='value(status.url)')"
+          for attempt in $(seq 1 30); do
+            if curl -fsS -H "Authorization: Bearer ${proxy_token}" "${url}/health" | jq -e '.ok == true' >/dev/null; then break; fi
+            [[ "$attempt" -lt 30 ]] || exit 6
+            sleep 2
+          done
+          echo "::add-mask::$url"
+          echo "RANKING_PREFLIGHT_URL=$url" >> "$GITHUB_ENV"
+          echo "RANKING_PREFLIGHT_PROXY_TOKEN=$proxy_token" >> "$GITHUB_ENV"
+      - name: Run two-record rank as runtime identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          http_code="$(curl -sS -o response.json -w '%{http_code}' -H "Authorization: Bearer ${RANKING_PREFLIGHT_PROXY_TOKEN}" "${RANKING_PREFLIGHT_URL}/preflight")"
           jq -n --arg code "$http_code" --slurpfile response response.json '{httpCode:($code|tonumber),response:$response[0]}' > ranking-preflight.json
+          echo "RANKING_RUNTIME_HTTP=${http_code}" | tee -a ranking-preflight.txt
           if [[ "$http_code" != "200" ]]; then
             jq . ranking-preflight.json
             exit 3
@@ -87,6 +169,14 @@ jobs:
           path: |
             ranking-preflight.txt
             ranking-preflight.json
-            impersonation-error.txt
           if-no-files-found: warn
           retention-days: 7
+      - name: Cleanup runtime rank preflight
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          gcloud run services delete "$GCP_PROXY_SERVICE" --project="$GCP_PROJECT_ID_VALUE" --region="$GCP_PROXY_REGION" --quiet >/dev/null 2>&1 || true
+          if [[ -n "${RANKING_PREFLIGHT_IMAGE:-}" ]]; then
+            gcloud artifacts docker images delete "$RANKING_PREFLIGHT_IMAGE" --project="$GCP_PROJECT_ID_VALUE" --quiet >/dev/null 2>&1 || true
+          fi
