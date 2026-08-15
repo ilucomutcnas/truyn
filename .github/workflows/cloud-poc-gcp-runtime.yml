@@ -1,4 +1,5 @@
 name: Cloud PoC GCP Gemini Runtime
+# deployment revision: 1
 
 on:
   push:
