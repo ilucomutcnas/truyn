@@ -33,6 +33,7 @@ export class TruynNode {
     this.fastSocketConnectPromise = null;
     this.fastSocketQueue = [];
     this.fastSocketWaiters = [];
+    this.fastSocketChainWaiters = new Map();
   }
 
   envelope(type, payload, extra = {}) {
@@ -157,11 +158,33 @@ export class TruynNode {
     if (!Array.isArray(stages) || stages.length < 2) throw new Error('compactChain requires at least two stages');
     const payload = { stages };
     const frame = this.compactFrame('CHAIN', payload);
-    const response = await requestJson(`${this.relayUrl}/v1/fast/chains?waitMs=${Math.max(0, Math.floor(waitMs))}`, {
-      method: 'POST',
-      headers: { authorization: `Bearer ${this.sessionToken}` },
-      body: JSON.stringify({ frame, payload })
-    });
+    const boundedWait = Math.max(0, Math.min(120_000, Math.floor(waitMs)));
+    let response;
+    let requesterTransport = 'http';
+
+    if (this.fastSocket?.readyState === WebSocket.OPEN) {
+      requesterTransport = 'websocket';
+      response = await new Promise((resolve, reject) => {
+        const waiter = { resolve, reject, timer: null };
+        waiter.timer = setTimeout(() => {
+          if (this.fastSocketChainWaiters.get(frame.i) === waiter) this.fastSocketChainWaiters.delete(frame.i);
+          reject(new Error('fast_socket_chain_timeout'));
+        }, boundedWait || 120_000);
+        this.fastSocketChainWaiters.set(frame.i, waiter);
+        this.fastSocket.send(JSON.stringify({ kind: 'CHAIN', frame, payload, waitMs: boundedWait }), (error) => {
+          if (!error) return;
+          if (this.fastSocketChainWaiters.get(frame.i) === waiter) this.fastSocketChainWaiters.delete(frame.i);
+          clearTimeout(waiter.timer);
+          reject(error);
+        });
+      });
+    } else {
+      response = await requestJson(`${this.relayUrl}/v1/fast/chains?waitMs=${boundedWait}`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${this.sessionToken}` },
+        body: JSON.stringify({ frame, payload })
+      });
+    }
 
     const verifiedResults = [];
     for (const event of response.results || []) {
@@ -176,6 +199,7 @@ export class TruynNode {
     const resultPayloadBytes = verifiedResults.map((event) => bytes(event.payload));
     return {
       ...response,
+      requesterTransport,
       frame,
       payload,
       results: verifiedResults,
@@ -215,6 +239,15 @@ export class TruynNode {
     for (const waiter of waiters) waiter.reject(error);
   }
 
+  rejectFastSocketChainWaiters(error) {
+    const waiters = [...this.fastSocketChainWaiters.values()];
+    this.fastSocketChainWaiters.clear();
+    for (const waiter of waiters) {
+      if (waiter.timer) clearTimeout(waiter.timer);
+      waiter.reject(error);
+    }
+  }
+
   deliverFastSocketEvent(event) {
     const waiter = this.fastSocketWaiters.shift();
     if (waiter) waiter.resolve(event);
@@ -244,8 +277,27 @@ export class TruynNode {
         try {
           const message = JSON.parse(data.toString());
           if (message?.kind === 'ACK') return;
+          if (message?.kind === 'CHAIN_RESULT') {
+            const waiter = this.fastSocketChainWaiters.get(message.chainId);
+            if (!waiter) return;
+            this.fastSocketChainWaiters.delete(message.chainId);
+            if (waiter.timer) clearTimeout(waiter.timer);
+            waiter.resolve(message);
+            return;
+          }
           if (message?.kind === 'ERROR') {
-            this.rejectFastSocketWaiters(new Error(message.error || 'fast_socket_error'));
+            const error = new Error(message.error || 'fast_socket_error');
+            if (message.chainId) {
+              const waiter = this.fastSocketChainWaiters.get(message.chainId);
+              if (waiter) {
+                this.fastSocketChainWaiters.delete(message.chainId);
+                if (waiter.timer) clearTimeout(waiter.timer);
+                waiter.reject(error);
+                return;
+              }
+            }
+            this.rejectFastSocketWaiters(error);
+            this.rejectFastSocketChainWaiters(error);
             return;
           }
           this.deliverFastSocketEvent(message);
@@ -262,7 +314,9 @@ export class TruynNode {
       socket.on('close', () => {
         if (this.fastSocket === socket) this.fastSocket = null;
         if (!opened) this.fastSocketConnectPromise = null;
-        this.rejectFastSocketWaiters(new Error('fast_socket_closed'));
+        const closeError = new Error('fast_socket_closed');
+        this.rejectFastSocketWaiters(closeError);
+        this.rejectFastSocketChainWaiters(closeError);
       });
     });
     return this.fastSocketConnectPromise;
@@ -275,7 +329,9 @@ export class TruynNode {
     if (socket && socket.readyState < WebSocket.CLOSING) {
       try { socket.close(1000, 'client_close'); } catch {}
     }
-    this.rejectFastSocketWaiters(new Error('fast_socket_closed'));
+    const closeError = new Error('fast_socket_closed');
+    this.rejectFastSocketWaiters(closeError);
+    this.rejectFastSocketChainWaiters(closeError);
   }
 
   async verifyCompactEvent(event) {

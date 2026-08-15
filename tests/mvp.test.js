@@ -137,6 +137,7 @@ test('single signed CHAIN executes two providers over persistent sockets with <=
   const requester = new TruynNode({ relayUrl });
   t.after(() => researchNode.closeFastSocket());
   t.after(() => reviewNode.closeFastSocket());
+  t.after(() => requester.closeFastSocket());
   let reviewedCandidate = null;
 
   const researchHost = new TruynAdapterHost({
@@ -166,6 +167,7 @@ test('single signed CHAIN executes two providers over persistent sockets with <=
   await researchHost.publishCapabilities();
   await reviewHost.publishCapabilities();
   await requester.register();
+  await requester.ensureFastSocket();
   const researchWork = researchHost.runOnce();
   const reviewWork = reviewHost.runOnce();
 
@@ -191,7 +193,8 @@ test('single signed CHAIN executes two providers over persistent sockets with <=
   assert.equal(reviewedCandidate, 'candidate:TRUYN');
   assert.notEqual(result.results[0].from, result.results[1].from);
   assert.ok(result.protocolOverheadBytes <= 375, `chain protocol overhead was ${result.protocolOverheadBytes} bytes`);
-  assert.equal(relay.state.providerSockets.size, 2);
+  assert.equal(result.requesterTransport, 'websocket');
+  assert.equal(relay.state.providerSockets.size, 3);
 
   const traceResponse = await fetch(`${relayUrl}/v1/fast/chains/${encodeURIComponent(result.chainId)}/trace`, {
     headers: { authorization: `Bearer ${requester.sessionToken}` }
@@ -199,6 +202,7 @@ test('single signed CHAIN executes two providers over persistent sockets with <=
   assert.equal(traceResponse.status, 200);
   const traceBody = await traceResponse.json();
   assert.equal(traceBody.ok, true);
+  assert.equal(traceBody.trace.requesterTransport, 'websocket');
   assert.deepEqual(traceBody.trace.stageTransport, ['socket', 'socket']);
   assert.ok(Number.isFinite(traceBody.trace.relayTotalMs));
   for (const value of Object.values(traceBody.trace.segments)) assert.ok(Number.isFinite(value));

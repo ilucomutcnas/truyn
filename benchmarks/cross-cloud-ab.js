@@ -234,7 +234,8 @@ async function prepareTruynHotPath(timeoutMs = 180_000) {
   const researchProvider = routeCache.get('research')[0].from;
   const reviewProvider = routeCache.get('review')[0].from;
   if (researchProvider === reviewProvider) throw new Error('TRUYN benchmark requires distinct Azure and Gemini provider identities');
-  console.error(`TRUYN single-request chain ready: research=${researchProvider}; review=${reviewProvider}`);
+  await requester.ensureFastSocket();
+  console.error(`TRUYN single-request chain ready over persistent requester socket: research=${researchProvider}; review=${reviewProvider}`);
 }
 
 async function truynChain() {
@@ -286,7 +287,7 @@ async function truynChain() {
   const relayTrace = await fetchRelayChainTrace(chain.chainId);
   const relaySegments = relayTrace.segments || {};
   const orchestrationBreakdown = {
-    edgeIngressEgressResidualMs: round(Math.max(0, endToEndLatencyMs - (relayTrace.relayTotalMs || 0)), 3),
+    requesterPublicEdgeResidualMs: round(Math.max(0, endToEndLatencyMs - (relayTrace.relayTotalMs || 0)), 3),
     relayIngressToStage1DispatchMs: relaySegments.publicRequestToStage1SocketDispatchMs,
     stage1SocketNonProviderMs: round(Math.max(0, (relaySegments.stage1SocketDispatchToResultReceivedMs || 0) - (azure.providerLatencyMs || 0)), 3),
     relayStageTransitionMs: relaySegments.stage1ResultToStage2SocketDispatchMs,
@@ -373,7 +374,7 @@ function aggregateMode(samples) {
       stage2ResultToResponseFlushedMs: stats(samples, (sample) => sample.relayTrace?.segments?.stage2ResultToResponseFlushedMs)
     },
     orchestrationBreakdown: {
-      edgeIngressEgressResidualMs: stats(samples, (sample) => sample.orchestrationBreakdown?.edgeIngressEgressResidualMs),
+      requesterPublicEdgeResidualMs: stats(samples, (sample) => sample.orchestrationBreakdown?.requesterPublicEdgeResidualMs),
       relayIngressToStage1DispatchMs: stats(samples, (sample) => sample.orchestrationBreakdown?.relayIngressToStage1DispatchMs),
       stage1SocketNonProviderMs: stats(samples, (sample) => sample.orchestrationBreakdown?.stage1SocketNonProviderMs),
       relayStageTransitionMs: stats(samples, (sample) => sample.orchestrationBreakdown?.relayStageTransitionMs),
@@ -483,14 +484,15 @@ const report = {
   generatedAt: new Date().toISOString(),
   methodology: {
     baseline: 'Direct GitHub runner -> Azure OpenAI -> Vertex Gemini, no TRUYN relay/envelopes.',
-    candidate: 'One persistent requester session sends one signed compact CHAIN through relay.truyn.org. Relay dispatches Azure then Gemini internally over provider long-poll backchannels and returns both signed provider RESULTs in one public HTTP response.',
+    candidate: 'One pre-established persistent requester WebSocket sends one signed compact CHAIN through canonical wss://relay.truyn.org. Relay dispatches Azure then Gemini over persistent provider WebSockets and returns both signed provider RESULTs over the same requester WebSocket.',
     sameModels: { azure: azureModel, gemini: geminiModel },
     sameTaskAndAdapterPrompt: true,
     alternatingOrder: true,
-    bootstrapOutsideMeasuredArm: 'Requester registration, OFFER discovery and provider public-key caching happen before warm-up/measured timing. Provider inference remains fully measured.',
+    bootstrapOutsideMeasuredArm: 'Requester registration, OFFER discovery, provider public-key caching, and canonical requester WebSocket handshake happen before warm-up/measured timing. Provider inference remains fully measured.',
     chainProvenance: 'The requester Ed25519-signs the complete two-stage chain plan. Each provider verifies that requester CHAIN signature. Stage 2 also verifies the prior provider signed RESULT before materializing its signed inputTemplate reference to the previous output. Both provider outputs are independently Ed25519-signed.',
     compactFrame: 'The measured chain uses one CHAIN control frame plus two RESULT control frames. Session-bound identity/public key/protocol metadata are not repeated on the hot path.',
-    providerBackchannel: 'Providers use the relay origin directly; the public requester remains on canonical relay.truyn.org / Front Door.',
+    requesterTransport: 'Persistent WebSocket over canonical wss://relay.truyn.org / Front Door; TLS/WebSocket handshake is completed before measured arms. HTTP CHAIN remains fallback only.',
+    providerBackchannel: 'Providers use persistent WebSockets to the relay origin directly; the public requester remains on canonical relay.truyn.org / Front Door.',
     warmups,
     measuredPairs: iterations,
     pacingMs,

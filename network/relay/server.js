@@ -63,6 +63,7 @@ function chainTraceSnapshot(chain) {
     chainId: chain.chainId,
     status: chain.status,
     marks,
+    requesterTransport: chain.trace?.requesterTransport || (chain.socket ? 'websocket' : 'http'),
     stageTransport: chain.trace?.stageTransport || [],
     segments,
     relayTotalMs: delta('publicRequestReceived', 'responseFlushed')
@@ -218,10 +219,64 @@ export function createRelay({ nodeFreshnessMs = 15_000 } = {}) {
     if (chain.timer) clearTimeout(chain.timer);
     chain.status = status === 200 ? 'completed' : 'failed';
     chain.completedAt = new Date().toISOString();
-    if (!chain.res.writableEnded) {
+    if (chain.socket?.readyState === WebSocket.OPEN) {
+      const message = JSON.stringify({ kind: 'CHAIN_RESULT', status, ...body });
+      chain.socket.send(message, (error) => {
+        if (!error) traceMark(chain, 'responseFlushed');
+      });
+      return;
+    }
+    if (chain.res && !chain.res.writableEnded) {
       chain.res.once('finish', () => traceMark(chain, 'responseFlushed'));
       json(chain.res, status, body);
     }
+  }
+
+  function startChain({ requesterNodeId, frame, payload, waitMs, res = null, socket = null, requestReceivedAtMs = performance.now(), requestReceivedWallTime = new Date().toISOString(), requesterTransport = 'http' }) {
+    if (chains.has(frame.i)) return { status: 409, body: { ok: false, error: 'duplicate_chain' } };
+    if (!Array.isArray(payload?.stages) || payload.stages.length < 2 || payload.stages.length > 8) {
+      return { status: 400, body: { ok: false, error: 'invalid_chain_stages' } };
+    }
+    for (let index = 0; index < payload.stages.length; index += 1) {
+      const capability = capabilityName(payload.stages[index]);
+      if (!capability || typeof capability !== 'string') {
+        return { status: 400, body: { ok: false, error: 'invalid_chain_capability', stageIndex: index } };
+      }
+      if (!matchingOffers({ capability, requesterNodeId })[0]) {
+        return { status: 404, body: { ok: false, error: 'no_matching_provider', capability, stageIndex: index } };
+      }
+    }
+
+    const chain = {
+      chainId: frame.i,
+      requester: requesterNodeId,
+      frame,
+      payload,
+      res,
+      socket,
+      timer: null,
+      createdAt: new Date().toISOString(),
+      status: 'running',
+      currentStage: -1,
+      providers: [],
+      providerTrust: [],
+      results: [],
+      trace: {
+        requesterTransport,
+        marks: {
+          publicRequestReceived: { monotonicMs: requestReceivedAtMs, wallTime: requestReceivedWallTime }
+        },
+        stageTransport: []
+      }
+    };
+    chain.timer = setTimeout(() => {
+      if (chain.status !== 'running') return;
+      closeChain(chain, 504, { ok: false, error: 'chain_wait_timeout', chainId: frame.i });
+    }, waitMs || 120_000);
+    chains.set(frame.i, chain);
+    touch(requesterNodeId);
+    dispatchChainStage(chain, 0);
+    return null;
   }
 
   function dispatchChainStage(chain, stageIndex) {
@@ -411,51 +466,17 @@ export function createRelay({ nodeFreshnessMs = 15_000 } = {}) {
         const { frame, payload } = await readJson(req);
         const verification = verifyCompactFrame(frame, payload, requester.publicKey, { allowedTypes: ['CHAIN'] });
         if (!verification.ok) return json(res, 400, { ok: false, error: verification.reason });
-        if (chains.has(frame.i)) return json(res, 409, { ok: false, error: 'duplicate_chain' });
-        if (!Array.isArray(payload?.stages) || payload.stages.length < 2 || payload.stages.length > 8) {
-          return json(res, 400, { ok: false, error: 'invalid_chain_stages' });
-        }
-        for (let index = 0; index < payload.stages.length; index += 1) {
-          const capability = capabilityName(payload.stages[index]);
-          if (!capability || typeof capability !== 'string') {
-            return json(res, 400, { ok: false, error: 'invalid_chain_capability', stageIndex: index });
-          }
-          if (!matchingOffers({ capability, requesterNodeId })[0]) {
-            return json(res, 404, { ok: false, error: 'no_matching_provider', capability, stageIndex: index });
-          }
-        }
-
-        const waitMs = boundedWaitMs(url, 120_000);
-        const chain = {
-          chainId: frame.i,
-          requester: requesterNodeId,
+        const started = startChain({
+          requesterNodeId,
           frame,
           payload,
+          waitMs: boundedWaitMs(url, 120_000),
           res,
-          timer: null,
-          createdAt: new Date().toISOString(),
-          status: 'running',
-          currentStage: -1,
-          providers: [],
-          providerTrust: [],
-          results: [],
-          trace: {
-            marks: {
-              publicRequestReceived: {
-                monotonicMs: requestReceivedAtMs,
-                wallTime: requestReceivedWallTime
-              }
-            },
-            stageTransport: []
-          }
-        };
-        chain.timer = setTimeout(() => {
-          if (chain.status !== 'running') return;
-          closeChain(chain, 504, { ok: false, error: 'chain_wait_timeout', chainId: frame.i });
-        }, waitMs || 120_000);
-        chains.set(frame.i, chain);
-        touch(requesterNodeId);
-        dispatchChainStage(chain, 0);
+          requestReceivedAtMs,
+          requestReceivedWallTime,
+          requesterTransport: 'http'
+        });
+        if (started) return json(res, started.status, started.body);
         return;
       }
 
@@ -652,9 +673,35 @@ export function createRelay({ nodeFreshnessMs = 15_000 } = {}) {
     });
     socket.on('message', (data) => {
       const receivedAtMs = performance.now();
+      const receivedWallTime = new Date().toISOString();
+      let message = null;
       try {
         touch(nodeId);
-        const message = JSON.parse(data.toString());
+        message = JSON.parse(data.toString());
+        if (message?.kind === 'CHAIN') {
+          const requester = nodes.get(nodeId);
+          const verification = verifyCompactFrame(message.frame, message.payload, requester.publicKey, { allowedTypes: ['CHAIN'] });
+          if (!verification.ok) {
+            socket.send(JSON.stringify({ kind: 'ERROR', chainId: message.frame?.i || null, ok: false, status: 400, error: verification.reason }));
+            return;
+          }
+          const rawWaitMs = Number(message.waitMs);
+          const waitMs = Number.isFinite(rawWaitMs) ? Math.max(0, Math.min(120_000, Math.floor(rawWaitMs))) : 120_000;
+          const started = startChain({
+            requesterNodeId: nodeId,
+            frame: message.frame,
+            payload: message.payload,
+            waitMs,
+            socket,
+            requestReceivedAtMs: receivedAtMs,
+            requestReceivedWallTime: receivedWallTime,
+            requesterTransport: 'websocket'
+          });
+          if (started) {
+            socket.send(JSON.stringify({ kind: 'ERROR', chainId: message.frame?.i || null, ok: false, status: started.status, error: started.body.error }));
+          }
+          return;
+        }
         if (message?.kind !== 'RESULT') throw new Error('unsupported_socket_message');
         const processed = processFastResult(nodeId, message.frame, message.payload, receivedAtMs);
         if (socket.readyState === WebSocket.OPEN) {
@@ -662,7 +709,7 @@ export function createRelay({ nodeFreshnessMs = 15_000 } = {}) {
         }
       } catch (error) {
         if (socket.readyState === WebSocket.OPEN) {
-          socket.send(JSON.stringify({ kind: 'ERROR', ok: false, error: error.message }));
+          socket.send(JSON.stringify({ kind: 'ERROR', chainId: message?.frame?.i || null, ok: false, error: error.message }));
         }
       }
     });
