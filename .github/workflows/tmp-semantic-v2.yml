@@ -38,7 +38,7 @@ jobs:
       SEMANTIC_V2_OUTPUT: semantic-retrieval-v2.json
       SEMANTIC_V2_SOURCE_SHA: 6f2ddf743e83ad1704a831a7058a93ad668c6a69
       SEMANTIC_V2_PROXY_SHA: c1ea39a3f5a0408035fea7f00604ff14310eda10
-      SEMANTIC_V2_ATTEMPT: '5'
+      SEMANTIC_V2_ATTEMPT: '6'
       GH_TOKEN: ${{ github.token }}
 
     steps:
@@ -103,13 +103,14 @@ jobs:
             });
             const semanticReranker = createProviderSemanticReranker({
               provider:rerankerProvider,
-              name:'gemini-semantic-reranker',
-              providerOptions:{ thinkingBudget:0 }
+              name:'gemini-semantic-reranker-64-8-1',
+              providerOptions:{ thinkingBudget:0 },
+              shortlistSize:8
             });
             const semanticRouter = createSemanticContextRouterV2({
               embedder,
               reranker:semanticReranker,
-              candidateK:96
+              candidateK:64
             });`
           );
           replaceOnce(
@@ -149,7 +150,7 @@ jobs:
           replaceOnce(
             'methodology reranker',
             "      topK:1,\n      blockIdsInRequesterQueries:false,",
-            "      topK:1,\n      denseCandidateK:96,\n      semanticReranker:'Gemini over dense candidates; selected block only is materialized to actors',\n      blockIdsInRequesterQueries:false,"
+            "      topK:1,\n      denseCandidateK:64,\n      semanticShortlistK:8,\n      semanticReranker:'Gemini hierarchical 64 -> 8 -> 1; only final verified block is materialized to actors',\n      blockIdsInRequesterQueries:false,"
           );
           replaceOnce(
             'live retrieval metric map',
