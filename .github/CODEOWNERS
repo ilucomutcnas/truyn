@@ -1,0 +1,25 @@
+# TRUYN security-sensitive ownership boundary.
+# Public contributions remain welcome; changes to the trust boundary require explicit owner review once CODEOWNERS review is enforced by the repository ruleset.
+
+.github/CODEOWNERS @ilucomutcnas
+.github/workflows/ @ilucomutcnas
+SECURITY.md @ilucomutcnas
+
+core/security/ @ilucomutcnas
+network/relay/ @ilucomutcnas
+runtime/ @ilucomutcnas
+adapters/sdk/ @ilucomutcnas
+
+spec/protocol/v1/provider-policy.md @ilucomutcnas
+
+tests/public-repository.test.js @ilucomutcnas
+tests/security-boundary.test.js @ilucomutcnas
+tests/provider-access.test.js @ilucomutcnas
+
+docs/architecture/PROVIDER_OWNERSHIP.md @ilucomutcnas
+docs/architecture/AUTHORIZATION_MODEL.md @ilucomutcnas
+docs/architecture/RELAY_SECURITY.md @ilucomutcnas
+docs/architecture/BILLING_BOUNDARY.md @ilucomutcnas
+docs/architecture/BYOK_ARCHITECTURE.md @ilucomutcnas
+docs/architecture/THREAT_MODEL.md @ilucomutcnas
+docs/architecture/PUBLIC_PRIVATE_BOUNDARY.md @ilucomutcnas
