@@ -56,7 +56,7 @@ HTTP, WebSocket, MCP, SDK, fast paths, and legacy compatibility paths must conve
 
 ## Public/private repository boundary
 
-The public repository may contain protocol semantics, generic implementation code, security invariants, local examples, generic adapters, and reviewed benchmark methodology.
+The public repository may contain protocol semantics, generic implementation code, security invariants, local examples, generic adapters, reviewed benchmark methodology, and sanitized benchmark evidence.
 
 It must not contain unnecessary live operational data such as:
 
@@ -67,12 +67,30 @@ It must not contain unnecessary live operational data such as:
 - WIF/service-account/managed-identity topology;
 - private bucket/container names;
 - live quota, cost ceilings, emergency controls, allowlists, or secret-manager paths;
-- raw production benchmark artifacts/run IDs that expose execution topology;
+- raw benchmark logs/artifacts when they expose private execution topology, credentials, prompts/customer data, or privileged operational state;
 - incident-sensitive logs, prompts, outputs, or customer data.
+
+Sanitized benchmark reports may retain reproducibility evidence such as public model versions, tested commit SHAs, workflow/run identifiers, artifact identifiers and cryptographic digests when those identifiers do not disclose a private execution boundary. Public relay hostnames intentionally exposed as part of the protocol may also remain.
 
 Privileged deployment/operations material belongs in access-controlled operational systems, not in this public repository. Encrypting a file inside a public repository is not treated as making the file private.
 
 The public tree is guarded by automated tests that allowlist the safe public workflow set and reject known operational paths/markers, credential/private-key patterns, and live cloud-topology patterns. The public CI workflow has read-only repository contents permission and does not receive provider/cloud credentials from its workflow definition.
+
+## Benchmark evidence preservation
+
+`docs/benchmarks/` is a protected public evidence ledger. Once a measured benchmark report has been published, security cleanup must use **redact-not-delete** handling.
+
+If sensitive information is discovered in a benchmark report:
+
+- redact only the sensitive value/field or generalize the minimum necessary operational detail;
+- preserve the report filename, benchmark date, methodology, measured results, fixed gates, limitations and corrections;
+- preserve tested commit SHA, run/workflow identity, artifact identity and artifact digest whenever those identifiers are safe to publish;
+- record a clear redaction/correction note when a material evidence field changes;
+- keep the redaction/correction in Git history.
+
+Deleting a benchmark report, replacing it with a summary/stub, or globally forbidding benchmark evidence paths is not an acceptable secret-response mechanism. If a report is later proven invalid or duplicated, preserve an explicit tombstone/correction pointing to the superseding evidence rather than silently erasing the record.
+
+The repository regression suite protects the established benchmark evidence files from accidental deletion/truncation while continuing to scan their contents for credentials, private keys and live private topology.
 
 ## History and secret response
 
@@ -81,6 +99,8 @@ The normal public Git refs were rewritten onto a sanitized root after validated 
 Removing content from the current tree is not enough when sensitive data existed historically. Any credential that may have been exposed must still be revoked/rotated; history rewriting is not a substitute for credential rotation.
 
 Git hosting providers may retain unreachable objects, pull-request refs, caches, forks, clones, Actions logs, or artifacts after a force rewrite. Those copies must be purged through the hosting provider and affected fork/clone owners as applicable. Historical Actions artifacts/logs and immutable hosting-side refs are therefore treated as a separate cleanup surface from the sanitized Git tree.
+
+History cleanup must not be used as a blanket mechanism to erase sanitized benchmark evidence. If a history rewrite is required for secret removal, the sanitized benchmark reports must be restored into the new root/history immediately, with their evidence fields preserved to the maximum safe extent.
 
 ## Security acceptance gate
 
@@ -96,7 +116,8 @@ The in-repository regression suite now proves at minimum:
 - replayed registration envelope: denied;
 - oversized input: rejected before unbounded buffering;
 - trusted owner requester → explicitly authorized owner provider: allowed;
-- provider-host authorization remains a second independent check before adapter execution.
+- provider-host authorization remains a second independent check before adapter execution;
+- protected benchmark evidence files remain present/substantial and are scanned for public-repository leakage rather than banned by path.
 
 Deployment-specific cloud/IAM/origin acceptance, durable billing/quota accounting and richer account-level tenancy remain separate from these in-repository tests.
 
@@ -109,4 +130,5 @@ Deployment-specific cloud/IAM/origin acceptance, durable billing/quota accountin
 - `docs/architecture/BYOK_ARCHITECTURE.md`
 - `docs/architecture/THREAT_MODEL.md`
 - `docs/architecture/PUBLIC_PRIVATE_BOUNDARY.md`
+- `docs/benchmarks/README.md`
 - `spec/protocol/v1/provider-policy.md`
