@@ -31,14 +31,21 @@ jobs:
           az account show >/dev/null
           az account get-access-token --resource https://management.azure.com/ --query accessToken -o tsv >/dev/null
 
+          enabled_subscriptions="$(az account list --query "length([?state=='Enabled'])" -o tsv)"
+          resource_groups="$(az group list --query 'length(@)' -o tsv)"
+          resources="$(az resource list --query 'length(@)' -o tsv)"
+          container_apps="$(az resource list --resource-type Microsoft.App/containerApps --query 'length(@)' -o tsv)"
+          cognitive_accounts="$(az resource list --resource-type Microsoft.CognitiveServices/accounts --query 'length(@)' -o tsv)"
+          acr_registries="$(az acr list --query 'length(@)' -o tsv 2>/dev/null || echo unavailable)"
+
           echo "AZURE_LOGIN=ok"
           echo "ARM_TOKEN=ok"
-          echo "ENABLED_SUBSCRIPTIONS=$(az account list --query \"length([?state=='Enabled'])\" -o tsv)"
-          echo "VISIBLE_RESOURCE_GROUPS=$(az group list --query 'length(@)' -o tsv)"
-          echo "VISIBLE_RESOURCES=$(az resource list --query 'length(@)' -o tsv)"
-          echo "VISIBLE_CONTAINER_APPS=$(az resource list --resource-type Microsoft.App/containerApps --query 'length(@)' -o tsv)"
-          echo "VISIBLE_COGNITIVE_ACCOUNTS=$(az resource list --resource-type Microsoft.CognitiveServices/accounts --query 'length(@)' -o tsv)"
-          echo "VISIBLE_ACR_REGISTRIES=$(az acr list --query 'length(@)' -o tsv 2>/dev/null || echo unavailable)"
+          echo "ENABLED_SUBSCRIPTIONS=${enabled_subscriptions}"
+          echo "VISIBLE_RESOURCE_GROUPS=${resource_groups}"
+          echo "VISIBLE_RESOURCES=${resources}"
+          echo "VISIBLE_CONTAINER_APPS=${container_apps}"
+          echo "VISIBLE_COGNITIVE_ACCOUNTS=${cognitive_accounts}"
+          echo "VISIBLE_ACR_REGISTRIES=${acr_registries}"
 
           for ns in Microsoft.App Microsoft.CognitiveServices Microsoft.ContainerRegistry Microsoft.OperationalInsights; do
             state="$(az provider show --namespace "$ns" --query registrationState -o tsv 2>/dev/null || echo inaccessible)"
