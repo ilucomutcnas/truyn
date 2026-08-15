@@ -8,7 +8,7 @@ TRUYN is an open-source project for **agent-to-agent communication, decentralize
 
 No new cables. No new hardware Internet. A new network contract.
 
-[Manifesto](MANIFESTO.md) · [Whitepaper](WHITEPAPER.md) · [Architecture](STRUCTURE.md) · [Multi-cloud providers](docs/architecture/MULTI_CLOUD_PROVIDER_ARCHITECTURE.md) · [Protocol](spec/protocol/v1/README.md) · [Roadmap](ROADMAP.md) · [0BSD License](LICENSE)
+[Manifesto](MANIFESTO.md) · [Whitepaper](WHITEPAPER.md) · [Architecture](STRUCTURE.md) · [Security](SECURITY.md) · [Provider ownership](docs/architecture/PROVIDER_OWNERSHIP.md) · [BYOK](docs/getting-started/BYOK.md) · [Protocol](spec/protocol/v1/README.md) · [Roadmap](ROADMAP.md) · [0BSD License](LICENSE)
 
 ---
 
@@ -23,12 +23,52 @@ address → server → API → request → data → response
 TRUYN proposes a different logical model:
 
 ```text
-need → discover capability → verify → route / execute → result + trustability
+need → discover capability → verify → authorize → route / execute → result + trustability
 ```
 
-An AI agent should not always need to know **which server, company, URL, model, or API** can solve a task. It should be able to describe the required outcome, freshness, deadline, cost, privacy, and trust level. The network can then discover eligible providers, determine whether existing state or a content-addressed object already satisfies the request, decide whether verification is required, choose where computation should happen, and return the minimum sufficient result.
+An AI agent should not always need to know **which server, company, URL, model, or API** can solve a task. It should be able to describe the required outcome, freshness, deadline, cost, privacy, and trust level. The network can then discover **authorized and eligible** providers, determine whether existing state or a content-addressed object already satisfies the request, decide whether verification is required, choose where computation should happen, and return the minimum sufficient result.
 
 **TRUYN shifts the logical center of networking from _where information is_ to _what intelligence is needed_.**
+
+---
+
+## Open network. Private intelligence accounts.
+
+TRUYN is open, but openness of the protocol is not permission to consume another participant's paid AI quota.
+
+> **Open protocol ≠ open billing account.**
+>
+> **TRUYN is open. Intelligence is BYOK by default.**
+
+The target security architecture requires every execution provider to have an accountable owner/tenant boundary, visibility policy and billing mode. Capability matching is followed by server-side authorization before dispatch.
+
+A public relay may be reachable by anyone while private providers remain unusable by foreign requesters. Knowing a provider ID, using a custom client, forging an `ownerId` field or calling a legacy endpoint must not grant access.
+
+The safety invariant is:
+
+```text
+foreign requester
++ public relay
++ known private provider ID
++ custom/malicious client
+= zero owner-funded provider calls
+```
+
+Normal users are expected to **Bring Your Own Intelligence / Bring Your Own Provider (BYOK)**. Their upstream provider credentials remain with their own provider runtime or secure local environment and do not travel through TRUYN protocol envelopes.
+
+The architecture also supports future explicitly shared, prepaid, subscription or sponsored providers, but no such mode creates an implicit entitlement. Sponsored/free owner-funded access defaults to disabled/zero until deliberately enabled by the provider owner.
+
+**Important status:** the ownership/BYOK/central-authorization model is an approved target architecture. The current MVP must not be interpreted as production-grade provider isolation until the security gate in the roadmap and threat model is implemented and passes negative tests.
+
+Read:
+
+- [Provider Ownership](docs/architecture/PROVIDER_OWNERSHIP.md)
+- [Authorization Model](docs/architecture/AUTHORIZATION_MODEL.md)
+- [Relay Security](docs/architecture/RELAY_SECURITY.md)
+- [Billing Boundary](docs/architecture/BILLING_BOUNDARY.md)
+- [BYOK Architecture](docs/architecture/BYOK_ARCHITECTURE.md)
+- [Threat Model](docs/architecture/THREAT_MODEL.md)
+- [Public / Private Information Boundary](docs/architecture/PUBLIC_PRIVATE_BOUNDARY.md)
 
 ---
 
@@ -42,7 +82,7 @@ TRUYN is designed to turn agent interoperability from a collection of one-off in
 - **Better computational context.** Provenance, evidence, freshness, source independence and trustability can travel with the result instead of being reconstructed by every downstream agent.
 - **Less data movement.** Send a delta instead of a full object; reuse a content-addressed object; execute near large or private data and return only the result or proof.
 - **Less polling and duplicate work.** Subscribe to meaningful changes and reuse sufficiently fresh signed state/results.
-- **Provider independence.** Route by capability rather than hard-coded hostname, with failover across eligible providers.
+- **Provider independence without billing ambiguity.** Route among authorized providers by capability rather than hard-coded hostname, while preserving explicit ownership and cost responsibility.
 - **Risk-aware decisions.** Trustability is evaluated for a specific claim, domain, requester, purpose and time — not as one permanent global reputation number.
 
 ### Token and inference economics
@@ -92,6 +132,8 @@ TRUYN/1 separates **conceptual objects**, **wire primitives**, and **composed ve
 | `TRUST_RECEIPT` | Compact signed aggregation of trust evidence for a claim under a policy. |
 | `REVOKE` | Invalidate or supersede a claim, offer, result, key binding, credential or other revocable object. |
 
+Provider ownership/visibility/billing policy is an authorization layer around capability execution. It does not make requester-supplied ownership claims authoritative and does not require adding credentials to protocol messages.
+
 `CHALLENGE`, `VERIFY`, and `DISPUTE` are **TRUYN/1 behaviors**, not additional top-level wire primitives. They are composed from `NEED`, `CLAIM`, `ATTEST`, evidence references and `TRUST_RECEIPT`. This keeps the wire vocabulary small while retaining active verification.
 
 ---
@@ -114,7 +156,7 @@ A million downstream copies of one source must not count as a million independen
 
 ---
 
-## Capability, value and routing
+## Capability, authorization, value and routing
 
 A request can include hard constraints and decision context such as:
 
@@ -132,7 +174,14 @@ domain / purpose
 compute-near-data preference
 ```
 
-The network first rejects candidates that violate hard constraints, then can rank eligible providers by a local multi-objective policy. High-value or high-risk decisions can justify additional independent verification; low-value requests may prefer a cached result or cheaper route.
+Routing is explicitly two different questions:
+
+```text
+Can this provider perform the capability?
+Can this requester use this provider?
+```
+
+The network first excludes unauthorized providers and candidates that violate hard constraints, then can rank the remaining eligible providers by a local multi-objective policy. High-value or high-risk decisions can justify additional independent verification; low-value requests may prefer a cached result or cheaper route.
 
 ---
 
@@ -169,6 +218,8 @@ TRUYN uses one vocabulary everywhere:
 - `mainnet` — future stable public network with stricter compatibility and upgrade requirements.
 
 Configuration lives under `config/local`, `config/testnet`, and `config/mainnet`.
+
+Public reachability in `testnet` or `mainnet` does not grant access to private providers.
 
 ---
 
@@ -210,9 +261,9 @@ The public reference architecture is designed to test **equivalent capabilities 
 | Image generation | Google image-generation track (Imagen lineage / current supported Vertex image endpoint) | Azure OpenAI `gpt-image` family; Azure-direct FLUX as an optional second image provider |
 | Video generation | Veo | Sora 2 |
 
-This is an **architecture target, not a claim that every listed provider is already implemented or deployed**. Concrete model versions, regions, quotas and access requirements are resolved at deployment/benchmark time.
+This is an **architecture target, not a claim that every listed provider is already implemented or deployed**. Concrete model versions, regions, quotas, deployment IDs, cloud identities and private topology are operational concerns and are not part of the public protocol contract.
 
-The distinction matters for Grok: xAI offers Grok Imagine image/video generation through xAI's own API, but the current Azure Foundry Grok catalog documents the Azure Grok path as chat/reasoning; some variants accept image input while returning text. TRUYN therefore does not advertise Azure Grok as an image/video generator unless that capability becomes explicitly available through the deployed Azure catalog.
+Reference/test providers funded by a TRUYN operator remain owner-private unless explicitly shared. The existence of a provider in a benchmark or reference deployment does not give public users access to its quota.
 
 Media results are intended to travel through TRUYN as verifiable **artifact references** with provenance, size, media type and digest instead of embedding large image/video binaries in protocol envelopes.
 
@@ -226,13 +277,17 @@ TRUYN's routing model can support a future open market of machine capabilities: 
 
 `TRUYN/1` defines the information needed for cost-aware routing but **does not require a blockchain, payment rail or global settlement system**. Settlement is deliberately modular.
 
+A future capability market is an explicit entitlement system. It does not weaken provider ownership: cross-owner execution must have an explicit grant/contract and attributable billing responsibility.
+
 ---
 
 ## Current status
 
-TRUYN is currently an **architecture and protocol implementation project**. The repository contains the manifesto, research whitepaper, versioned protocol skeleton, wire schemas, implementation ownership structure, test/benchmark areas and a staged roadmap. The project does not claim production-scale benchmarks before a reference implementation and reproducible measurements exist.
+TRUYN is an **experimental architecture and implementation project**. The repository contains a working MVP relay/node/adapter path, cloud PoC work, protocol drafts, benchmarks and a broader target architecture.
 
-The first implementation milestone is `v0.1 — Connect`: cryptographic identity, discovery, direct authenticated node communication and the minimal request path.
+The current MVP demonstrates signed identity, capability discovery, routing and result exchange. It is **not yet a production-grade public paid-provider security boundary**. The approved next security architecture requires provider ownership/tenant binding, central server-side authorization, authorization-aware discovery, BYOK-by-default onboarding, billing/quota attribution, private provider backchannels and negative security tests before public users can safely coexist with owner-funded providers.
+
+No document should interpret a public TRUYN endpoint as permission to consume TRUYN-operated provider accounts.
 
 ---
 
@@ -240,7 +295,7 @@ The first implementation milestone is `v0.1 — Connect`: cryptographic identity
 
 **Read it. Challenge it. Fork it. Implement it. Break it. Improve it.**
 
-Useful contributions include protocol design, Rust/networking implementation, trust algorithms, adversarial testing, cryptography, discovery/NAT traversal, agent adapters, compute sandboxing, SDKs, benchmarks, simulations, documentation and independent academic critique.
+Useful contributions include protocol design, networking implementation, trust algorithms, adversarial testing, cryptography, discovery/NAT traversal, agent adapters, provider authorization, BYOK UX, compute sandboxing, SDKs, benchmarks, simulations, documentation and independent academic critique.
 
 TRUYN uses the **Zero-Clause BSD (0BSD)** license to minimize friction for research, private, open-source and commercial use.
 
@@ -251,8 +306,14 @@ TRUYN uses the **Zero-Clause BSD (0BSD)** license to minimize friction for resea
 - [Manifesto](MANIFESTO.md) — why TRUYN should exist.
 - [Whitepaper](WHITEPAPER.md) — academic rationale, formulas, threat model and research basis.
 - [Architecture Contract](docs/architecture/ARCHITECTURE_CONTRACT.md) — canonical mapping of concepts to implementation owners.
-- [Multi-Cloud Provider Architecture](docs/architecture/MULTI_CLOUD_PROVIDER_ARCHITECTURE.md) — public Google/Azure reasoning, image and video capability architecture.
-- [Multimodal Provider Parity Benchmark](docs/benchmarks/MULTIMODAL_PROVIDER_PARITY.md) — planned apples-to-apples benchmark methodology.
+- [Provider Ownership](docs/architecture/PROVIDER_OWNERSHIP.md) — who owns provider capacity and who may use it.
+- [Authorization Model](docs/architecture/AUTHORIZATION_MODEL.md) — fail-closed server-side provider authorization.
+- [Relay Security](docs/architecture/RELAY_SECURITY.md) — public relay vs private provider/control-plane boundaries.
+- [Billing Boundary](docs/architecture/BILLING_BOUNDARY.md) — BYOK/owner-funded/sponsored accounting semantics.
+- [BYOK Architecture](docs/architecture/BYOK_ARCHITECTURE.md) — Bring Your Own Intelligence / Provider.
+- [Threat Model](docs/architecture/THREAT_MODEL.md) — provider and relay abuse cases and required negative tests.
+- [Public / Private Boundary](docs/architecture/PUBLIC_PRIVATE_BOUNDARY.md) — what belongs in the open repository vs private operations.
+- [Multi-Cloud Provider Architecture](docs/architecture/MULTI_CLOUD_PROVIDER_ARCHITECTURE.md) — public capability architecture without private deployment identifiers.
 - [TRUYN/1 Protocol](spec/protocol/v1/README.md) — normative protocol semantics.
 - [Repository Structure](STRUCTURE.md) — where each subsystem belongs.
 - [Roadmap](ROADMAP.md) — staged implementation plan.
