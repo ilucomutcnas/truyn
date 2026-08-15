@@ -1,6 +1,14 @@
 import { randomUUID } from 'node:crypto';
 import { googleMetadataAccessToken } from './google-auth.js';
 
+function parseGcsRef(ref) {
+  if (typeof ref !== 'string' || !ref.startsWith('gs://')) throw new Error(`Invalid GCS ref: ${ref}`);
+  const rest = ref.slice(5);
+  const slash = rest.indexOf('/');
+  if (slash < 1) throw new Error(`Invalid GCS ref: ${ref}`);
+  return { bucket: rest.slice(0, slash), objectName: rest.slice(slash + 1) };
+}
+
 export function createGcsArtifactStore({
   bucket = process.env.TRUYN_GCS_ARTIFACT_BUCKET,
   accessTokenProvider = googleMetadataAccessToken,
@@ -25,7 +33,25 @@ export function createGcsArtifactStore({
       });
       const body = await response.json();
       if (!response.ok) throw new Error(body?.error?.message || `GCS upload HTTP ${response.status}`);
-      return { ref: `gs://${bucket}/${objectName}`, objectName, bucket };
+      return { ref: `gs://${bucket}/${objectName}`, objectName, bucket, bytes: Number(body.size || buffer.byteLength) };
+    },
+
+    async stat(ref) {
+      const parsed = parseGcsRef(ref);
+      const token = await accessTokenProvider({ fetchImpl });
+      const url = `https://storage.googleapis.com/storage/v1/b/${encodeURIComponent(parsed.bucket)}/o/${encodeURIComponent(parsed.objectName)}`;
+      const response = await fetchImpl(url, { headers: { authorization: `Bearer ${token}` } });
+      const body = await response.json();
+      if (!response.ok) throw new Error(body?.error?.message || `GCS metadata HTTP ${response.status}`);
+      return {
+        ref,
+        bucket: parsed.bucket,
+        objectName: parsed.objectName,
+        bytes: Number(body.size || 0),
+        mediaType: body.contentType || 'application/octet-stream',
+        crc32c: body.crc32c || null,
+        md5Hash: body.md5Hash || null
+      };
     }
   };
 }
