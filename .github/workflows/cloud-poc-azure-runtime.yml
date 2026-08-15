@@ -1,5 +1,5 @@
 name: Cloud PoC Azure Relay and GPT Node
-# Rebuild the deployed relay/provider image whenever runtime protocol code changes.
+# deployment revision: relay latency trace instrumentation
 
 on:
   push:
