@@ -1,0 +1,36 @@
+name: Dispatch context efficiency benchmark
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/dispatch-context-efficiency-benchmark.yml'
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Verify canonical context relay and dispatch benchmark
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          health="$(curl -fsS https://relay.truyn.org/health)"
+          echo "$health" | jq -e '.ok == true and .fastPath == true and .chainPath == true and .socketPath == true and (.contexts != null)' >/dev/null
+          echo "TRUYN_CONTEXT_HEALTH=$health"
+          gh workflow run cloud-poc-context-efficiency-ab.yml --repo inn-media/truyn --ref main
+      - name: Remove one-shot dispatcher
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git rm .github/workflows/dispatch-context-efficiency-benchmark.yml
+          git commit -m 'Remove context benchmark dispatcher'
+          git push origin HEAD:main
