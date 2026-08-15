@@ -1,0 +1,41 @@
+name: GCP Provider Log Diagnostic Once
+
+on:
+  push:
+    paths:
+      - .github/workflows/gcp-provider-log-diagnostic-once.yml
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID || secrets.GCP_PROJECT_ID }}
+      GCP_WIF_PROVIDER: ${{ vars.GCP_WIF_PROVIDER || secrets.GCP_WIF_PROVIDER }}
+      GCP_DEPLOYER_SA: ${{ vars.GCP_DEPLOYER_SERVICE_ACCOUNT_EMAIL || secrets.GCP_DEPLOYER_SERVICE_ACCOUNT_EMAIL }}
+    steps:
+      - uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ env.GCP_WIF_PROVIDER }}
+          service_account: ${{ env.GCP_DEPLOYER_SA }}
+          create_credentials_file: true
+          export_environment_variables: true
+      - uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID }}
+      - name: Describe service and revisions
+        shell: bash
+        run: |
+          set -euo pipefail
+          gcloud run services describe truyn-gemini --project="$GCP_PROJECT_ID" --region=us-east4 --format=json
+          gcloud run revisions list --project="$GCP_PROJECT_ID" --region=us-east4 --service=truyn-gemini --limit=10 --format='table(metadata.name,status.conditions[0].status,status.conditions[0].lastTransitionTime,metadata.creationTimestamp)'
+      - name: Read provider logs around semantic gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          gcloud logging read 'resource.type="cloud_run_revision" AND resource.labels.service_name="truyn-gemini" AND timestamp>="2026-08-15T17:27:00Z"' --project="$GCP_PROJECT_ID" --limit=200 --order=asc --format='value(timestamp,resource.labels.revision_name,textPayload,jsonPayload.message)'
