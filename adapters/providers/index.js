@@ -8,10 +8,12 @@ import { createAzureFluxProvider } from './azure-flux.js';
 import { createVertexGeminiProvider } from './vertex-gemini.js';
 import { createVertexImageProvider } from './vertex-image.js';
 import { createVertexVeoProvider } from './vertex-veo.js';
+import { createCustomHttpProvider } from './custom-http.js';
 
 export function createProviderAdapter(provider, options = {}) {
   if (provider === 'openai') return createOpenAIProvider(options);
   if (provider === 'anthropic') return createAnthropicProvider(options);
+  if (provider === 'custom-http' || provider === 'http-json') return createCustomHttpProvider(options);
   if (provider === 'azure' || provider === 'azure-openai') return createAzureOpenAIProvider(options);
   if (provider === 'azure-foundry') return createAzureFoundryProvider(options);
   if (provider === 'azure-openai-image' || provider === 'azure-image') return createAzureOpenAIImageProvider(options);
@@ -20,5 +22,5 @@ export function createProviderAdapter(provider, options = {}) {
   if (provider === 'gemini' || provider === 'vertex' || provider === 'vertex-gemini') return createVertexGeminiProvider(options);
   if (provider === 'vertex-image' || provider === 'google-image') return createVertexImageProvider(options);
   if (provider === 'vertex-veo' || provider === 'veo') return createVertexVeoProvider(options);
-  throw new Error(`Unsupported provider: ${provider}. Supported: openai, anthropic, azure-openai, azure-foundry, azure-openai-image, azure-flux, azure-openai-video, vertex-gemini, vertex-image, vertex-veo`);
+  throw new Error(`Unsupported provider: ${provider}. Supported: openai, anthropic, custom-http, azure-openai, azure-foundry, azure-openai-image, azure-flux, azure-openai-video, vertex-gemini, vertex-image, vertex-veo`);
 }
