@@ -3,6 +3,14 @@ import assert from 'node:assert/strict';
 import { createProviderSemanticProjector } from '../core/context/provider-semantic-projector.js';
 import { createSemanticContextRouterV2 } from '../core/context/semantic-router-v2.js';
 
+function metadata() {
+  return {
+    usage:{ promptTokenCount:20, candidatesTokenCount:12, totalTokenCount:32 },
+    providerRequestBodyBytes:250,
+    providerLatencyMs:14
+  };
+}
+
 test('provider semantic projector emits all configured language variants and tracks usage', async () => {
   const provider = {
     async execute(request) {
@@ -10,11 +18,7 @@ test('provider semantic projector emits all configured language variants and tra
       assert.ok(request.input.task.includes('Do not answer the query'));
       return {
         output:JSON.stringify({ variants:{ en:'after approval', zh:'正式批准后', tr:'resmi onaydan sonra' } }),
-        metadata:{
-          usage:{ promptTokenCount:20, candidatesTokenCount:12, totalTokenCount:32 },
-          providerRequestBodyBytes:250,
-          providerLatencyMs:14
-        }
+        metadata:metadata()
       };
     }
   };
@@ -23,7 +27,46 @@ test('provider semantic projector emits all configured language variants and tra
   assert.deepEqual(result.variants, ['resmi onaydan sonra','after approval','正式批准后']);
   assert.deepEqual(result.metadata.usage, { input:20, output:12, total:32 });
   assert.equal(projector.stats().requests, 1);
+  assert.equal(projector.stats().formatFailures, 0);
   assert.deepEqual(projector.stats().languages, ['en','zh','tr']);
+});
+
+test('provider semantic projector accepts fenced JSON, top-level language fields and safe language aliases', async () => {
+  const outputs = [
+    '```json\n{"variants":{"English":"after approval","Simplified Chinese":"正式批准后","Turkish":"resmi onaydan sonra"}}\n```',
+    'Projection:\n{"en":"after approval","Chinese":"正式批准后","tr":"resmi onaydan sonra"}\nDone.',
+    JSON.stringify({ queries:[
+      { language:'English', text:'after approval' },
+      { language:'zh-Hans', query:'正式批准后' },
+      { language:'Turkish', value:'resmi onaydan sonra' }
+    ] })
+  ];
+
+  for (const output of outputs) {
+    const projector = createProviderSemanticProjector({
+      provider:{ async execute() { return { output, metadata:metadata() }; } },
+      repairAttempts:0
+    });
+    const result = await projector.project('resmi onaydan sonra');
+    assert.deepEqual(result.variants, ['resmi onaydan sonra','after approval','正式批准后']);
+    assert.equal(projector.stats().formatFailures, 0);
+  }
+});
+
+test('provider semantic projector still rejects incomplete language projections and counts the format failure', async () => {
+  const projector = createProviderSemanticProjector({
+    provider:{
+      async execute() {
+        return {
+          output:'```json\n{"variants":{"en":"after approval","tr":"resmi onaydan sonra"}}\n```',
+          metadata:metadata()
+        };
+      }
+    },
+    repairAttempts:0
+  });
+  await assert.rejects(projector.project('resmi onaydan sonra'), /no valid multilingual projection/);
+  assert.equal(projector.stats().formatFailures, 1);
 });
 
 test('semantic router scores each block against all projected query variants while preserving original query hash provenance', async () => {
