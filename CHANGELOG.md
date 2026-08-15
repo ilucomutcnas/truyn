@@ -16,6 +16,7 @@ All notable factual repository changes should be recorded here without publishin
 - Reduced provider health/log disclosure to readiness only.
 - Restricted permissive CLI relay mode to loopback local development.
 - Made the runtime provider role default to `owner-only`; denied requesters are rejected by the provider host before adapter execution, with regression coverage proving zero adapter executions.
+- Added a dedicated runtime-security contract that asserts the `owner-only` default and verifies that the production provider entrypoint wires its access policy into `TruynAdapterHost`.
 - Added a public-tree leakage guard that allowlists the safe workflow set and rejects known privileged paths/markers, credential/private-key patterns, and live cloud-topology patterns.
 - Expanded safe read-only CI to future branch pushes and pull requests so public-tree policy is continuously checked from the sanitized baseline.
 - Defined public benchmark/security publication policy and operational-data exclusions.
