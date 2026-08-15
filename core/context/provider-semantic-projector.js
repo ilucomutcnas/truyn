@@ -21,17 +21,96 @@ function uniqueTexts(values) {
   return result;
 }
 
+function extractFirstJsonObject(text) {
+  let start = -1;
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === '\\') {
+        escaped = true;
+      } else if (char === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (char === '"') {
+      inString = true;
+      continue;
+    }
+    if (char === '{') {
+      if (depth === 0) start = index;
+      depth += 1;
+      continue;
+    }
+    if (char === '}' && depth > 0) {
+      depth -= 1;
+      if (depth === 0 && start >= 0) return text.slice(start, index + 1);
+    }
+  }
+  return null;
+}
+
+function normalizeKey(value) {
+  return String(value || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+}
+
+const LANGUAGE_ALIASES = {
+  en:new Set(['en','english']),
+  zh:new Set(['zh','zh_cn','zh_hans','chinese','simplified_chinese','simplifiedchinese']),
+  tr:new Set(['tr','turkish'])
+};
+
+function lookupVariant(source, code) {
+  if (!source || typeof source !== 'object' || Array.isArray(source)) return null;
+  const aliases = LANGUAGE_ALIASES[code] || new Set([normalizeKey(code)]);
+  for (const [key, value] of Object.entries(source)) {
+    if (!aliases.has(normalizeKey(key))) continue;
+    if (typeof value === 'string' && value.trim()) return value.trim();
+  }
+  return null;
+}
+
+function objectFromArray(values) {
+  if (!Array.isArray(values)) return null;
+  const result = {};
+  for (const entry of values) {
+    if (!entry || typeof entry !== 'object') continue;
+    const key = entry.code ?? entry.language ?? entry.lang;
+    const value = entry.text ?? entry.query ?? entry.value;
+    if (typeof key === 'string' && typeof value === 'string' && value.trim()) result[key] = value.trim();
+  }
+  return Object.keys(result).length ? result : null;
+}
+
 function parseProjection(output, languageCodes) {
   const text = typeof output === 'string' ? output.trim() : JSON.stringify(output);
-  try {
-    const parsed = JSON.parse(text);
-    const variants = parsed?.variants && typeof parsed.variants === 'object' ? parsed.variants : null;
-    if (!variants) return null;
-    const projected = languageCodes.map((code) => variants[code]).filter((value) => typeof value === 'string' && value.trim());
-    return projected.length === languageCodes.length ? uniqueTexts(projected) : null;
-  } catch {
-    return null;
+  const candidates = uniqueTexts([
+    text,
+    text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, ''),
+    extractFirstJsonObject(text)
+  ]);
+
+  for (const candidate of candidates) {
+    let parsed;
+    try {
+      parsed = JSON.parse(candidate);
+    } catch {
+      continue;
+    }
+
+    const rawVariants = parsed?.variants ?? parsed?.queries ?? parsed?.translations ?? parsed;
+    const variants = Array.isArray(rawVariants) ? objectFromArray(rawVariants) : rawVariants;
+    if (!variants || typeof variants !== 'object') continue;
+
+    const projected = languageCodes.map((code) => lookupVariant(variants, code));
+    if (projected.every((value) => typeof value === 'string' && value.trim())) return projected;
   }
+  return null;
 }
 
 /**
@@ -60,6 +139,7 @@ export function createProviderSemanticProjector({
   const metrics = {
     requests:0,
     repairs:0,
+    formatFailures:0,
     inputTokens:0,
     outputTokens:0,
     totalTokens:0,
@@ -80,8 +160,8 @@ export function createProviderSemanticProjector({
         'Project the user query into semantically equivalent multilingual retrieval queries.',
         'Preserve every domain constraint, action, negation, temporal condition, threshold, approval state, location, and exception exactly.',
         'Do not answer the query. Do not add facts. Do not omit distinctions.',
-        `Return JSON only, exactly: {"variants":{${languageContract}}}.`,
-        repair ? 'The previous output violated the JSON/language contract. Return all required variants exactly.' : null,
+        `Return JSON only, with no markdown or commentary, exactly: {"variants":{${languageContract}}}.`,
+        repair ? 'The previous output violated the JSON/language contract. Return all required variants exactly and nothing else.' : null,
         `QUERY:\n${query}`
       ].filter(Boolean).join(' ');
       const execution = await provider.execute({
@@ -118,6 +198,7 @@ export function createProviderSemanticProjector({
           }
         };
       }
+      metrics.formatFailures += 1;
     }
     throw new Error('semantic projector returned no valid multilingual projection after repair');
   }
