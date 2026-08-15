@@ -3,12 +3,33 @@ name: Cloud PoC Code CI
 on:
   push:
     branches:
-      - deploy/azure-gcp-poc
+      - main
     paths:
-      - 'adapters/providers/**'
+      - 'core/**'
+      - 'network/**'
+      - 'node/**'
+      - 'adapters/**'
       - 'runtime/**'
-      - 'tests/cloud-providers.test.js'
+      - 'tests/**'
+      - 'benchmarks/**'
       - 'Dockerfile'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/cloud-poc-code-ci.yml'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'core/**'
+      - 'network/**'
+      - 'node/**'
+      - 'adapters/**'
+      - 'runtime/**'
+      - 'tests/**'
+      - 'benchmarks/**'
+      - 'Dockerfile'
+      - 'package.json'
+      - 'package-lock.json'
       - '.github/workflows/cloud-poc-code-ci.yml'
   workflow_dispatch:
 
