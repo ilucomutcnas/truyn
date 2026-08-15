@@ -17,6 +17,8 @@ tests/security-boundary.test.js @ilucomutcnas
 tests/provider-access.test.js @ilucomutcnas
 tests/runtime-security.test.js @ilucomutcnas
 
+docs/benchmarks/ @ilucomutcnas
+
 docs/architecture/PROVIDER_OWNERSHIP.md @ilucomutcnas
 docs/architecture/AUTHORIZATION_MODEL.md @ilucomutcnas
 docs/architecture/RELAY_SECURITY.md @ilucomutcnas
