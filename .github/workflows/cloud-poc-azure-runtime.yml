@@ -5,10 +5,16 @@ on:
     branches:
       - main
     paths:
+      - 'network/relay/**'
+      - 'node/**'
+      - 'core/**'
       - 'runtime/**'
       - 'adapters/providers/azure-openai.js'
       - 'adapters/providers/index.js'
       - 'Dockerfile'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/cloud-poc-azure-runtime.yml'
   workflow_dispatch:
 
 permissions:
