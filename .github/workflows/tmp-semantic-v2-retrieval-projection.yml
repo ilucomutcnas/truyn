@@ -33,6 +33,16 @@ jobs:
       SEMANTIC_V2_SOURCE_SHA: 6f2ddf743e83ad1704a831a7058a93ad668c6a69
       SEMANTIC_V2_PROXY_SHA: c1ea39a3f5a0408035fea7f00604ff14310eda10
       GH_TOKEN: ${{ github.token }}
+      AZURE_OPENAI_ENDPOINT: https://invalid.local
+      AZURE_OPENAI_DEPLOYMENT: retrieval-only
+      AZURE_OPENAI_API_KEY: retrieval-only
+      AZURE_FOUNDRY_ENDPOINT: https://invalid.local
+      AZURE_FOUNDRY_API_KEY: retrieval-only
+      AZURE_FOUNDRY_GROK: retrieval-only
+      AZURE_FOUNDRY_DEEPSEEK: retrieval-only
+      AZURE_FOUNDRY_LLAMA: retrieval-only
+      AZURE_FOUNDRY_MISTRAL: retrieval-only
+      AZURE_FOUNDRY_KIMI: retrieval-only
 
     steps:
       - uses: actions/checkout@v4
@@ -70,34 +80,10 @@ jobs:
             if (!source.includes(from)) throw new Error(`patch marker not found: ${label}`);
             source = source.replace(from, to);
           }
-
           replaceOnce(
             'projector import',
             "import { createVertexEmbeddingClient } from '../adapters/providers/vertex-embedding.js';",
             "import { createVertexEmbeddingClient } from '../adapters/providers/vertex-embedding.js';\nimport { createProviderSemanticProjector } from '../core/context/provider-semantic-projector.js';"
-          );
-          replaceOnce(
-            'retrieval-only environment',
-            `const required = {
-              AZURE_OPENAI_ENDPOINT: process.env.AZURE_OPENAI_ENDPOINT,
-              AZURE_OPENAI_DEPLOYMENT: process.env.AZURE_OPENAI_DEPLOYMENT,
-              AZURE_OPENAI_API_KEY: process.env.AZURE_OPENAI_API_KEY,
-              AZURE_FOUNDRY_ENDPOINT: process.env.AZURE_FOUNDRY_ENDPOINT,
-              AZURE_FOUNDRY_API_KEY: process.env.AZURE_FOUNDRY_API_KEY,
-              AZURE_FOUNDRY_GROK: process.env.AZURE_FOUNDRY_GROK,
-              AZURE_FOUNDRY_DEEPSEEK: process.env.AZURE_FOUNDRY_DEEPSEEK,
-              AZURE_FOUNDRY_LLAMA: process.env.AZURE_FOUNDRY_LLAMA,
-              AZURE_FOUNDRY_MISTRAL: process.env.AZURE_FOUNDRY_MISTRAL,
-              AZURE_FOUNDRY_KIMI: process.env.AZURE_FOUNDRY_KIMI,
-              GCP_PROJECT_ID: gcpProjectId,
-              VERTEX_API_ENDPOINT: proxyEndpoint,
-              GCP_ACCESS_TOKEN: proxyToken
-            };`,
-            `const required = {
-              GCP_PROJECT_ID: gcpProjectId,
-              VERTEX_API_ENDPOINT: proxyEndpoint,
-              GCP_ACCESS_TOKEN: proxyToken
-            };`
           );
           replaceOnce(
             'router construction',
