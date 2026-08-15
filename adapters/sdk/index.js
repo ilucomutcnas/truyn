@@ -19,6 +19,11 @@ function materializePrevious(value, previousOutput) {
   return value;
 }
 
+function billingEstimate(need) {
+  const value = need?.payload?.policy?.billing?.maxTokens;
+  return Number.isInteger(value) && value > 0 ? value : null;
+}
+
 export function validateAdapter(adapter) {
   if (!adapter || typeof adapter.execute !== 'function') throw new Error('Adapter execute(request) is required');
   const capabilities = normalizeCapabilities(adapter.capabilities);
@@ -35,7 +40,7 @@ export function createFunctionAdapter({ name = 'function-adapter', version = '0.
 }
 
 export class TruynAdapterHost {
-  constructor({ node, adapter, pollIntervalMs = 500, fastPath = false, longPollMs = 25_000, socketPath = false, accessPolicy } = {}) {
+  constructor({ node, adapter, pollIntervalMs = 500, fastPath = false, longPollMs = 25_000, socketPath = false, accessPolicy, billingPolicy = null } = {}) {
     if (!node) throw new Error('node is required');
     this.node = node;
     this.adapter = validateAdapter(adapter);
@@ -44,6 +49,7 @@ export class TruynAdapterHost {
     this.longPollMs = longPollMs;
     this.socketPath = socketPath;
     this.accessPolicy = accessPolicy || createProviderAccessPolicy();
+    this.billingPolicy = billingPolicy;
     this.running = false;
     this.registered = false;
     this.offerIds = [];
@@ -69,7 +75,8 @@ export class TruynAdapterHost {
         chainPath: this.fastPath,
         socketPath: this.socketPath,
         accessMode: this.accessPolicy.mode,
-        allowedRequesterIds: this.accessPolicy.mode === 'owner-only' ? this.accessPolicy.allowedRequesterIds : []
+        allowedRequesterIds: this.accessPolicy.mode === 'owner-only' ? this.accessPolicy.allowedRequesterIds : [],
+        billingMode: this.billingPolicy?.mode || null
       });
       this.offerIds.push(result.offerId);
     }
@@ -152,6 +159,32 @@ export class TruynAdapterHost {
         continue;
       }
 
+      let billing = null;
+      if (this.billingPolicy) {
+        billing = this.billingPolicy.authorize(need, {
+          accessPolicy: this.accessPolicy,
+          estimatedTokens: billingEstimate(need)
+        });
+        if (!billing?.ok) {
+          const metadata = {
+            adapter: this.adapter.name,
+            adapterVersion: this.adapter.version,
+            latencyMs: 0,
+            error: 'PROVIDER_BILLING_DENIED',
+            errorClass: 'billing',
+            billingDenied: true,
+            billingMode: this.billingPolicy.mode,
+            billingReason: billing?.reason || 'billing_not_authorized',
+            failed: true
+          };
+          if (need.chain) metadata.chainStage = need.stageIndex;
+          if (compact) await this.node.compactResult(need.id, null, metadata);
+          else await this.node.result(need.id, null, metadata);
+          handled += 1;
+          continue;
+        }
+      }
+
       const startedAt = Date.now();
       try {
         let input = need.payload?.input;
@@ -177,6 +210,10 @@ export class TruynAdapterHost {
           latencyMs: Date.now() - startedAt,
           ...(normalized.metadata || {})
         };
+        if (billing) {
+          metadata.billingMode = billing.mode;
+          metadata.billingResponsibility = billing.billingResponsibility;
+        }
         if (contextResolution) metadata.contextResolution = contextResolution;
         if (need.chain) metadata.chainStage = need.stageIndex;
         if (compact) await this.node.compactResult(need.id, normalized.output, metadata);
@@ -189,6 +226,10 @@ export class TruynAdapterHost {
           error: error.message,
           failed: true
         };
+        if (billing) {
+          metadata.billingMode = billing.mode;
+          metadata.billingResponsibility = billing.billingResponsibility;
+        }
         if (need.chain) metadata.chainStage = need.stageIndex;
         if (compact) await this.node.compactResult(need.id, null, metadata);
         else await this.node.result(need.id, null, metadata);
