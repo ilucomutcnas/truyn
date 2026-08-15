@@ -36,6 +36,7 @@ jobs:
       AZURE_RELAY_APP: truyn-relay
       AZURE_PROVIDER_APP: truyn-azure-gpt
       AZURE_RUNTIME_IDENTITY: id-truyn-runtime
+      TRUYN_PUBLIC_RELAY: https://relay.truyn.org
     steps:
       - uses: actions/checkout@v4
 
@@ -94,7 +95,7 @@ jobs:
             az containerapp env create -g "$AZURE_RG" -n "$AZURE_CA_ENV" -l "$AZURE_LOCATION" >/dev/null
           fi
 
-      - name: Deploy public TRUYN relay
+      - name: Deploy public TRUYN relay origin
         shell: bash
         run: |
           set -euo pipefail
@@ -121,14 +122,14 @@ jobs:
           relay="https://${fqdn}"
           for attempt in $(seq 1 30); do
             if curl -fsS "${relay}/health" | jq -e '.ok == true' >/dev/null; then
-              echo "TRUYN_RELAY_URL=${relay}" >> "$GITHUB_ENV"
-              echo "TRUYN_RELAY_URL=${relay}"
-              echo 'TRUYN_RELAY_HEALTH=success'
+              echo "TRUYN_RELAY_ORIGIN_URL=${relay}" >> "$GITHUB_ENV"
+              echo "TRUYN_RELAY_ORIGIN_URL=${relay}"
+              echo 'TRUYN_RELAY_ORIGIN_HEALTH=success'
               exit 0
             fi
             sleep 2
           done
-          echo 'TRUYN_RELAY_HEALTH=failed'
+          echo 'TRUYN_RELAY_ORIGIN_HEALTH=failed'
           exit 1
 
       - name: Deploy Azure GPT TRUYN provider
@@ -142,7 +143,7 @@ jobs:
                 TRUYN_ROLE=provider \
                 TRUYN_PROVIDER=azure-openai \
                 TRUYN_CAPABILITIES=research \
-                TRUYN_RELAY="$TRUYN_RELAY_URL" \
+                TRUYN_RELAY="$TRUYN_PUBLIC_RELAY" \
                 AZURE_OPENAI_ENDPOINT="$AZURE_OPENAI_ENDPOINT" \
                 AZURE_OPENAI_DEPLOYMENT="$AZURE_OPENAI_DEPLOYMENT" \
                 AZURE_CLIENT_ID="$AZURE_RUNTIME_CLIENT_ID" \
@@ -161,9 +162,10 @@ jobs:
                 TRUYN_ROLE=provider \
                 TRUYN_PROVIDER=azure-openai \
                 TRUYN_CAPABILITIES=research \
-                TRUYN_RELAY="$TRUYN_RELAY_URL" \
+                TRUYN_RELAY="$TRUYN_PUBLIC_RELAY" \
                 AZURE_OPENAI_ENDPOINT="$AZURE_OPENAI_ENDPOINT" \
                 AZURE_OPENAI_DEPLOYMENT="$AZURE_OPENAI_DEPLOYMENT" \
                 AZURE_CLIENT_ID="$AZURE_RUNTIME_CLIENT_ID" >/dev/null
           fi
+          echo "AZURE_GPT_RELAY=${TRUYN_PUBLIC_RELAY}"
           echo 'AZURE_GPT_NODE_DEPLOY=success'
