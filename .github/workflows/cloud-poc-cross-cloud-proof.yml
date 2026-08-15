@@ -20,8 +20,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
-      AZURE_RG: truyn
-      AZURE_RELAY_APP: truyn-relay
+      TRUYN_RELAY: https://relay.truyn.org
       GCP_PROJECT_ID_VALUE: ${{ vars.GCP_PROJECT_ID || secrets.GCP_PROJECT_ID }}
       GCP_WIF_PROVIDER_VALUE: ${{ vars.GCP_WIF_PROVIDER || secrets.GCP_WIF_PROVIDER }}
       GCP_DEPLOYER_SA_VALUE: ${{ vars.GCP_DEPLOYER_SERVICE_ACCOUNT_EMAIL || secrets.GCP_DEPLOYER_SERVICE_ACCOUNT_EMAIL }}
@@ -30,28 +29,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Azure login with OIDC
-        uses: azure/login@v2
-        with:
-          client-id: ${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ vars.AZURE_TENANT_ID || secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}
-
-      - name: Resolve and verify public TRUYN relay
+      - name: Verify canonical TRUYN relay
         shell: bash
         run: |
           set -euo pipefail
-          fqdn="$(az containerapp show -g "$AZURE_RG" -n "$AZURE_RELAY_APP" --query properties.configuration.ingress.fqdn -o tsv)"
-          [[ -n "$fqdn" ]] || { echo 'TRUYN_RELAY_FQDN=missing'; exit 1; }
-          relay="https://${fqdn}"
-          for attempt in $(seq 1 30); do
-            if curl -fsS "${relay}/health" | jq -e '.ok == true' >/dev/null; then
-              echo "TRUYN_RELAY=${relay}" >> "$GITHUB_ENV"
-              echo "TRUYN_RELAY=${relay}"
+          for attempt in $(seq 1 60); do
+            if curl -fsS "${TRUYN_RELAY}/health" | jq -e '.ok == true and .protocol == "TRUYN/1"' >/dev/null; then
+              echo "TRUYN_RELAY=${TRUYN_RELAY}"
               echo 'TRUYN_RELAY_HEALTH=success'
               exit 0
             fi
-            sleep 2
+            sleep 5
           done
           echo 'TRUYN_RELAY_HEALTH=failed'
           exit 1
@@ -78,7 +66,7 @@ jobs:
         with:
           project_id: ${{ env.GCP_PROJECT_ID_VALUE }}
 
-      - name: Connect Gemini Cloud Run node to Azure relay
+      - name: Connect Gemini Cloud Run node to canonical relay
         shell: bash
         run: |
           set -euo pipefail
