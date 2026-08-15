@@ -5,6 +5,7 @@ import { WebSocket, WebSocketServer } from 'ws';
 import { compactStageRequestId, verifyCompactFrame, verifyEnvelope } from '../../core/protocol/index.js';
 import { trustabilityLite } from '../../core/trust/index.js';
 import { applyContextDelta, buildContextDocument, retrieveContextBlocks } from '../../core/context/index.js';
+import { providerPolicyAllowsRequester, providerPolicyFromOffer } from '../../core/security/relay-provider-policy.js';
 
 function json(res, status, body) {
   if (res.writableEnded) return;
@@ -103,6 +104,7 @@ export function createRelay({
   allowedNodeIds = [],
   trustedRequesterNodeIds = [],
   allowPublicRegistration = false,
+  allowPublicDispatch = false,
   localDevelopmentMode = false,
   exposeDiagnostics = false
 } = {}) {
@@ -153,13 +155,20 @@ export function createRelay({
         !offer.revoked &&
         (!capability || offer.capability === capability) &&
         (!requesterNodeId || offer.envelope.from !== requesterNodeId) &&
-        isNodeFresh(offer.envelope.from, now)
+        isNodeFresh(offer.envelope.from, now) &&
+        (!requesterNodeId || localDevelopmentMode || providerPolicyAllowsRequester(offer.policy, requesterNodeId, {
+          trustedRequesterNodeIds: [...trustedRequesters]
+        }))
       )
       .sort((a, b) => nodeSeenAtMs(b.envelope.from) - nodeSeenAtMs(a.envelope.from));
   }
 
   function requesterCanDispatch(nodeId) {
-    return Boolean(nodeId && (localDevelopmentMode || trustedRequesters.has(nodeId)));
+    return Boolean(nodeId && (
+      localDevelopmentMode ||
+      trustedRequesters.has(nodeId) ||
+      (allowPublicDispatch && nodeSessionActive(nodeId))
+    ));
   }
 
   function nodeCanRegister(nodeId) {
@@ -578,7 +587,8 @@ export function createRelay({
         const capability = envelope.payload?.capability?.name || envelope.payload?.capability;
         if (!capability || typeof capability !== 'string') return json(res, 400, { ok: false, error: 'invalid_capability' });
         if (!offers.has(envelope.id) && offers.size >= maxOffers) return json(res, 503, { ok: false, error: 'offer_capacity_reached' });
-        offers.set(envelope.id, { envelope, capability, revoked: false });
+        const policy = providerPolicyFromOffer(envelope);
+        offers.set(envelope.id, { envelope, capability, policy, revoked: false });
         touch(envelope.from);
         return json(res, 200, { ok: true, offerId: envelope.id });
       }
