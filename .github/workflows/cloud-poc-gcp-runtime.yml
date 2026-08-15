@@ -1,5 +1,5 @@
 name: Cloud PoC GCP Gemini Runtime
-# deployment revision: 3
+# deployment revision: 4 — provider backchannel bypasses public Front Door
 
 on:
   push:
@@ -32,6 +32,7 @@ jobs:
       GCP_AR_REPO: truyn-poc
       GCP_SERVICE: truyn-gemini
       TRUYN_PUBLIC_RELAY: https://relay.truyn.org
+      TRUYN_PROVIDER_RELAY_ORIGIN: https://truyn-relay.delightfulground-3772b9ce.eastus.azurecontainerapps.io
     steps:
       - uses: actions/checkout@v4
 
@@ -56,6 +57,20 @@ jobs:
         uses: google-github-actions/setup-gcloud@v3
         with:
           project_id: ${{ env.GCP_PROJECT_ID_VALUE }}
+
+      - name: Verify relay backchannel origin
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 30); do
+            if curl -fsS "${TRUYN_PROVIDER_RELAY_ORIGIN}/health" | jq -e '.ok == true and .fastPath == true' >/dev/null; then
+              echo 'GCP_PROVIDER_RELAY_ORIGIN=ready'
+              exit 0
+            fi
+            sleep 2
+          done
+          echo 'GCP_PROVIDER_RELAY_ORIGIN=failed'
+          exit 1
 
       - name: Create Artifact Registry repository if absent
         shell: bash
@@ -102,12 +117,13 @@ jobs:
             --no-cpu-throttling \
             --cpu=1 \
             --memory=512Mi \
-            --set-env-vars="TRUYN_ROLE=provider,TRUYN_PROVIDER=vertex-gemini,TRUYN_CAPABILITIES=review,TRUYN_RELAY=${TRUYN_PUBLIC_RELAY},GCP_PROJECT_ID=${GCP_PROJECT_ID_VALUE},GOOGLE_CLOUD_LOCATION=global,GEMINI_MODEL=gemini-2.5-flash" \
+            --set-env-vars="TRUYN_ROLE=provider,TRUYN_PROVIDER=vertex-gemini,TRUYN_CAPABILITIES=review,TRUYN_RELAY=${TRUYN_PROVIDER_RELAY_ORIGIN},GCP_PROJECT_ID=${GCP_PROJECT_ID_VALUE},GOOGLE_CLOUD_LOCATION=global,GEMINI_MODEL=gemini-2.5-flash" \
             --quiet
           url="$(gcloud run services describe "$GCP_SERVICE" --project="$GCP_PROJECT_ID_VALUE" --region="$GCP_REGION_VALUE" --format='value(status.url)')"
           revision="$(gcloud run services describe "$GCP_SERVICE" --project="$GCP_PROJECT_ID_VALUE" --region="$GCP_REGION_VALUE" --format='value(status.latestReadyRevisionName)')"
           [[ -n "$url" && -n "$revision" ]] || { echo 'GCP_CLOUD_RUN_READY=false'; exit 1; }
           echo "GCP_CLOUD_RUN_URL=$url"
           echo "GCP_CLOUD_RUN_REVISION=$revision"
-          echo "GCP_GEMINI_RELAY=${TRUYN_PUBLIC_RELAY}"
+          echo "GCP_GEMINI_PUBLIC_RELAY=${TRUYN_PUBLIC_RELAY}"
+          echo "GCP_GEMINI_BACKCHANNEL_RELAY=${TRUYN_PROVIDER_RELAY_ORIGIN}"
           echo 'GCP_CLOUD_RUN_READY=true'
