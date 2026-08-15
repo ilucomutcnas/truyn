@@ -15,7 +15,7 @@ permissions:
 jobs:
   deploy-edge:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     env:
       AZURE_RG: truyn
       AZURE_RELAY_APP: truyn-relay
@@ -27,7 +27,7 @@ jobs:
       AFD_CUSTOM_DOMAIN: relay-truyn-org
       TRUYN_HOST: relay.truyn.org
       CF_ZONE_NAME: truyn.org
-      CF_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN || secrets.CF_API_TOKEN || secrets.CLOUDFLARE_DNS_API_TOKEN }}
+      CF_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN || secrets.CF_API_TOKEN || secrets.CLOUDFLARE_DNS_API_TOKEN || secrets.CLOUDFLARE_TOKEN || secrets.CLOUDFLARE_DNS_TOKEN }}
       CF_ZONE_ID_CONFIGURED: ${{ vars.CLOUDFLARE_ZONE_ID || secrets.CLOUDFLARE_ZONE_ID }}
     steps:
       - uses: actions/checkout@v4
@@ -130,8 +130,18 @@ jobs:
               --link-to-default-domain Enabled >/dev/null
           fi
 
-          curl -fsS "https://${AFD_ENDPOINT_HOST}/health" | jq -e '.ok == true and .protocol == "TRUYN/1"' >/dev/null
-          echo 'AFD_DEFAULT_ENDPOINT_HEALTH=success'
+          status=''
+          for attempt in $(seq 1 60); do
+            status="$(curl -sS -o afd-health.json -w '%{http_code}' "https://${AFD_ENDPOINT_HOST}/health" || true)"
+            if [[ "$status" == '200' ]] && jq -e '.ok == true and .protocol == "TRUYN/1"' afd-health.json >/dev/null 2>&1; then
+              echo "AFD_DEFAULT_ENDPOINT_HEALTH=success attempt=${attempt}"
+              exit 0
+            fi
+            echo "AFD_DEFAULT_ENDPOINT_PROPAGATING attempt=${attempt} http=${status}"
+            sleep 5
+          done
+          echo 'AFD_DEFAULT_ENDPOINT_HEALTH=timeout'
+          exit 1
 
       - name: Ensure Front Door custom domain
         shell: bash
@@ -151,16 +161,20 @@ jobs:
           [[ -n "$validation_token" || "$validation_state" == 'Approved' ]] || { echo 'AFD_VALIDATION_TOKEN=missing'; exit 1; }
           echo "AFD_VALIDATION_TOKEN=$validation_token" >> "$GITHUB_ENV"
           echo "AFD_VALIDATION_STATE_INITIAL=$validation_state"
+          echo "AFD_DNS_TXT_NAME=_dnsauth.${TRUYN_HOST}"
+          echo "AFD_DNS_TXT_VALUE=${validation_token}"
+          echo "AFD_DNS_CNAME_NAME=${TRUYN_HOST}"
+          echo "AFD_DNS_CNAME_VALUE=${AFD_ENDPOINT_HOST}"
 
-      - name: Upsert Cloudflare validation and relay DNS
+      - name: Upsert Cloudflare validation and relay DNS when GitHub credential exists
         shell: bash
         run: |
           set -euo pipefail
-          [[ -n "$CF_API_TOKEN" ]] || {
-            echo 'CLOUDFLARE_API_TOKEN=missing'
-            echo 'Expected one of CLOUDFLARE_API_TOKEN, CF_API_TOKEN, CLOUDFLARE_DNS_API_TOKEN as a GitHub Actions secret.'
-            exit 1
-          }
+          if [[ -z "$CF_API_TOKEN" ]]; then
+            echo 'CLOUDFLARE_DNS_MODE=external'
+            echo 'Cloudflare GitHub API token is not available to this repository; DNS must be supplied through the connected Cloudflare control plane.'
+            exit 0
+          fi
 
           api='https://api.cloudflare.com/client/v4'
           auth=(-H "Authorization: Bearer ${CF_API_TOKEN}" -H 'Content-Type: application/json')
@@ -172,7 +186,7 @@ jobs:
 
           upsert_record() {
             local type="$1" name="$2" content="$3" proxied="$4"
-            local existing payload
+            local existing payload record_id
             existing="$(curl -fsS "${auth[@]}" "${api}/zones/${zone_id}/dns_records?type=${type}&name=${name}")"
             record_id="$(jq -r '.result[0].id // empty' <<<"$existing")"
             payload="$(jq -nc --arg type "$type" --arg name "$name" --arg content "$content" --argjson proxied "$proxied" '{type:$type,name:$name,content:$content,ttl:60,proxied:$proxied}')"
@@ -196,7 +210,7 @@ jobs:
           state=''
           for attempt in $(seq 1 60); do
             state="$(az afd custom-domain show -g "$AZURE_RG" --profile-name "$AFD_PROFILE" --custom-domain-name "$AFD_CUSTOM_DOMAIN" --query domainValidationState -o tsv)"
-            echo "AFD_DOMAIN_VALIDATION_STATE=${state}"
+            echo "AFD_DOMAIN_VALIDATION_STATE=${state} attempt=${attempt}"
             [[ "$state" == 'Approved' ]] && break
             sleep 10
           done
