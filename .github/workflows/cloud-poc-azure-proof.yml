@@ -76,6 +76,7 @@ jobs:
             task: 'Return marker TRUYN_AZURE_NODE_OK and one short sentence confirming this was handled as a TRUYN task.'
           }, { purpose: 'azure-node-proof' });
           if (!need.needId) throw new Error('Relay did not return needId');
+          if (!need.provider) throw new Error('Relay did not return matched provider');
 
           let resultEvent = null;
           for (let i = 0; i < 120; i += 1) {
@@ -92,15 +93,16 @@ jobs:
           if (metadata.failed) throw new Error(`Azure provider failed: ${metadata.error || 'unknown error'}`);
           const output = resultEvent.envelope.payload?.output;
           if (!String(output).includes('TRUYN_AZURE_NODE_OK')) throw new Error(`Unexpected Azure output: ${output}`);
-          if (offer.from !== resultEvent.envelope.from) throw new Error('Provider identity changed between OFFER and RESULT');
+          if (need.provider !== resultEvent.envelope.from) throw new Error('RESULT provider does not match relay-selected provider');
 
           console.log(JSON.stringify({
             proof: 'azure-truyn-node',
             status: 'success',
             relayUrl: process.env.TRUYN_RELAY,
             requesterNodeId: requester.identity.nodeId,
+            discoveryOfferNodeId: offer.from,
+            matchedProviderNodeId: need.provider,
             providerNodeId: resultEvent.envelope.from,
-            offerNodeId: offer.from,
             signatureVerified: true,
             matchTrustability: need.providerTrust,
             resultTrustability: resultEvent.trust,
