@@ -75,7 +75,7 @@ Veo proof result:
 - MP4 artifact size: `377,898` bytes;
 - SHA-256: `5139cdb5e93289b194b03c573bac573afe25a0406c5725c985a14886402024ba`.
 
-Azure Sora preflight found `sora-2` in the Azure model catalog but deployment was denied in both tested supported-region candidates. Because deployment failed, the workflow correctly skipped Sora inference and consumed no video-generation call. A separate Azure-only fallback probe also tests the older `sora` generation without re-running Veo; its outcome should be treated independently from the successful Veo evidence.
+Azure Sora preflight found `sora-2` in the Azure model catalog but deployment was denied in both East US 2 and Sweden Central. Because deployment failed, the workflow correctly skipped Sora inference and consumed no video-generation call. A separate Azure-only fallback run (`31903348468`) checked both `sora-2` and legacy `sora` without re-running Veo; only `sora-2` was available in the relevant subscription catalogs and its deployment remained denied in both regions. This is therefore recorded as a current Azure deployment/entitlement boundary rather than an adapter failure.
 
 ## Normalized provider result contracts
 
