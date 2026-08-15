@@ -3,6 +3,7 @@ import http from 'node:http';
 const projectId = process.env.GCP_PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT;
 const location = process.env.CLAUDE_VERTEX_LOCATION || 'global';
 const model = process.env.CLAUDE_VERTEX_MODEL || 'claude-sonnet-4-6';
+const publisherModel = `publishers/anthropic/models/${model}`;
 const port = Number(process.env.PORT || 8080);
 
 if (!projectId) throw new Error('GCP_PROJECT_ID or GOOGLE_CLOUD_PROJECT is required');
@@ -17,6 +18,73 @@ async function metadataAccessToken() {
     throw new Error(`metadata token request failed: HTTP ${response.status}`);
   }
   return body.access_token;
+}
+
+async function postJson(url, accessToken, body) {
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${accessToken}`,
+      'content-type': 'application/json; charset=utf-8'
+    },
+    body: JSON.stringify(body)
+  });
+  const payload = await response.json().catch(() => ({}));
+  return { ok: response.ok, status: response.status, payload };
+}
+
+function errorMessage(payload) {
+  return payload?.error?.message || payload?.error || null;
+}
+
+async function runBootstrap() {
+  const accessToken = await metadataAccessToken();
+  const eula = await postJson(
+    `https://aiplatform.googleapis.com/v1beta1/projects/${encodeURIComponent(projectId)}/modelGardenEula:accept`,
+    accessToken,
+    { publisherModel }
+  );
+
+  if (!eula.ok) {
+    return {
+      ok: false,
+      stage: 'eula',
+      httpStatus: eula.status,
+      error: errorMessage(eula.payload),
+      provider: 'vertex-anthropic',
+      model,
+      runtimeIdentity: true
+    };
+  }
+
+  const enable = await postJson(
+    `https://aiplatform.googleapis.com/v1beta1/projects/${encodeURIComponent(projectId)}/${publisherModel}:enableModel`,
+    accessToken,
+    {}
+  );
+  const state = enable.payload?.enablementState || null;
+  if (!enable.ok || state !== 'ENABLEMENT_STATE_SUCCEEDED') {
+    return {
+      ok: false,
+      stage: 'enableModel',
+      httpStatus: enable.status,
+      enablementState: state,
+      error: errorMessage(enable.payload),
+      provider: 'vertex-anthropic',
+      model,
+      runtimeIdentity: true
+    };
+  }
+
+  return {
+    ok: true,
+    stage: 'enabled',
+    eulaAcceptanceState: eula.payload?.eulaAcceptanceState || null,
+    enablementState: state,
+    provider: 'vertex-anthropic',
+    model,
+    runtimeIdentity: true
+  };
 }
 
 async function runProbe() {
@@ -50,7 +118,7 @@ async function runProbe() {
       provider: 'vertex-anthropic',
       model,
       location,
-      error: body?.error?.message || body?.error || 'unknown Vertex Claude error'
+      error: errorMessage(body)
     };
   }
   const output = (body.content || [])
@@ -77,13 +145,21 @@ const server = http.createServer(async (req, res) => {
     res.end(JSON.stringify({ ok: true, role: 'private-vertex-claude-probe' }));
     return;
   }
-  if (req.url !== '/probe') {
+
+  const handler = req.url === '/bootstrap'
+    ? runBootstrap
+    : req.url === '/probe'
+      ? runProbe
+      : null;
+
+  if (!handler) {
     res.writeHead(404, { 'content-type': 'application/json' });
     res.end(JSON.stringify({ ok: false, error: 'not_found' }));
     return;
   }
+
   try {
-    const result = await runProbe();
+    const result = await handler();
     res.writeHead(result.ok ? 200 : 502, { 'content-type': 'application/json' });
     res.end(JSON.stringify(result));
   } catch (error) {
