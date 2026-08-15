@@ -8,57 +8,48 @@ on:
       - '.github/workflows/fix-benchmark-requester-socket-lifecycle.yml'
 
 permissions:
+  actions: write
   contents: write
 
 jobs:
-  fix:
+  fix-test-rerun:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Patch benchmark lifecycle and transport assertions
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Apply benchmark lifecycle fix
+        run: python scripts/fix-benchmark-requester-socket-lifecycle.py
+      - name: Verify benchmark and regression suite
         shell: bash
         run: |
-          python - <<'PY'
-          from pathlib import Path
-          p = Path('benchmarks/cross-cloud-ab.js')
-          s = p.read_text()
-          old = """  const chain = await requester.compactChain(stages, { waitMs: 120_000 });
-  const endToEndLatencyMs = Date.now() - startedAt;
-  if (chain.results.length < 1) throw new Error('TRUYN CHAIN returned no provider results');"""
-          new = """  const chain = await requester.compactChain(stages, { waitMs: 120_000 });
-  const endToEndLatencyMs = Date.now() - startedAt;
-  if (chain.requesterTransport !== 'websocket') throw new Error(`TRUYN benchmark requester transport was ${chain.requesterTransport || 'unknown'}, expected websocket`);
-  if (chain.results.length < 1) throw new Error('TRUYN CHAIN returned no provider results');"""
-          if s.count(old) != 1: raise SystemExit('compactChain assertion anchor mismatch')
-          s = s.replace(old, new, 1)
-          old = """  const relayTrace = await fetchRelayChainTrace(chain.chainId);
-  const relaySegments = relayTrace.segments || {};"""
-          new = """  const relayTrace = await fetchRelayChainTrace(chain.chainId);
-  if (relayTrace.requesterTransport !== 'websocket') throw new Error(`Relay trace requester transport was ${relayTrace.requesterTransport || 'unknown'}, expected websocket`);
-  if (JSON.stringify(relayTrace.stageTransport) !== JSON.stringify(['socket', 'socket'])) throw new Error(`Relay trace provider transports were ${JSON.stringify(relayTrace.stageTransport)}, expected two sockets`);
-  const relaySegments = relayTrace.segments || {};"""
-          if s.count(old) != 1: raise SystemExit('trace assertion anchor mismatch')
-          s = s.replace(old, new, 1)
-          old = """  relayBootstrapNetworkRetries: report.methodology.relayBootstrapNetworkRetryEvents.length
-}, null, 2));"""
-          new = """  relayBootstrapNetworkRetries: report.methodology.relayBootstrapNetworkRetryEvents.length
-}, null, 2));
-requester.closeFastSocket();"""
-          if s.count(old) != 1: raise SystemExit('socket close anchor mismatch')
-          p.write_text(s.replace(old, new, 1))
-          PY
+          set -euo pipefail
           node --check benchmarks/cross-cloud-ab.js
+          npm install --no-audit --no-fund
+          npm test
+          rm -rf node_modules
+          rm -f package-lock.json
           git diff --check
-      - name: Commit benchmark fix
+      - name: Commit tested benchmark fix
         shell: bash
         run: |
           set -euo pipefail
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add benchmarks/cross-cloud-ab.js
-          git rm .github/workflows/fix-benchmark-requester-socket-lifecycle.yml
+          git rm scripts/fix-benchmark-requester-socket-lifecycle.py .github/workflows/fix-benchmark-requester-socket-lifecycle.yml
           git diff --cached --check
           git commit -m 'Close requester socket after A/B benchmark'
           git push origin HEAD:main
+      - name: Stop stale hanging benchmark
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh run cancel 31892414803 --repo inn-media/truyn || true
+      - name: Run corrected requester socket benchmark
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run cloud-poc-benchmark-ab.yml --repo inn-media/truyn --ref main
