@@ -9,6 +9,7 @@ export function createRuntimeProviderBillingPolicy(env = process.env) {
     mode: env.TRUYN_PROVIDER_BILLING_MODE || 'owner-funded',
     sponsoredAccess: enabled(env.TRUYN_SPONSORED_ACCESS),
     freeDailyRequests: env.TRUYN_FREE_DAILY_REQUESTS || 0,
-    freeDailyTokens: env.TRUYN_FREE_DAILY_TOKENS || 0
+    freeDailyTokens: env.TRUYN_FREE_DAILY_TOKENS || 0,
+    ownerDailyRequestLimit: env.OWNER_AI_DAILY_REQUEST_LIMIT ?? null
   });
 }
