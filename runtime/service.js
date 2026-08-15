@@ -6,6 +6,7 @@ import { TruynAdapterHost } from '../adapters/sdk/index.js';
 import { createProviderAdapter } from '../adapters/providers/index.js';
 import { createRuntimeProviderAccessPolicy } from './security-config.js';
 import { createRuntimeProviderBillingPolicy } from './billing-config.js';
+import { createRuntimeRelaySecurityConfig } from './relay-security-config.js';
 
 const role = process.env.TRUYN_ROLE || 'provider';
 const host = process.env.HOST || '0.0.0.0';
@@ -39,9 +40,12 @@ function writeJson(res, status, body) {
 }
 
 async function runRelay() {
+  const relaySecurity = createRuntimeRelaySecurityConfig(process.env);
   const relay = createRelay({
     allowedNodeIds: csvSet(process.env.TRUYN_ALLOWED_NODE_IDS),
     trustedRequesterNodeIds: csvSet(process.env.TRUYN_TRUSTED_REQUESTER_NODE_IDS),
+    allowPublicRegistration: relaySecurity.allowPublicRegistration,
+    allowPublicDispatch: relaySecurity.allowPublicDispatch,
     exposeDiagnostics: process.env.TRUYN_PRIVATE_DIAGNOSTICS === '1'
   });
   await relay.listen({ host, port });
