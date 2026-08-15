@@ -1,16 +1,6 @@
 name: Cloud PoC Cross-Cloud A/B Benchmark
 
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - 'benchmarks/cross-cloud-ab.js'
-      - 'benchmarks/gemini-direct-proxy.js'
-      - 'benchmarks/Dockerfile.gemini-proxy'
-      - 'adapters/providers/azure-openai.js'
-      - 'adapters/providers/vertex-gemini.js'
-      - '.github/workflows/cloud-poc-benchmark-ab.yml'
   workflow_dispatch:
 
 permissions:
@@ -76,8 +66,6 @@ jobs:
           [[ -n "$endpoint" ]] || { echo 'AZURE_OPENAI_ENDPOINT=missing'; exit 1; }
           echo "AZURE_OPENAI_ENDPOINT=$endpoint" >> "$GITHUB_ENV"
 
-          # Keep the short-lived AAD token for evidence, but use the account data-plane key
-          # because the GitHub deployment principal intentionally lacks OpenAI responses/write.
           token="$(az account get-access-token --resource https://cognitiveservices.azure.com/ --query accessToken -o tsv)"
           [[ -n "$token" ]] || { echo 'AZURE_OPENAI_ACCESS_TOKEN=missing'; exit 1; }
           echo "::add-mask::$token"
@@ -175,16 +163,7 @@ jobs:
         if: ${{ success() }}
         shell: bash
         run: |
-          jq '{
-            benchmark,
-            status,
-            generatedAt,
-            relayUrl,
-            methodology,
-            pricing,
-            aggregate,
-            claims
-          }' cross-cloud-ab.json
+          jq '{benchmark,status,generatedAt,relayUrl,methodology,pricing,aggregate,claims}' cross-cloud-ab.json
 
       - name: Upload benchmark evidence
         if: ${{ always() && hashFiles('cross-cloud-ab.json') != '' }}
