@@ -66,6 +66,170 @@ jobs:
           test -s benchmarks/semantic-retrieval-v2.js
           test -s benchmarks/semantic-v2-gcp-proxy.js
 
+      - name: Upgrade ephemeral benchmark to dense shortlist plus semantic reranker
+        shell: bash
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const fs = require('node:fs');
+          const path = 'benchmarks/semantic-retrieval-v2.js';
+          let source = fs.readFileSync(path, 'utf8');
+          function replaceOnce(label, from, to) {
+            if (!source.includes(from)) throw new Error(`patch marker not found: ${label}`);
+            source = source.replace(from, to);
+          }
+
+          replaceOnce(
+            'reranker import',
+            "import { createVertexEmbeddingClient } from '../adapters/providers/vertex-embedding.js';",
+            "import { createVertexEmbeddingClient } from '../adapters/providers/vertex-embedding.js';\nimport { createProviderSemanticReranker } from '../core/context/provider-semantic-reranker.js';"
+          );
+          replaceOnce(
+            'dense recall gate',
+            '  retrievalAccuracyPercentMin: 99,',
+            '  retrievalAccuracyPercentMin: 99,\n  denseCandidateRecallPercentMin: 99,'
+          );
+          replaceOnce(
+            'router construction',
+            '  const semanticRouter = createSemanticContextRouterV2({ embedder });',
+            `  const rerankerProvider = createVertexGeminiProvider({
+              projectId:gcpProjectId,
+              location:geminiLocation,
+              model:geminiModel,
+              endpoint:proxyEndpoint,
+              accessTokenProvider:async () => proxyToken,
+              capabilities:['reasoning.general']
+            });
+            const semanticReranker = createProviderSemanticReranker({
+              provider:rerankerProvider,
+              name:'gemini-semantic-reranker',
+              providerOptions:{ thinkingBudget:0 }
+            });
+            const semanticRouter = createSemanticContextRouterV2({
+              embedder,
+              reranker:semanticReranker,
+              candidateK:96
+            });`
+          );
+          replaceOnce(
+            'retrieval diagnostics',
+            '        semanticScore:top?.semanticScore ?? null,\n        lexicalV1SelectedId:lexicalSelectedId,',
+            `        semanticScore:top?.semanticScore ?? null,
+            denseCandidateRecall:(retrieved.retrieval?.denseCandidates || []).some((candidate) => candidate.id === item.id),
+            denseRank:(retrieved.retrieval?.denseCandidates || []).find((candidate) => candidate.id === item.id)?.rank || null,
+            rerankerUsage:retrieved.retrieval?.rerankerMetadata?.usage || { input:0, output:0, total:0 },
+            rerankerProviderRequestBodyBytes:retrieved.retrieval?.rerankerMetadata?.providerRequestBodyBytes || 0,
+            rerankerProviderLatencyMs:retrieved.retrieval?.rerankerMetadata?.providerLatencyMs || null,
+            lexicalV1SelectedId:lexicalSelectedId,`
+          );
+          replaceOnce(
+            'dense recall aggregate',
+            "  const lexicalV1Accuracy = percent(retrievalResults.filter((item) => item.lexicalV1Correct).length, retrievalResults.length);",
+            `  const lexicalV1Accuracy = percent(retrievalResults.filter((item) => item.lexicalV1Correct).length, retrievalResults.length);
+            const denseCandidateRecallPercent = percent(retrievalResults.filter((item) => item.denseCandidateRecall).length, retrievalResults.length);`
+          );
+          replaceOnce(
+            'retrieval-only gate',
+            '  const retrievalOnlyPassed = retrievalAccuracy >= gate.retrievalAccuracyPercentMin\n    && provenancePercent >= gate.provenancePassPercentMin',
+            '  const retrievalOnlyPassed = retrievalAccuracy >= gate.retrievalAccuracyPercentMin\n    && denseCandidateRecallPercent >= gate.denseCandidateRecallPercentMin\n    && provenancePercent >= gate.provenancePassPercentMin'
+          );
+          replaceOnce(
+            'retrieval report dense recall',
+            '      accuracyPercent:retrievalAccuracy,\n      provenancePercent,',
+            '      accuracyPercent:retrievalAccuracy,\n      denseCandidateRecallPercent,\n      provenancePercent,'
+          );
+          replaceOnce(
+            'router stats report',
+            '    embedding:embedder.stats(),\n    methodology:{',
+            `    embedding:embedder.stats(),
+            semanticRouterStats:semanticRouter.stats(),
+            methodology:{`
+          );
+          replaceOnce(
+            'methodology reranker',
+            "      topK:1,\n      blockIdsInRequesterQueries:false,",
+            "      topK:1,\n      denseCandidateK:96,\n      semanticReranker:'Gemini over dense candidates; selected block only is materialized to actors',\n      blockIdsInRequesterQueries:false,"
+          );
+          replaceOnce(
+            'live retrieval metric map',
+            '    while (liveCases.length < liveCaseCount) liveCases.push(retrievalCases[liveCases.length]);',
+            `    while (liveCases.length < liveCaseCount) liveCases.push(retrievalCases[liveCases.length]);
+            const retrievalMetricByCase = new Map(retrievalResults.map((item) => [item.caseIndex, item]));`
+          );
+          replaceOnce(
+            'live reranker metric',
+            '      const minimalContextPass = Object.values(actorMetrics).every((metric) =>\n        metric.contextResolution?.contextRefs === 1\n        && metric.contextResolution?.retrievalQueries === 1\n        && metric.contextResolution?.provenanceVerifiedRefs === 1\n        && metric.contextResolution?.selectedBlocks === 1\n      );\n      return {',
+            `      const minimalContextPass = Object.values(actorMetrics).every((metric) =>
+                metric.contextResolution?.contextRefs === 1
+                && metric.contextResolution?.retrievalQueries === 1
+                && metric.contextResolution?.provenanceVerifiedRefs === 1
+                && metric.contextResolution?.selectedBlocks === 1
+              );
+              const retrievalMetric = retrievalMetricByCase.get(item.caseIndex);
+              return {`
+          );
+          replaceOnce(
+            'live reranker fields',
+            '        payloadNoBlockId,\n        inputTokens:sum(Object.values(actorMetrics), (metric) => metric.usage.input),',
+            `        payloadNoBlockId,
+            retrievalRerankerUsage:retrievalMetric?.rerankerUsage || { input:0, output:0, total:0 },
+            retrievalRerankerProviderRequestBodyBytes:retrievalMetric?.rerankerProviderRequestBodyBytes || 0,
+            inputTokens:sum(Object.values(actorMetrics), (metric) => metric.usage.input),`
+          );
+          replaceOnce(
+            'honest token cost accounting',
+            '    const directInputTokens = sum(liveResults, (run) => run.direct.inputTokens);\n    const truynInputTokens = sum(liveResults, (run) => run.truyn.inputTokens);\n    const directCost = sum(liveResults, (run) => run.direct.comparablePairCostUsd);\n    const truynCost = sum(liveResults, (run) => run.truyn.comparablePairCostUsd);',
+            `    const directInputTokens = sum(liveResults, (run) => run.direct.inputTokens);
+            const truynActorInputTokens = sum(liveResults, (run) => run.truyn.inputTokens);
+            const retrievalRerankerInputTokens = sum(liveResults, (run) => run.truyn.retrievalRerankerUsage?.input || 0);
+            const retrievalRerankerOutputTokens = sum(liveResults, (run) => run.truyn.retrievalRerankerUsage?.output || 0);
+            const truynInputTokens = truynActorInputTokens + retrievalRerankerInputTokens;
+            const directCost = sum(liveResults, (run) => run.direct.comparablePairCostUsd);
+            const truynActorCost = sum(liveResults, (run) => run.truyn.comparablePairCostUsd);
+            const retrievalRerankerCost = ((retrievalRerankerInputTokens * comparableRates.gemini.input) + (retrievalRerankerOutputTokens * comparableRates.gemini.output)) / 1_000_000;
+            const truynCost = truynActorCost + retrievalRerankerCost;
+            const directProviderRequestBodyBytes = sum(liveResults, (run) => run.direct.providerRequestBodyBytes);
+            const truynActorProviderRequestBodyBytes = sum(liveResults, (run) => run.truyn.providerRequestBodyBytes);
+            const retrievalRerankerProviderRequestBodyBytes = sum(liveResults, (run) => run.truyn.retrievalRerankerProviderRequestBodyBytes || 0);
+            const truynProviderRequestBodyBytes = truynActorProviderRequestBodyBytes + retrievalRerankerProviderRequestBodyBytes;`
+          );
+          replaceOnce(
+            'final dense recall check',
+            '      retrievalAccuracy:retrievalAccuracy >= gate.retrievalAccuracyPercentMin,\n      perLanguageAccuracy:',
+            '      retrievalAccuracy:retrievalAccuracy >= gate.retrievalAccuracyPercentMin,\n      denseCandidateRecall:denseCandidateRecallPercent >= gate.denseCandidateRecallPercentMin,\n      perLanguageAccuracy:'
+          );
+          replaceOnce(
+            'live report accounting',
+            '        directInputTokens,\n        truynInputTokens,\n        inputTokenReductionPercent,',
+            `        directInputTokens,
+            truynActorInputTokens,
+            retrievalRerankerInputTokens,
+            retrievalRerankerOutputTokens,
+            truynInputTokens,
+            inputTokenReductionPercent,`
+          );
+          replaceOnce(
+            'live report cost breakdown',
+            '        directComparablePairCostUsd:round(directCost, 9),\n        truynComparablePairCostUsd:round(truynCost, 9),',
+            `        directComparablePairCostUsd:round(directCost, 9),
+            truynActorComparablePairCostUsd:round(truynActorCost, 9),
+            retrievalRerankerComparableCostUsd:round(retrievalRerankerCost, 9),
+            truynComparablePairCostUsd:round(truynCost, 9),`
+          );
+          replaceOnce(
+            'provider body accounting',
+            '        directProviderRequestBodyBytes:sum(liveResults, (run) => run.direct.providerRequestBodyBytes),\n        truynProviderRequestBodyBytes:sum(liveResults, (run) => run.truyn.providerRequestBodyBytes),\n        providerRequestBodyReductionPercent:reductionPercent(\n          sum(liveResults, (run) => run.direct.providerRequestBodyBytes),\n          sum(liveResults, (run) => run.truyn.providerRequestBodyBytes)\n        ),',
+            `        directProviderRequestBodyBytes,
+            truynActorProviderRequestBodyBytes,
+            retrievalRerankerProviderRequestBodyBytes,
+            truynProviderRequestBodyBytes,
+            providerRequestBodyReductionPercent:reductionPercent(directProviderRequestBodyBytes, truynProviderRequestBodyBytes),`
+          );
+
+          fs.writeFileSync(path, source);
+          NODE
+          node --check benchmarks/semantic-retrieval-v2.js
+
       - name: Validate code before cloud spend
         shell: bash
         run: |
@@ -176,7 +340,7 @@ jobs:
 
       - name: Print gate summary
         if: ${{ always() && hashFiles('semantic-retrieval-v2.json') != '' }}
-        run: jq '{benchmark,status,corpus,retrieval,actors,live,embedding,semanticGate,methodology}' semantic-retrieval-v2.json
+        run: jq '{benchmark,status,corpus,retrieval,semanticRouterStats,actors,live,embedding,semanticGate,methodology}' semantic-retrieval-v2.json
 
       - name: Upload evidence
         if: ${{ always() && hashFiles('semantic-retrieval-v2.json') != '' }}
