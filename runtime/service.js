@@ -1,6 +1,5 @@
 import http from 'node:http';
 import { createRelay } from '../network/relay/server.js';
-import { TruynNode } from '../node/client.js';
 import { createIdentity } from '../core/identity/index.js';
 import { TruynAdapterHost } from '../adapters/sdk/index.js';
 import { createProviderAdapter } from '../adapters/providers/index.js';
@@ -8,6 +7,9 @@ import { createRuntimeProviderAccessPolicy } from './security-config.js';
 import { createRuntimeProviderBillingPolicy } from './billing-config.js';
 import { createRuntimeRelaySecurityConfig } from './relay-security-config.js';
 import { createOriginGuard, createRuntimeOriginGuardConfig } from './origin-guard.js';
+import { createRuntimeBackchannelConfig } from './backchannel-config.js';
+import { createProviderBackchannelGuard } from './provider-backchannel-guard.js';
+import { ProviderTruynNode } from './provider-node.js';
 
 const role = process.env.TRUYN_ROLE || 'provider';
 const host = process.env.HOST || '0.0.0.0';
@@ -43,6 +45,8 @@ function writeJson(res, status, body) {
 async function runRelay() {
   const relaySecurity = createRuntimeRelaySecurityConfig(process.env);
   const originGuardConfig = createRuntimeOriginGuardConfig(process.env);
+  const backchannelConfig = createRuntimeBackchannelConfig(process.env);
+  const backchannelEnabled = backchannelConfig.protectedProviderNodeIds.length > 0;
   const relay = createRelay({
     allowedNodeIds: csvSet(process.env.TRUYN_ALLOWED_NODE_IDS),
     trustedRequesterNodeIds: csvSet(process.env.TRUYN_TRUSTED_REQUESTER_NODE_IDS),
@@ -52,29 +56,56 @@ async function runRelay() {
   });
 
   let originGuard = null;
+  let backchannelGuard = null;
   try {
-    if (originGuardConfig.enabled) {
+    if (originGuardConfig.enabled || backchannelEnabled) {
       const internalUrl = await relay.listen({ host: '127.0.0.1', port: 0 });
-      const internalPort = Number(new URL(internalUrl).port);
-      originGuard = createOriginGuard({
-        targetHost: '127.0.0.1',
-        targetPort: internalPort,
-        token: originGuardConfig.token
-      });
-      await originGuard.listen({ host, port });
+      let protectedTargetPort = Number(new URL(internalUrl).port);
+
+      if (backchannelEnabled) {
+        backchannelGuard = createProviderBackchannelGuard({
+          targetHost: '127.0.0.1',
+          targetPort: protectedTargetPort,
+          protectedNodeIds: backchannelConfig.protectedProviderNodeIds,
+          token: backchannelConfig.providerBackchannelToken
+        });
+        if (originGuardConfig.enabled) {
+          const backchannelUrl = await backchannelGuard.listen({ host: '127.0.0.1', port: 0 });
+          protectedTargetPort = Number(new URL(backchannelUrl).port);
+        } else {
+          await backchannelGuard.listen({ host, port });
+        }
+      }
+
+      if (originGuardConfig.enabled) {
+        originGuard = createOriginGuard({
+          targetHost: '127.0.0.1',
+          targetPort: protectedTargetPort,
+          token: originGuardConfig.token
+        });
+        await originGuard.listen({ host, port });
+      }
     } else {
       await relay.listen({ host, port });
     }
   } catch (error) {
     await originGuard?.close().catch(() => {});
+    await backchannelGuard?.close().catch(() => {});
     await relay.close().catch(() => {});
     throw error;
   }
 
-  process.stdout.write(`${JSON.stringify({ ok: true, role: 'relay', ready: true, originGuard: originGuardConfig.enabled })}\n`);
+  process.stdout.write(`${JSON.stringify({
+    ok: true,
+    role: 'relay',
+    ready: true,
+    originGuard: originGuardConfig.enabled,
+    providerBackchannelGuard: backchannelEnabled
+  })}\n`);
 
   const shutdown = async () => {
     await originGuard?.close();
+    await backchannelGuard?.close();
     await relay.close();
     process.exit(0);
   };
@@ -93,7 +124,12 @@ async function runProvider() {
     .map((value) => value.trim())
     .filter(Boolean);
   const identity = loadRuntimeIdentity();
-  const node = new TruynNode({ relayUrl, identity });
+  const backchannelConfig = createRuntimeBackchannelConfig(process.env);
+  const node = new ProviderTruynNode({
+    relayUrl,
+    identity,
+    backchannelToken: backchannelConfig.providerBackchannelToken
+  });
   const adapter = createProviderAdapter(providerName, { capabilities });
   const accessPolicy = createRuntimeProviderAccessPolicy(process.env);
   const billingPolicy = createRuntimeProviderBillingPolicy(process.env);
