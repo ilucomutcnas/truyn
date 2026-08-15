@@ -31,17 +31,16 @@ export function createVertexVeoProvider({
       const durationSeconds = providerOptions.durationSeconds ?? 4;
       const resolution = providerOptions.resolution || '720p';
       const sampleCount = providerOptions.sampleCount ?? 1;
-      const outputPrefix = `gs://${store.bucket}/video/veo/${Date.now()}-/`;
-      const request = {
-        instances: [{ prompt }],
-        parameters: {
-          storageUri: outputPrefix,
-          sampleCount,
-          durationSeconds,
-          resolution,
-          personGeneration: providerOptions.personGeneration || 'disallow'
-        }
+      const parameters = {
+        sampleCount,
+        durationSeconds,
+        resolution,
+        personGeneration: providerOptions.personGeneration || 'disallow'
       };
+      if (store.bucket && providerOptions.inlineOutput !== true) {
+        parameters.storageUri = `gs://${store.bucket}/video/veo/${Date.now()}-/`;
+      }
+      const request = { instances: [{ prompt }], parameters };
       const requestBody = JSON.stringify(request);
       const headers = await googleProviderHeaders({ accessTokenProvider, fetchImpl });
       const modelBase = `${apiEndpoint.replace(/\/$/, '')}/v1/projects/${projectId}/locations/${location}/publishers/google/models/${model}`;
@@ -66,11 +65,23 @@ export function createVertexVeoProvider({
       if (!operation?.done) throw new Error(`Vertex Veo timed out after ${timeoutMs}ms`);
       if (operation.error) throw new Error(operation.error.message || 'Vertex Veo operation failed');
       const videos = operation?.response?.videos || [];
-      if (!videos.length || !videos[0]?.gcsUri) throw new Error('Vertex Veo response contained no video artifact');
-      const ref = videos[0].gcsUri;
-      const buffer = await store.get(ref);
+      if (!videos.length) throw new Error('Vertex Veo response contained no video artifact');
+
+      const video = videos[0];
+      let buffer;
+      let ref = video.gcsUri || null;
+      if (video.bytesBase64Encoded) {
+        buffer = Buffer.from(video.bytesBase64Encoded, 'base64');
+        const stored = await store.put(buffer, { mediaType: video.mimeType || 'video/mp4', prefix: 'video/veo', extension: 'mp4' });
+        ref = stored.ref;
+      } else if (video.gcsUri && typeof store.get === 'function') {
+        buffer = await store.get(video.gcsUri);
+      } else {
+        throw new Error('Vertex Veo response had neither inline bytes nor a readable GCS artifact');
+      }
+
       const artifact = artifactFromBuffer(buffer, {
-        mediaType: videos[0].mimeType || 'video/mp4',
+        mediaType: video.mimeType || 'video/mp4',
         ref,
         provenance: { cloud: 'gcp', vendor: 'google', family: 'veo', model },
         metadata: { durationSeconds, resolution, sampleCount }
