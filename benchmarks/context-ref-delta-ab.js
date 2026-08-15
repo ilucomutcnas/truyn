@@ -204,6 +204,7 @@ const setupTransferBytes = baseContext.transferBytes + updatedContext.transferBy
 async function truynRun(id) {
   const expected = updatedValues.get(id);
   const ref = { $context: { cid: updatedContext.cid, ids: [id] } };
+  await requester.ensureFastSocket();
   const chain = await requester.compactChain([
     {
       capability: 'research',
