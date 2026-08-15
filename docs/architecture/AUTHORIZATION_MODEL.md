@@ -1,28 +1,6 @@
 # TRUYN Authorization Model
 
-**Status:** approved target architecture; the first fail-closed provider-execution gate is implemented, while tenant/billing/quota/discovery policy remains incremental work.
-
-## Implemented minimum security gate
-
-The current provider runtime implements an identity-bound pre-inference gate:
-
-```text
-verified NEED
-    ↓
-requester identity (`from`)
-    ↓
-provider access policy
-    ↓
-ALLOW → materialize context → provider execution
-DENY  → RESULT / PROVIDER_ACCESS_DENIED
-          provider execution count = 0
-```
-
-Provider runtimes launched through `runtime/service.js` default to `owner-only`. With no explicit requester allowlist they fail closed. A public runtime therefore requires an explicit `TRUYN_PROVIDER_ACCESS_MODE=public` opt-in.
-
-The gate is covered by negative tests that assert an unauthorized requester is rejected before the adapter's `execute()` method is called.
-
-This first implementation does **not** yet claim the complete tenant, billing-owner, quota, private-discovery or marketplace-grant system described below.
+**Status:** approved target architecture; implementation is intentionally out of scope for this documentation-only change.
 
 ## Core rule
 
@@ -54,8 +32,6 @@ dispatch
 
 If any mandatory stage cannot produce a trustworthy answer, dispatch MUST NOT occur.
 
-The current MVP implements the provider-execution authorization checkpoint at the point immediately before provider work. The remaining target stages are added without weakening that invariant.
-
 ## Authoritative identity
 
 The authorization layer may use a cryptographic TRUYN identity, authenticated relay session, account/tenant binding or another trusted provisioning mechanism. The important invariant is that requester authorization attributes are not accepted merely because the requester placed them in a payload.
@@ -64,7 +40,7 @@ Requester-controlled fields are claims. Authorization state is derived from auth
 
 ## Default deny
 
-The following cases are denied by default in the target authorization model:
+The following cases are denied by default:
 
 - provider policy missing;
 - requester tenant unresolved;
@@ -74,8 +50,6 @@ The following cases are denied by default in the target authorization model:
 - explicit sharing required but no grant exists;
 - quota state unavailable when quota is mandatory;
 - legacy route cannot reach the central authorization layer.
-
-For the implemented MVP requester gate specifically, `owner-only` with a missing or empty requester allowlist denies execution.
 
 ## Explicit policy exception
 
@@ -104,8 +78,6 @@ visibility == private
 ```
 
 must result in denial unless a trusted explicit grant exists. The denial must happen before any upstream model request, token reservation or chargeable job is created.
-
-The implemented runtime gate enforces the crucial pre-inference part of this invariant through an exact requester-identity allowlist. Rich owner/tenant/grant policy is the next layer rather than a substitute for this gate.
 
 ## Legacy and alternate transports
 

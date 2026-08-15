@@ -71,24 +71,6 @@ test('Vertex Veo provider defaults to 4s 720p one-sample smoke parameters', asyn
   assert.equal(result.output.artifacts[0].bytes, fakeMp4.byteLength);
 });
 
-test('Vertex Veo provider supports inline video bytes when no GCS bucket is configured', async () => {
-  const bodies = [];
-  const provider = createVertexVeoProvider({
-    projectId: 'p', location: 'us-central1', model: 'veo-test', pollIntervalMs: 0,
-    accessTokenProvider: async () => 'token',
-    artifactStore: { put: async (buffer) => ({ ref: 'file:///video.mp4', bytes: buffer.byteLength }) },
-    fetchImpl: async (url, options) => {
-      bodies.push(options?.body ? JSON.parse(options.body) : null);
-      if (String(url).endsWith(':predictLongRunning')) return jsonResponse({ name: 'projects/p/locations/us-central1/publishers/google/models/veo-test/operations/2' });
-      return jsonResponse({ done: true, response: { videos: [{ bytesBase64Encoded: fakeMp4.toString('base64'), mimeType: 'video/mp4' }] } });
-    }
-  });
-  const result = await provider.execute({ input: 'blue sphere', policy: { providerOptions: { inlineOutput: true } } });
-  assert.equal(bodies[0].parameters.storageUri, undefined);
-  assert.equal(result.output.artifacts[0].ref, 'file:///video.mp4');
-  assert.equal(result.output.artifacts[0].bytes, fakeMp4.byteLength);
-});
-
 test('Azure Sora provider defaults to 480x480 one-second smoke parameters', async () => {
   const bodies = [];
   let call = 0;

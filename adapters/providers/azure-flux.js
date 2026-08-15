@@ -11,8 +11,8 @@ export function createAzureFluxProvider({
   artifactStore,
   fetchImpl = fetch
 } = {}) {
-  if (!endpoint) throw new Error('AZURE_FLUX_ENDPOINT or AZURE_FOUNDRY_ENDPOINT is required');
-  if (!model) throw new Error('AZURE_FLUX_DEPLOYMENT or AZURE_FLUX_MODEL is required');
+  if (!endpoint) throw new Error('Azure FLUX endpoint is required');
+  if (!model) throw new Error('Azure FLUX model identifier is required');
   const store = artifactStore || createAzureBlobArtifactStore({ accessTokenProvider, fetchImpl });
 
   return {
@@ -23,12 +23,7 @@ export function createAzureFluxProvider({
       const startedAt = Date.now();
       const providerOptions = policy?.providerOptions && typeof policy.providerOptions === 'object' ? policy.providerOptions : {};
       const prompt = typeof input === 'string' ? input : input?.prompt || JSON.stringify(input);
-      const request = {
-        model,
-        prompt,
-        n: 1,
-        size: providerOptions.size || '1024x1024'
-      };
+      const request = { model, prompt, n: 1, size: providerOptions.size || '1024x1024' };
       const requestBody = JSON.stringify(request);
       const headers = await azureProviderHeaders({
         apiKey,
@@ -40,12 +35,14 @@ export function createAzureFluxProvider({
         method: 'POST', headers, body: requestBody
       });
       const body = await response.json();
-      if (!response.ok) throw new Error(body?.error?.message || `Azure FLUX HTTP ${response.status}`);
+      if (!response.ok) throw new Error('Azure FLUX request failed');
       const generatedUrl = body?.data?.[0]?.url;
       if (!generatedUrl) throw new Error('Azure FLUX response contained no image URL');
 
-      const imageResponse = await fetchImpl(generatedUrl);
-      if (!imageResponse.ok) throw new Error(`Azure FLUX artifact download HTTP ${imageResponse.status}`);
+      const artifactUrl = new URL(generatedUrl);
+      if (artifactUrl.protocol !== 'https:') throw new Error('Azure FLUX returned an unsafe artifact URL');
+      const imageResponse = await fetchImpl(artifactUrl);
+      if (!imageResponse.ok) throw new Error('Azure FLUX artifact download failed');
       const buffer = Buffer.from(await imageResponse.arrayBuffer());
       const mediaType = imageResponse.headers?.get?.('content-type')?.split(';')[0] || 'image/png';
       const extension = mediaType === 'image/jpeg' ? 'jpg' : 'png';

@@ -1,54 +1,39 @@
 # Documentation
 
-Human-facing documentation for TRUYN architecture, concepts, setup, operations, security, Trustability, compatibility, benchmarks, and architecture decisions.
+Human-facing documentation for TRUYN architecture, concepts, setup, security, Trustability, compatibility, and public benchmark methodology.
 
-## Current architecture references
-
-### Core architecture
+## Core architecture
 
 - [Architecture Contract](architecture/ARCHITECTURE_CONTRACT.md) — canonical architecture constraints and concept ownership.
 - [Provider Ownership](architecture/PROVIDER_OWNERSHIP.md) — provider owner/tenant/visibility/billing boundary.
 - [Authorization Model](architecture/AUTHORIZATION_MODEL.md) — server-side fail-closed provider authorization.
-- [Relay Security](architecture/RELAY_SECURITY.md) — public relay, owner control plane, provider backchannel, and legacy-route rules.
-- [Billing Boundary](architecture/BILLING_BOUNDARY.md) — BYOK, owner-funded, sponsored/prepaid/subscription semantics and quota attribution.
+- [Relay Security](architecture/RELAY_SECURITY.md) — relay, control-plane, provider-backchannel, and legacy-route security rules.
+- [Billing Boundary](architecture/BILLING_BOUNDARY.md) — BYOK, owner-funded and future sponsored/prepaid/subscription semantics.
 - [BYOK Architecture](architecture/BYOK_ARCHITECTURE.md) — Bring Your Own Intelligence / Bring Your Own Provider.
-- [Threat Model](architecture/THREAT_MODEL.md) — provider/relay abuse scenarios and the required negative security matrix.
-- [Public / Private Information Boundary](architecture/PUBLIC_PRIVATE_BOUNDARY.md) — what belongs in the public repository versus private operations.
+- [Threat Model](architecture/THREAT_MODEL.md) — provider/relay abuse scenarios and negative security requirements.
+- [Public / Private Information Boundary](architecture/PUBLIC_PRIVATE_BOUNDARY.md) — what belongs in this public repository.
 
-### Provider and edge architecture
+## Provider and edge architecture
 
-- [Multi-Cloud Provider Architecture](architecture/MULTI_CLOUD_PROVIDER_ARCHITECTURE.md) — public Google Cloud / Microsoft Azure reasoning, image and video provider target without private deployment identifiers.
-- [Multi-Cloud Provider Implementation Status](providers/MULTICLOUD_PROVIDER_IMPLEMENTATION_STATUS_2026-08-15.md) — implemented adapters and isolated live smoke evidence for text, image, and video providers.
-- [Public Edge Domains](architecture/PUBLIC_EDGE_DOMAINS.md) — intentionally public hostname roles and the public/control-plane separation; live origin/resource identifiers are deliberately excluded.
-- [Multimodal Provider Parity Benchmark](benchmarks/MULTIMODAL_PROVIDER_PARITY.md) — planned apples-to-apples methodology for reasoning, image and video comparisons.
+- [Multi-Cloud Provider Architecture](architecture/MULTI_CLOUD_PROVIDER_ARCHITECTURE.md) — logical provider/capability architecture without live deployment identifiers.
+- [Public Edge Domains](architecture/PUBLIC_EDGE_DOMAINS.md) — intentionally public hostname roles only.
+- [Multimodal Provider Parity Benchmark](benchmarks/MULTIMODAL_PROVIDER_PARITY.md) — public methodology for apples-to-apples reasoning/image/video comparisons.
+- [Benchmark publication policy](../benchmarks/README.md) — what benchmark material is safe to publish.
 
-### Measured benchmark evidence
-
-- [Cross-Cloud A/B Baseline](benchmarks/CROSS_CLOUD_AB_2026-08-15.md) — measured baseline; explicitly records where the early PoC did not improve tokens/cost/latency.
-- [Cross-Cloud 8× Hot-Path Optimization](benchmarks/CROSS_CLOUD_8X_OPTIMIZATION_2026-08-15.md) — measured transport/orchestration optimization gate.
-- [Content-Addressed Context Efficiency](benchmarks/CONTEXT_EFFICIENCY_2026-08-15.md) — measured sparse context/delta economic gate.
-- [Semantic Retrieval Gate](benchmarks/SEMANTIC_RETRIEVAL_GATE_2026-08-15.md) — measured natural-language question + root CID retrieval/provenance/economic gate.
-
-Public benchmark evidence describes performance under authorized project-controlled providers. It does not grant public access to the underlying provider accounts and does not substitute for the independent provider-security negative test gate.
-
-### Getting started
+## Getting started
 
 - [BYOK](getting-started/BYOK.md) — target user-facing provider onboarding and credential-locality contract.
-- [MVP Quickstart](getting-started/MVP_QUICKSTART.md) — current executable relay/node MVP with explicit non-production security boundary.
-- [MVP AI Interoperability](getting-started/MVP_AI_INTEROP.md) — current adapters and live-demo boundary.
+- [MVP Quickstart](getting-started/MVP_QUICKSTART.md) — local-development relay/node MVP.
+- [MVP AI Interoperability](getting-started/MVP_AI_INTEROP.md) — local adapters and user-supplied provider credentials.
 
-## Architecture status rule
+## Security status
 
-Documents explicitly label whether they describe:
+The reference runtime is now **fail closed by default**: production-style relay registration requires explicit node enrollment, provider execution requires an explicitly trusted requester, discovery does not expose foreign provider offers to untrusted requesters, and legacy mutation/execution routes are bound to active authenticated sessions.
 
-- implemented MVP behavior;
-- approved target architecture;
-- planned future work.
-
-An approved architecture document is **not** an implementation-complete security claim. A fail-closed requester allowlist gate is now implemented before provider execution, but the broader provider-ownership, tenant, BYOK onboarding, billing/quota, private-discovery, and marketplace policy model remains incremental implementation work until code/tests prove each layer.
+This is an immediate safety boundary, not the final multi-tenant BYOK authorization system. Full owner/tenant/visibility/billing semantics remain governed by the architecture documents above and require their complete negative test matrix before a public provider marketplace is enabled.
 
 ## Public documentation rule
 
-Provider catalogs, model versions, regions, quotas and access requirements change over time. Public architecture documents describe stable TRUYN capabilities and security invariants. Exact deployment details are resolved during preflight/operations and are not published when they reveal private topology, cloud identities, quotas, billing information, privileged allowlists or secret paths.
+The public repository describes protocol semantics, security invariants, generic adapters, reproducible local examples, and reviewed benchmark methodology. It does **not** store raw production benchmark artifacts, GitHub Actions run identifiers, private cloud resource names, private origins, privileged cloud identities, live quota/cost ceilings, secret names whose disclosure is unnecessary, allowlists, incident data, or deployment runbooks.
 
-See [Public / Private Information Boundary](architecture/PUBLIC_PRIVATE_BOUNDARY.md).
+Measured results may be published only after a security review has removed operational identifiers and confirmed that the report cannot be used to reconstruct privileged infrastructure.

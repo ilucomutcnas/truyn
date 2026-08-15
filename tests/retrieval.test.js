@@ -42,7 +42,7 @@ test('hybrid retriever exceeds 99% top-1 accuracy without block ids in the query
 });
 
 test('question + root CID retrieves verified context with provenance end-to-end', async (t) => {
-  const relay = createRelay();
+  const relay = createRelay({ localDevelopmentMode: true });
   const relayUrl = await relay.listen();
   t.after(async () => relay.close());
   const owner = new TruynNode({ relayUrl });

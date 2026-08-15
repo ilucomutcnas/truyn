@@ -10,6 +10,7 @@ import {
   verifyEnvelope
 } from '../core/protocol/index.js';
 import { trustabilityLite } from '../core/trust/index.js';
+import { createLocalDevelopmentAccessPolicy } from '../core/security/provider-access.js';
 import { createRelay } from '../network/relay/server.js';
 import { TruynNode } from '../node/client.js';
 import { createFunctionAdapter, TruynAdapterHost } from '../adapters/sdk/index.js';
@@ -36,7 +37,6 @@ test('signed TRUYN envelope verifies and tampering is rejected', () => {
     publicKeyPem: identity.publicKeyPem,
     payload: { capability: { name: 'research' }, input: { query: 'hello' } }
   });
-
   assert.deepEqual(verifyEnvelope(envelope), { ok: true });
   const tampered = structuredClone(envelope);
   tampered.payload.input.query = 'changed';
@@ -49,7 +49,6 @@ test('session-bound compact frames preserve Ed25519 verification under 125 bytes
   const frame = createCompactFrame({ type: 'NEED', payload, privateKeyPem: identity.privateKeyPem });
   assert.equal(verifyCompactFrame(frame, payload, identity.publicKeyPem).ok, true);
   assert.ok(compactFrameBytes(frame) <= 125, `compact frame was ${compactFrameBytes(frame)} bytes`);
-
   const tampered = structuredClone(payload);
   tampered.input.query = 'changed';
   assert.deepEqual(verifyCompactFrame(frame, tampered, identity.publicKeyPem), { ok: false, reason: 'invalid_signature' });
@@ -63,33 +62,26 @@ test('trustability lite increases after successful tasks', () => {
 });
 
 test('two independent nodes discover, route NEED and return signed RESULT', async (t) => {
-  const relay = createRelay();
+  const relay = createRelay({ localDevelopmentMode: true });
   const relayUrl = await relay.listen({ port: 0 });
   t.after(() => relay.close());
-
   const provider = new TruynNode({ relayUrl });
   const requester = new TruynNode({ relayUrl });
-
   await provider.register();
   await requester.register();
   const offer = await provider.offer('research');
   assert.ok(offer.offerId);
-
   const discovery = await requester.find('research');
   assert.equal(discovery.offers.length, 1);
   assert.equal(discovery.offers[0].from, provider.identity.nodeId);
-
   const matched = await requester.need('research', { query: 'TRUYN' });
   assert.equal(matched.provider, provider.identity.nodeId);
-
   const providerEvents = await provider.poll();
   assert.equal(providerEvents.events.length, 1);
   assert.equal(providerEvents.events[0].kind, 'NEED');
   assert.equal(providerEvents.events[0].verification.ok, true);
-
   const requestId = providerEvents.events[0].envelope.id;
   await provider.result(requestId, { answer: 'working' });
-
   const requesterEvents = await requester.poll();
   assert.equal(requesterEvents.events.length, 1);
   assert.equal(requesterEvents.events[0].kind, 'RESULT');
@@ -99,16 +91,14 @@ test('two independent nodes discover, route NEED and return signed RESULT', asyn
 });
 
 test('compact long-poll NEED returns signed RESULT synchronously with <= 250 protocol bytes per transaction', async (t) => {
-  const relay = createRelay();
+  const relay = createRelay({ localDevelopmentMode: true });
   const relayUrl = await relay.listen({ port: 0 });
   t.after(() => relay.close());
-
   const provider = new TruynNode({ relayUrl });
   const requester = new TruynNode({ relayUrl });
   await provider.register();
   await requester.register();
   await provider.offer('research', { fastPath: true });
-
   const providerWork = (async () => {
     const polled = await provider.pollCompact({ waitMs: 2_000 });
     assert.equal(polled.events.length, 1);
@@ -117,10 +107,8 @@ test('compact long-poll NEED returns signed RESULT synchronously with <= 250 pro
     assert.equal(event.verification.ok, true);
     await provider.compactResult(event.frame.i, { answer: 'working' }, { providerLatencyMs: 1 });
   })();
-
   const result = await requester.compactNeed('research', { query: 'TRUYN' }, {}, { waitMs: 2_000 });
   await providerWork;
-
   assert.equal(result.output.answer, 'working');
   assert.equal(result.verification.ok, true);
   assert.equal(result.provider, provider.identity.nodeId);
@@ -128,22 +116,22 @@ test('compact long-poll NEED returns signed RESULT synchronously with <= 250 pro
 });
 
 test('single signed CHAIN executes two providers over persistent sockets with <= 375 protocol bytes', async (t) => {
-  const relay = createRelay();
+  const relay = createRelay({ localDevelopmentMode: true });
   const relayUrl = await relay.listen({ port: 0 });
   t.after(() => relay.close());
-
   const researchNode = new TruynNode({ relayUrl });
   const reviewNode = new TruynNode({ relayUrl });
   const requester = new TruynNode({ relayUrl });
+  const localAccess = createLocalDevelopmentAccessPolicy();
   t.after(() => researchNode.closeFastSocket());
   t.after(() => reviewNode.closeFastSocket());
   t.after(() => requester.closeFastSocket());
   let reviewedCandidate = null;
-
   const researchHost = new TruynAdapterHost({
     node: researchNode,
     fastPath: true,
     socketPath: true,
+    accessPolicy: localAccess,
     adapter: createFunctionAdapter({
       name: 'research-test',
       capabilities: ['research'],
@@ -154,6 +142,7 @@ test('single signed CHAIN executes two providers over persistent sockets with <=
     node: reviewNode,
     fastPath: true,
     socketPath: true,
+    accessPolicy: localAccess,
     adapter: createFunctionAdapter({
       name: 'review-test',
       capabilities: ['review'],
@@ -163,27 +152,16 @@ test('single signed CHAIN executes two providers over persistent sockets with <=
       }
     })
   });
-
   await researchHost.publishCapabilities();
   await reviewHost.publishCapabilities();
   await requester.register();
   await requester.ensureFastSocket();
   const researchWork = researchHost.runOnce();
   const reviewWork = reviewHost.runOnce();
-
   const result = await requester.compactChain([
-    {
-      capability: { name: 'research' },
-      input: { query: 'TRUYN' },
-      policy: { expectedProvider: 'research-test' }
-    },
-    {
-      capability: { name: 'review' },
-      inputTemplate: { candidate: { $previous: 'output' } },
-      policy: { expectedProvider: 'review-test' }
-    }
+    { capability: { name: 'research' }, input: { query: 'TRUYN' }, policy: { expectedProvider: 'research-test' } },
+    { capability: { name: 'review' }, inputTemplate: { candidate: { $previous: 'output' } }, policy: { expectedProvider: 'review-test' } }
   ], { waitMs: 2_000 });
-
   await Promise.all([researchWork, reviewWork]);
   assert.equal(result.results.length, 2);
   assert.equal(result.results[0].verification.ok, true);
@@ -195,7 +173,6 @@ test('single signed CHAIN executes two providers over persistent sockets with <=
   assert.ok(result.protocolOverheadBytes <= 375, `chain protocol overhead was ${result.protocolOverheadBytes} bytes`);
   assert.equal(result.requesterTransport, 'websocket');
   assert.equal(relay.state.providerSockets.size, 3);
-
   const traceResponse = await fetch(`${relayUrl}/v1/fast/chains/${encodeURIComponent(result.chainId)}/trace`, {
     headers: { authorization: `Bearer ${requester.sessionToken}` }
   });
@@ -209,33 +186,26 @@ test('single signed CHAIN executes two providers over persistent sockets with <=
 });
 
 test('relay excludes stale OFFERs and routes to the live replacement provider', async (t) => {
-  const relay = createRelay({ nodeFreshnessMs: 1_000 });
+  const relay = createRelay({ nodeFreshnessMs: 1_000, localDevelopmentMode: true });
   const relayUrl = await relay.listen({ port: 0 });
   t.after(() => relay.close());
-
   const staleProvider = new TruynNode({ relayUrl });
   const liveProvider = new TruynNode({ relayUrl });
   const requester = new TruynNode({ relayUrl });
-
   await staleProvider.register();
   await staleProvider.offer('review');
   await liveProvider.register();
   await liveProvider.offer('review');
   await requester.register();
-
   relay.state.nodes.get(staleProvider.identity.nodeId).lastSeenAt = new Date(Date.now() - 5_000).toISOString();
   relay.state.nodes.get(liveProvider.identity.nodeId).lastSeenAt = new Date().toISOString();
-
   const discovery = await requester.find('review');
   assert.equal(discovery.offers.length, 1);
   assert.equal(discovery.offers[0].from, liveProvider.identity.nodeId);
-
   const matched = await requester.need('review', { candidate: 'TRUYN' });
   assert.equal(matched.provider, liveProvider.identity.nodeId);
-
   const staleEvents = await staleProvider.poll();
   assert.equal(staleEvents.events.length, 0);
-
   const liveEvents = await liveProvider.poll();
   assert.equal(liveEvents.events.length, 1);
   assert.equal(liveEvents.events[0].kind, 'NEED');

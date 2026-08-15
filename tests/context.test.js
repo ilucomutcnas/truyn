@@ -22,7 +22,7 @@ test('content CID is deterministic and delta produces a new immutable root', () 
 });
 
 test('relay context ACL, delta and provider-side selection verification work end-to-end', async (t) => {
-  const relay = createRelay();
+  const relay = createRelay({ localDevelopmentMode: true });
   const relayUrl = await relay.listen();
   t.after(async () => relay.close());
 

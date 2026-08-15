@@ -3,13 +3,19 @@ import assert from 'node:assert/strict';
 import { createProviderAccessPolicy } from '../core/security/provider-access.js';
 import { TruynAdapterHost } from '../adapters/sdk/index.js';
 
-test('owner-only provider policy denies when allowlist is empty', () => {
-  const policy = createProviderAccessPolicy({ mode: 'owner-only', allowedRequesterIds: '' });
-  assert.deepEqual(policy.authorize({ from: 'truyn:node:external' }), {
-    ok: false,
-    mode: 'owner-only',
-    reason: 'no_allowed_requesters'
-  });
+test('provider policy is fail-closed by default', () => {
+  const previousMode = process.env.TRUYN_PROVIDER_ACCESS_MODE;
+  const previousAllowed = process.env.TRUYN_ALLOWED_REQUESTER_IDS;
+  delete process.env.TRUYN_PROVIDER_ACCESS_MODE;
+  delete process.env.TRUYN_ALLOWED_REQUESTER_IDS;
+  try {
+    const policy = createProviderAccessPolicy();
+    assert.equal(policy.mode, 'owner-only');
+    assert.equal(policy.authorize({ from: 'truyn:node:external' }).ok, false);
+  } finally {
+    if (previousMode === undefined) delete process.env.TRUYN_PROVIDER_ACCESS_MODE; else process.env.TRUYN_PROVIDER_ACCESS_MODE = previousMode;
+    if (previousAllowed === undefined) delete process.env.TRUYN_ALLOWED_REQUESTER_IDS; else process.env.TRUYN_ALLOWED_REQUESTER_IDS = previousAllowed;
+  }
 });
 
 test('owner-only provider policy only permits exact requester identity', () => {
