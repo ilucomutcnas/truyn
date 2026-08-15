@@ -130,9 +130,16 @@ export class TruynAdapterHost {
 
       const startedAt = Date.now();
       try {
+        let input = need.payload?.input;
+        let contextResolution = null;
+        if (typeof this.node.materializeContextRefs === 'function') {
+          const resolved = await this.node.materializeContextRefs(input);
+          input = resolved.value;
+          if ((resolved.stats?.contextRefs || 0) > 0) contextResolution = resolved.stats;
+        }
         const execution = await this.adapter.execute({
           capability,
-          input: need.payload?.input,
+          input,
           policy: need.payload?.policy || {},
           need,
           node: this.node
@@ -146,6 +153,7 @@ export class TruynAdapterHost {
           latencyMs: Date.now() - startedAt,
           ...(normalized.metadata || {})
         };
+        if (contextResolution) metadata.contextResolution = contextResolution;
         if (need.chain) metadata.chainStage = need.stageIndex;
         if (compact) await this.node.compactResult(need.id, normalized.output, metadata);
         else await this.node.result(need.id, normalized.output, metadata);
