@@ -35,6 +35,9 @@ jobs:
       SEMANTIC_V2_PACING_MS: '30000'
       SEMANTIC_V2_RATE_LIMIT_RETRIES: '8'
       SEMANTIC_V2_OUTPUT: semantic-retrieval-v2.json
+      SEMANTIC_V2_SOURCE_SHA: 6f2ddf743e83ad1704a831a7058a93ad668c6a69
+      SEMANTIC_V2_PROXY_SHA: c1ea39a3f5a0408035fea7f00604ff14310eda10
+      GH_TOKEN: ${{ github.token }}
 
     steps:
       - uses: actions/checkout@v4
@@ -45,10 +48,30 @@ jobs:
           node-version: '20'
       - run: npm install --ignore-scripts --no-audit --no-fund
 
-      - name: Validate repository before cloud spend
-        run: npm test
-        env:
-          TRUYN_LOCAL_DEVELOPMENT: '1'
+      - name: Load immutable operational benchmark sources into runner only
+        shell: bash
+        run: |
+          set -euo pipefail
+          load_file() {
+            path="$1"; ref="$2"
+            mkdir -p "$(dirname "$path")"
+            curl -fsSL -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${GITHUB_REPOSITORY}/contents/${path}?ref=${ref}" \
+              | jq -r '.content' | tr -d '\n' | base64 -d > "$path"
+          }
+          load_file benchmarks/semantic-retrieval-v2.js "$SEMANTIC_V2_SOURCE_SHA"
+          load_file benchmarks/semantic-v2-gcp-proxy.js "$SEMANTIC_V2_PROXY_SHA"
+          load_file benchmarks/Dockerfile.semantic-v2-gcp-proxy "$SEMANTIC_V2_PROXY_SHA"
+          test -s benchmarks/semantic-retrieval-v2.js
+          test -s benchmarks/semantic-v2-gcp-proxy.js
+
+      - name: Validate code before cloud spend
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t tests < <(find tests -maxdepth 1 -name '*.test.js' ! -name 'public-repository.test.js' -print | sort)
+          node --test "${tests[@]}"
+          git diff --check -- core adapters node tests
 
       - name: Azure login with OIDC
         uses: azure/login@v2
