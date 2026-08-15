@@ -15,13 +15,12 @@ permissions:
 jobs:
   diagnose:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 7
     env:
       AZURE_RG: truyn
       AFD_PROFILE: truyn-frontdoor
       AFD_ENDPOINT: truyn-edge-1334540181
       AFD_ROUTE: relay-route
-      AFD_CUSTOM_DOMAIN: relay-truyn-org
       TRUYN_HOST: relay.truyn.org
     steps:
       - uses: actions/checkout@v4
@@ -35,16 +34,51 @@ jobs:
         run: |
           set -u
           az extension add --name cdn --upgrade --yes >/dev/null 2>&1 || true
-          echo '=== DNS ==='
-          dig +short CNAME "$TRUYN_HOST" || true
-          dig +short A "$TRUYN_HOST" || true
-          echo '=== CUSTOM DOMAIN ==='
-          az afd custom-domain show -g "$AZURE_RG" --profile-name "$AFD_PROFILE" --custom-domain-name "$AFD_CUSTOM_DOMAIN" \
-            --query '{hostName:hostName,domainValidationState:domainValidationState,provisioningState:provisioningState,deploymentStatus:deploymentStatus,tlsSettings:tlsSettings}' -o json || true
+
+          echo '=== DNS / HTTPS ==='
+          hosts=(
+            relay.truyn.org
+            api.truyn.org
+            discovery.truyn.org
+            gateway.truyn.org
+            mcp.truyn.org
+            trust.truyn.org
+            status.truyn.org
+          )
+          for host in "${hosts[@]}"; do
+            echo "--- ${host} ---"
+            dig +short CNAME "$host" || true
+            dig +short A "$host" || true
+            curl -sS --connect-timeout 5 --max-time 10 -o /tmp/body -w 'HTTP=%{http_code}\n' "https://${host}/health" || true
+            head -c 300 /tmp/body 2>/dev/null || true
+            echo
+          done
+
+          echo '=== CUSTOM DOMAINS ==='
+          domains=(
+            relay-truyn-org
+            api-truyn-org
+            discovery-truyn-org
+            gateway-truyn-org
+            mcp-truyn-org
+            trust-truyn-org
+            status-truyn-org
+          )
+          for domain in "${domains[@]}"; do
+            echo "--- ${domain} ---"
+            az afd custom-domain show \
+              -g "$AZURE_RG" \
+              --profile-name "$AFD_PROFILE" \
+              --custom-domain-name "$domain" \
+              --query '{hostName:hostName,domainValidationState:domainValidationState,provisioningState:provisioningState,deploymentStatus:deploymentStatus,tlsSettings:tlsSettings}' \
+              -o json || true
+          done
+
           echo '=== ROUTE ==='
-          az afd route show -g "$AZURE_RG" --profile-name "$AFD_PROFILE" --endpoint-name "$AFD_ENDPOINT" --route-name "$AFD_ROUTE" \
-            --query '{provisioningState:provisioningState,deploymentStatus:deploymentStatus,enabledState:enabledState,customDomains:customDomains,linkToDefaultDomain:linkToDefaultDomain}' -o json || true
-          echo '=== HTTPS ==='
-          curl -sSvk --connect-timeout 10 --max-time 20 "https://${TRUYN_HOST}/health" -o /tmp/body 2>&1 | tail -n 80 || true
-          echo '=== BODY ==='
-          cat /tmp/body 2>/dev/null || true
+          az afd route show \
+            -g "$AZURE_RG" \
+            --profile-name "$AFD_PROFILE" \
+            --endpoint-name "$AFD_ENDPOINT" \
+            --route-name "$AFD_ROUTE" \
+            --query '{provisioningState:provisioningState,deploymentStatus:deploymentStatus,enabledState:enabledState,customDomains:customDomains,linkToDefaultDomain:linkToDefaultDomain}' \
+            -o json || true
