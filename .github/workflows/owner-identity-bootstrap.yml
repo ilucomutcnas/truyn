@@ -101,7 +101,7 @@ jobs:
           }
           JSON
 
-          if git diff --quiet -- config/owner-benchmark.json; then
+          if [[ -z "$(git status --porcelain -- config/owner-benchmark.json)" ]]; then
             echo 'OWNER_BENCHMARK_CONFIG=unchanged'
             exit 0
           fi
