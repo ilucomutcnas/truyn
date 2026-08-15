@@ -30,7 +30,6 @@ jobs:
       GCP_SERVICE: truyn-claude-private-probe
       CLAUDE_VERTEX_MODEL: claude-sonnet-4-6
       CLAUDE_VERTEX_LOCATION: global
-      CLAUDE_PUBLISHER_MODEL: publishers/anthropic/models/claude-sonnet-4-6
     steps:
       - uses: actions/checkout@v4
 
@@ -59,40 +58,7 @@ jobs:
             --quiet
           echo 'CLAUDE_REQUIRED_APIS=enabled'
 
-      - name: Accept Claude Model Garden EULA and enable model using existing IAM
-        shell: bash
-        run: |
-          set -euo pipefail
-          token="$(gcloud auth print-access-token)"
-
-          eula_code="$(curl -sS -o eula.json -w '%{http_code}' \
-            -X POST \
-            -H "Authorization: Bearer ${token}" \
-            -H 'Content-Type: application/json' \
-            --data "{\"publisherModel\":\"${CLAUDE_PUBLISHER_MODEL}\"}" \
-            "https://aiplatform.googleapis.com/v1beta1/projects/${GCP_PROJECT_ID_VALUE}/modelGardenEula:accept")"
-          echo "CLAUDE_EULA_HTTP=$eula_code"
-          jq '{publisherModel, eulaAcceptanceState, error}' eula.json 2>/dev/null || cat eula.json
-          if [[ "$eula_code" -lt 200 || "$eula_code" -ge 300 ]]; then
-            exit 1
-          fi
-
-          enable_code="$(curl -sS -o enable.json -w '%{http_code}' \
-            -X POST \
-            -H "Authorization: Bearer ${token}" \
-            -H 'Content-Type: application/json' \
-            --data '{}' \
-            "https://aiplatform.googleapis.com/v1beta1/projects/${GCP_PROJECT_ID_VALUE}/${CLAUDE_PUBLISHER_MODEL}:enableModel")"
-          echo "CLAUDE_ENABLE_HTTP=$enable_code"
-          jq '{publisherEndpoint, enablementState, error}' enable.json 2>/dev/null || cat enable.json
-          if [[ "$enable_code" -lt 200 || "$enable_code" -ge 300 ]]; then
-            exit 1
-          fi
-          state="$(jq -r '.enablementState // empty' enable.json)"
-          [[ "$state" == 'ENABLEMENT_STATE_SUCCEEDED' ]] || { echo "CLAUDE_ENABLE_STATE=${state:-missing}"; exit 1; }
-          echo 'CLAUDE_MODEL_GARDEN_ACCESS=enabled'
-
-      - name: Build and push private probe image
+      - name: Build and push private bootstrap image
         shell: bash
         run: |
           set -euo pipefail
@@ -103,7 +69,7 @@ jobs:
           docker push "$image"
           echo "CLAUDE_PROBE_IMAGE=$image" >> "$GITHUB_ENV"
 
-      - name: Deploy authenticated probe under runtime identity
+      - name: Deploy authenticated bootstrap probe under runtime identity
         shell: bash
         run: |
           set -euo pipefail
@@ -146,21 +112,34 @@ jobs:
           create_credentials_file: false
           export_environment_variables: false
 
-      - name: Invoke authenticated runtime probe
+      - name: Enable Claude from the dedicated runtime identity
         shell: bash
         env:
           CLAUDE_PROBE_ID_TOKEN: ${{ steps.invoke_auth.outputs.id_token }}
         run: |
           set -euo pipefail
           [[ -n "${CLAUDE_PROBE_ID_TOKEN:-}" ]] || { echo 'CLAUDE_PROBE_ID_TOKEN=missing'; exit 1; }
+          http_code="$(curl -sS -o bootstrap.json -w '%{http_code}' \
+            -H "Authorization: Bearer ${CLAUDE_PROBE_ID_TOKEN}" \
+            "${CLAUDE_PROBE_URL}/bootstrap")"
+          echo "CLAUDE_RUNTIME_BOOTSTRAP_HTTP=$http_code"
+          jq . bootstrap.json
+          [[ "$http_code" == '200' ]] || exit 1
+          jq -e '.ok == true and .stage == "enabled" and .runtimeIdentity == true' bootstrap.json >/dev/null
+          echo 'VERTEX_CLAUDE_RUNTIME_BOOTSTRAP=success'
+
+      - name: Invoke authenticated runtime proof
+        shell: bash
+        env:
+          CLAUDE_PROBE_ID_TOKEN: ${{ steps.invoke_auth.outputs.id_token }}
+        run: |
+          set -euo pipefail
           http_code="$(curl -sS -o response.json -w '%{http_code}' \
             -H "Authorization: Bearer ${CLAUDE_PROBE_ID_TOKEN}" \
             "${CLAUDE_PROBE_URL}/probe")"
           echo "CLAUDE_PRIVATE_PROBE_HTTP=$http_code"
           jq . response.json
-          if [[ "$http_code" != '200' ]]; then
-            exit 1
-          fi
+          [[ "$http_code" == '200' ]] || exit 1
           jq -e '.ok == true and .marker == "TRUYN_VERTEX_CLAUDE_OK" and .publicRelayExposure == false' response.json >/dev/null
           echo 'VERTEX_CLAUDE_PRIVATE_PROOF=success'
           echo 'VERTEX_CLAUDE_IDENTITY=runtime-service-account'
