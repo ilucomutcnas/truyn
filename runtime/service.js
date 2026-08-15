@@ -5,6 +5,7 @@ import { createIdentity } from '../core/identity/index.js';
 import { TruynAdapterHost } from '../adapters/sdk/index.js';
 import { createProviderAdapter } from '../adapters/providers/index.js';
 import { createRuntimeProviderAccessPolicy } from './security-config.js';
+import { createRuntimeProviderBillingPolicy } from './billing-config.js';
 
 const role = process.env.TRUYN_ROLE || 'provider';
 const host = process.env.HOST || '0.0.0.0';
@@ -68,6 +69,7 @@ async function runProvider() {
   const node = new TruynNode({ relayUrl, identity });
   const adapter = createProviderAdapter(providerName, { capabilities });
   const accessPolicy = createRuntimeProviderAccessPolicy(process.env);
+  const billingPolicy = createRuntimeProviderBillingPolicy(process.env);
   const fastPath = process.env.TRUYN_FAST_PATH !== '0';
   const socketPath = fastPath && process.env.TRUYN_SOCKET_PATH !== '0';
   const longPollMs = Number(process.env.TRUYN_LONG_POLL_MS || 10_000);
@@ -75,6 +77,7 @@ async function runProvider() {
     node,
     adapter,
     accessPolicy,
+    billingPolicy,
     fastPath,
     socketPath,
     longPollMs,
