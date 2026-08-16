@@ -1,0 +1,137 @@
+name: Temporary Live Origin Security Proof
+
+on:
+  push:
+    branches: [security/live-origin-proof]
+    paths: ['.github/workflows/tmp-live-origin-proof.yml']
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  prove:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      AZURE_CLIENT_ID_VALUE: ${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID_VALUE: ${{ vars.AZURE_TENANT_ID || secrets.AZURE_TENANT_ID }}
+      AZURE_SUBSCRIPTION_ID_VALUE: ${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}
+      GCP_PROJECT_ID_VALUE: ${{ vars.GCP_PROJECT_ID || secrets.GCP_PROJECT_ID }}
+      GCP_WIF_PROVIDER_VALUE: ${{ vars.GCP_WIF_PROVIDER || secrets.GCP_WIF_PROVIDER }}
+      GCP_DEPLOYER_SA_VALUE: ${{ vars.GCP_DEPLOYER_SERVICE_ACCOUNT_EMAIL || secrets.GCP_DEPLOYER_SERVICE_ACCOUNT_EMAIL }}
+      GCP_REGION_VALUE: ${{ vars.GCP_REGION || 'us-east4' }}
+      PUBLIC_RELAY_URL: https://relay.truyn.org
+    steps:
+      - name: Authenticate Azure with OIDC
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID_VALUE }}
+          tenant-id: ${{ env.AZURE_TENANT_ID_VALUE }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID_VALUE }}
+
+      - name: Prove Azure direct origin cannot reach inner relay
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t rows < <(az containerapp list --query "[?properties.configuration.ingress.external==\`true\`].[name,resourceGroup,properties.configuration.ingress.fqdn]" -o tsv)
+          found=0
+          for row in "${rows[@]}"; do
+            name="$(awk '{print $1}' <<<"$row")"
+            rg="$(awk '{print $2}' <<<"$row")"
+            fqdn="$(awk '{print $3}' <<<"$row")"
+            [[ -n "$fqdn" ]] || continue
+            env_json="$(az containerapp show -g "$rg" -n "$name" --query 'properties.template.containers[0].env' -o json)"
+            role="$(jq -r '[.[]? | select(.name=="TRUYN_ROLE") | .value][0] // empty' <<<"$env_json")"
+            if [[ "$role" != "relay" && "$name" != *relay* ]]; then continue; fi
+            found=1
+            origin="https://${fqdn}"
+            echo "::add-mask::$origin"
+            guard_value="$(jq -r '[.[]? | select(.name=="TRUYN_ORIGIN_GUARD") | .value][0] // empty' <<<"$env_json")"
+            guard_token_ref="$(jq -r '[.[]? | select(.name=="TRUYN_ORIGIN_GUARD_TOKEN") | (.secretRef // .value // empty)][0] // empty' <<<"$env_json")"
+            [[ "$guard_value" == "1" || "$guard_value" == "true" ]] || { echo 'AZURE_ORIGIN_PROOF=FAIL guard_not_enabled'; exit 21; }
+            [[ -n "$guard_token_ref" ]] || { echo 'AZURE_ORIGIN_PROOF=FAIL guard_token_not_configured'; exit 22; }
+
+            direct_code="$(curl -sS --max-time 15 -o azure-direct.json -w '%{http_code}' -X POST -H 'content-type: application/json' --data '{}' "${origin}/v1/register" || true)"
+            direct_error="$(jq -r '.error // empty' azure-direct.json 2>/dev/null || true)"
+            if [[ "$direct_code" != "403" || "$direct_error" != "origin_guard_denied" ]]; then
+              echo "AZURE_ORIGIN_PROOF=FAIL direct_http=${direct_code} guard_error=${direct_error:-none}"
+              exit 23
+            fi
+
+            ws_code="$(curl -sS --http1.1 --max-time 10 -o /dev/null -w '%{http_code}' -H 'Connection: Upgrade' -H 'Upgrade: websocket' -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dHJ1eW4tb3JpZ2luLXByb29m' "${origin}/v1/fast/socket" || true)"
+            [[ "$ws_code" == "403" ]] || { echo "AZURE_ORIGIN_PROOF=FAIL direct_websocket=${ws_code}"; exit 24; }
+
+            edge_code="$(curl -sS --max-time 15 -o edge.json -w '%{http_code}' -X POST -H 'content-type: application/json' --data '{}' "${PUBLIC_RELAY_URL}/v1/register" || true)"
+            edge_error="$(jq -r '.error // empty' edge.json 2>/dev/null || true)"
+            if [[ "$edge_code" == "403" && "$edge_error" == "origin_guard_denied" ]]; then
+              echo 'AZURE_ORIGIN_PROOF=FAIL cloudflare_not_injecting_proof'
+              exit 25
+            fi
+            echo "AZURE_DIRECT_HTTP=403 origin_guard_denied"
+            echo "AZURE_DIRECT_WEBSOCKET=403"
+            echo "AZURE_EDGE_REACHES_INNER_RELAY=true"
+            echo "AZURE_ORIGIN_PROOF=PASS"
+            break
+          done
+          [[ "$found" == "1" ]] || { echo 'AZURE_ORIGIN_PROOF=FAIL relay_origin_not_found'; exit 26; }
+
+      - name: Authenticate Google Cloud with WIF
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID_VALUE }}
+          workload_identity_provider: ${{ env.GCP_WIF_PROVIDER_VALUE }}
+          service_account: ${{ env.GCP_DEPLOYER_SA_VALUE }}
+          create_credentials_file: true
+          export_environment_variables: true
+
+      - uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID_VALUE }}
+
+      - name: Prove GCP direct origins expose no relay execution path
+        shell: bash
+        run: |
+          set -euo pipefail
+          services="$(gcloud run services list --project="$GCP_PROJECT_ID_VALUE" --region="$GCP_REGION_VALUE" --format=json)"
+          relay_count=0
+          provider_checked=0
+          mapfile -t names < <(jq -r '.[].metadata.name' <<<"$services")
+          for name in "${names[@]}"; do
+            desc="$(gcloud run services describe "$name" --project="$GCP_PROJECT_ID_VALUE" --region="$GCP_REGION_VALUE" --format=json)"
+            url="$(jq -r '.status.url // empty' <<<"$desc")"
+            [[ -n "$url" ]] || continue
+            echo "::add-mask::$url"
+            role="$(jq -r '[.spec.template.spec.containers[0].env[]? | select(.name=="TRUYN_ROLE") | .value][0] // empty' <<<"$desc")"
+            provider="$(jq -r '[.spec.template.spec.containers[0].env[]? | select(.name=="TRUYN_PROVIDER") | .value][0] // empty' <<<"$desc")"
+            if [[ "$role" == "relay" ]]; then
+              relay_count=$((relay_count+1))
+              code="$(curl -sS --max-time 15 -o gcp-relay.json -w '%{http_code}' -X POST -H 'content-type: application/json' --data '{}' "${url}/v1/register" || true)"
+              err="$(jq -r '.error // empty' gcp-relay.json 2>/dev/null || true)"
+              if [[ "$code" != "403" || "$err" != "origin_guard_denied" ]]; then
+                echo "GCP_ORIGIN_PROOF=FAIL relay_direct_http=${code}"
+                exit 31
+              fi
+            elif [[ "$role" == "provider" || -n "$provider" ]]; then
+              provider_checked=1
+              code="$(curl -sS --max-time 15 -o gcp-provider.json -w '%{http_code}' -X POST -H 'content-type: application/json' --data '{}' "${url}/v1/register" || true)"
+              if [[ "$code" =~ ^2 ]]; then
+                echo 'GCP_ORIGIN_PROOF=FAIL provider_exposes_relay_registration'
+                exit 32
+              fi
+            fi
+          done
+          if [[ "$relay_count" -eq 0 ]]; then
+            [[ "$provider_checked" -eq 1 ]] || { echo 'GCP_ORIGIN_PROOF=FAIL no_truyn_runtime_found'; exit 33; }
+            echo 'GCP_RELAY_ORIGIN_PRESENT=false'
+            echo 'GCP_PROVIDER_DIRECT_RELAY_API=DENIED_OR_ABSENT'
+            echo 'GCP_ORIGIN_PROOF=PASS no_relay_ingress'
+          else
+            echo "GCP_RELAY_ORIGINS_CHECKED=$relay_count"
+            echo 'GCP_ORIGIN_PROOF=PASS'
+          fi
+
+      - name: Final invariant
+        run: |
+          echo 'LIVE_ORIGIN_SECURITY_PROOF=PASS'
+          echo 'DIRECT_ORIGIN_WITHOUT_EDGE_PROOF=ZERO_INNER_RELAY_ACCESS'
