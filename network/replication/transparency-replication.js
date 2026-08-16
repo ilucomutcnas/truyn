@@ -58,15 +58,21 @@ export class ReplicatedTransparencyService {
       this.node.addEventListener('peer:disconnect', () => this.#scheduleChurnReannounce());
       this.churnListenerInstalled = true;
     }
-    if (advertise) await this.advertise();
+    if (advertise) {
+      try {
+        await this.advertise();
+      } catch (error) {
+        // An empty newcomer may be unable to publish during topology churn before
+        // it has recovered a verified log. Keep the RPC service alive so it can
+        // discover a surviving replica and only advertise after signed recovery.
+        if (this.log.head().sequence > 0) throw error;
+      }
+    }
     return this.log.head();
   }
 
   #scheduleChurnReannounce() {
     if (!this.advertisingEnabled) return;
-    // Provider records in a small DHT may have been stored on the peer that just
-    // disappeared. Re-provide after routing topology changes so surviving replicas
-    // become discoverable through surviving peers instead of relying on stale state.
     for (const delayMs of [0, 250, 1_000]) {
       const timer = setTimeout(() => {
         if (this.node.status !== 'started' || !this.advertisingEnabled) return;
@@ -112,6 +118,7 @@ export class ReplicatedTransparencyService {
       await this.log.ingest(response.entries || []);
       local = this.log.head();
       if (response.head?.headHash !== local.headHash) throw new Error('transparency_pull_head_mismatch');
+      if (!this.advertisingEnabled && local.sequence > 0) await this.advertise();
       return { direction: 'pull', head: local, peerId: peerId.toString() };
     }
     if (local.sequence > remote.sequence) {
@@ -157,7 +164,7 @@ export class ReplicatedTransparencyService {
       error.code = 'transparency_recovery_source_not_found';
       throw error;
     }
-    await this.advertise();
+    if (!this.advertisingEnabled) await this.advertise();
     return { ...recovered, head: this.log.head() };
   }
 
