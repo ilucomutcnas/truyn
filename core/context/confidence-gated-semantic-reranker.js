@@ -22,6 +22,19 @@ function combineMetadata(parts) {
   return { usage, providerRequestBodyBytes, providerLatencyMs, repairAttemptsUsed };
 }
 
+function normalizeVerifierTiers(verifierCandidateTiers, maxCandidates) {
+  if (verifierCandidateTiers == null) return null;
+  if (!Array.isArray(verifierCandidateTiers) || verifierCandidateTiers.length < 1) {
+    throw new Error('verifierCandidateTiers must be a non-empty integer array when configured');
+  }
+  const tiers = [...new Set(verifierCandidateTiers)].sort((a, b) => a - b);
+  if (tiers.some((value) => !Number.isInteger(value) || value < 1 || value > maxCandidates)) {
+    throw new Error('verifierCandidateTiers values must be integers within maxCandidates');
+  }
+  if (tiers.at(-1) !== maxCandidates) tiers.push(maxCandidates);
+  return tiers;
+}
+
 /**
  * Confidence-gated semantic reranker.
  *
@@ -29,7 +42,12 @@ function combineMetadata(parts) {
  * Two independent cheap semantic judges inspect only the first cheapCandidateK
  * candidates. Their agreement is accepted only when the agreed passage also
  * remains inside the configured dense confidence rank. All other requests fail
- * closed into a stronger verifier over the complete candidate set.
+ * closed into a stronger verifier.
+ *
+ * When verifierCandidateTiers is configured, the fallback uses the smallest
+ * dense-prefix tier that contains both cheap selections, with maxCandidates as
+ * the final fail-closed tier. This reduces verifier context without using case,
+ * language, category, answer or expected-ID hints.
  *
  * Every provider-facing selection is delegated to createProviderSemanticReranker,
  * which replaces real block IDs/CIDs with request-local aliases. No provider in
@@ -43,6 +61,7 @@ export function createConfidenceGatedSemanticReranker({
   cheapCandidateK = 24,
   confidenceDenseRankMax = 12,
   maxCandidates = 64,
+  verifierCandidateTiers = null,
   liteProviderOptions = {},
   flashProviderOptions = {},
   verifierProviderOptions = {},
@@ -57,6 +76,7 @@ export function createConfidenceGatedSemanticReranker({
   if (!Number.isInteger(confidenceDenseRankMax) || confidenceDenseRankMax < 1 || confidenceDenseRankMax > cheapCandidateK) {
     throw new Error('confidenceDenseRankMax must be 1..cheapCandidateK');
   }
+  const verifierTiers = normalizeVerifierTiers(verifierCandidateTiers, maxCandidates);
 
   const lite = createProviderSemanticReranker({
     provider:liteProvider,
@@ -85,7 +105,8 @@ export function createConfidenceGatedSemanticReranker({
     cheapAccepted:0,
     verifierFallbacks:0,
     cheapDisagreements:0,
-    lowDenseConfidence:0
+    lowDenseConfidence:0,
+    verifierTierCounts:{}
   };
 
   async function rerank(query, candidates, { topK = 1 } = {}) {
@@ -101,9 +122,9 @@ export function createConfidenceGatedSemanticReranker({
       flash.rerank(query, cheapCandidates)
     ]);
     const agreement = liteResult.id === flashResult.id;
-    const agreedDenseRank = agreement
-      ? candidates.findIndex((candidate) => candidate.id === liteResult.id) + 1
-      : null;
+    const liteDenseRank = candidates.findIndex((candidate) => candidate.id === liteResult.id) + 1;
+    const flashDenseRank = candidates.findIndex((candidate) => candidate.id === flashResult.id) + 1;
+    const agreedDenseRank = agreement ? liteDenseRank : null;
     const cheapMetadata = combineMetadata([liteResult.metadata, flashResult.metadata]);
 
     if (agreement && agreedDenseRank > 0 && agreedDenseRank <= confidenceDenseRankMax) {
@@ -115,6 +136,8 @@ export function createConfidenceGatedSemanticReranker({
           routeMode:'cheap_confident',
           cheapAgreement:true,
           agreedDenseRank,
+          liteDenseRank,
+          flashDenseRank,
           cheapCandidateK,
           confidenceDenseRankMax,
           providerCandidateAliases:true
@@ -125,7 +148,14 @@ export function createConfidenceGatedSemanticReranker({
     metrics.verifierFallbacks += 1;
     if (!agreement) metrics.cheapDisagreements += 1;
     else metrics.lowDenseConfidence += 1;
-    const verified = await verifier.rerank(query, candidates);
+
+    const observedDenseRank = Math.max(liteDenseRank || maxCandidates, flashDenseRank || maxCandidates);
+    const verifierCandidateK = verifierTiers
+      ? (verifierTiers.find((tier) => tier >= observedDenseRank) || maxCandidates)
+      : maxCandidates;
+    metrics.verifierTierCounts[verifierCandidateK] = (metrics.verifierTierCounts[verifierCandidateK] || 0) + 1;
+
+    const verified = await verifier.rerank(query, candidates.slice(0, verifierCandidateK));
     const totalMetadata = combineMetadata([cheapMetadata, verified.metadata]);
     return {
       id:verified.id,
@@ -134,6 +164,9 @@ export function createConfidenceGatedSemanticReranker({
         routeMode:'verifier_fallback',
         cheapAgreement:agreement,
         agreedDenseRank,
+        liteDenseRank,
+        flashDenseRank,
+        verifierCandidateK,
         cheapCandidateK,
         confidenceDenseRankMax,
         providerCandidateAliases:true
@@ -146,9 +179,11 @@ export function createConfidenceGatedSemanticReranker({
     rerank,
     stats:() => ({
       ...metrics,
+      verifierTierCounts:{ ...metrics.verifierTierCounts },
       cheapCandidateK,
       confidenceDenseRankMax,
       maxCandidates,
+      verifierCandidateTiers:verifierTiers ? [...verifierTiers] : null,
       lite:lite.stats(),
       flash:flash.stats(),
       verifier:verifier.stats(),
