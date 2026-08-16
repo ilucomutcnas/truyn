@@ -35,6 +35,18 @@ function normalizeVerifierTiers(verifierCandidateTiers, maxCandidates) {
   return tiers;
 }
 
+function normalizeStabilityRanks(stabilityRecheckDenseRanks, confidenceDenseRankMax) {
+  if (stabilityRecheckDenseRanks == null) return null;
+  if (!Array.isArray(stabilityRecheckDenseRanks) || stabilityRecheckDenseRanks.length < 1) {
+    throw new Error('stabilityRecheckDenseRanks must be a non-empty integer array when configured');
+  }
+  const ranks = [...new Set(stabilityRecheckDenseRanks)].sort((a, b) => a - b);
+  if (ranks.some((value) => !Number.isInteger(value) || value < 1 || value > confidenceDenseRankMax)) {
+    throw new Error('stabilityRecheckDenseRanks values must be integers within confidenceDenseRankMax');
+  }
+  return ranks;
+}
+
 /**
  * Confidence-gated semantic reranker.
  *
@@ -44,17 +56,17 @@ function normalizeVerifierTiers(verifierCandidateTiers, maxCandidates) {
  * remains inside the configured dense confidence rank. All other requests fail
  * closed into a stronger verifier.
  *
- * The default confidence boundary is 15. On the immutable 600-block / 360-query
- * Semantic Retrieval Gate v2 workload this generic boundary preserves the fixed
- * >=99% overall, per-language, and per-category accuracy gates while reducing
- * strong-verifier fallback enough to clear the fixed economic gate. The rule is
- * case-agnostic: it uses only cheap-judge agreement and dense rank, never case
- * id, language, category, expected answer, or block identity.
- *
  * When verifierCandidateTiers is configured, the fallback uses the smallest
- * dense-prefix tier that contains both cheap selections, with maxCandidates as
- * the final fail-closed tier. This reduces verifier context without using case,
- * language, category, answer or expected-ID hints.
+ * dense-prefix tier that contains all observed cheap selections, with
+ * maxCandidates as the final fail-closed tier. This reduces verifier context
+ * without using case, language, category, answer or expected-ID hints.
+ *
+ * stabilityRecheckDenseRanks optionally hardens selected dense ranks against
+ * stochastic or position-sensitive false agreement. For those ranks only, both
+ * cheap judges are repeated with the candidate order reversed. The cheap result
+ * is accepted only if both repeated selections resolve to the same original
+ * passage as the initial agreement. Any instability fails closed to the strong
+ * verifier. The rule is generic and uses only observed rank and reproducibility.
  *
  * Every provider-facing selection is delegated to createProviderSemanticReranker,
  * which replaces real block IDs/CIDs with request-local aliases. No provider in
@@ -69,6 +81,7 @@ export function createConfidenceGatedSemanticReranker({
   confidenceDenseRankMax = 15,
   maxCandidates = 64,
   verifierCandidateTiers = null,
+  stabilityRecheckDenseRanks = null,
   liteProviderOptions = {},
   flashProviderOptions = {},
   verifierProviderOptions = {},
@@ -84,6 +97,7 @@ export function createConfidenceGatedSemanticReranker({
     throw new Error('confidenceDenseRankMax must be 1..cheapCandidateK');
   }
   const verifierTiers = normalizeVerifierTiers(verifierCandidateTiers, maxCandidates);
+  const stabilityRanks = normalizeStabilityRanks(stabilityRecheckDenseRanks, confidenceDenseRankMax);
 
   const lite = createProviderSemanticReranker({
     provider:liteProvider,
@@ -113,6 +127,8 @@ export function createConfidenceGatedSemanticReranker({
     verifierFallbacks:0,
     cheapDisagreements:0,
     lowDenseConfidence:0,
+    stabilityRechecks:0,
+    stabilityFailures:0,
     verifierTierCounts:{}
   };
 
@@ -132,21 +148,52 @@ export function createConfidenceGatedSemanticReranker({
     const liteDenseRank = candidates.findIndex((candidate) => candidate.id === liteResult.id) + 1;
     const flashDenseRank = candidates.findIndex((candidate) => candidate.id === flashResult.id) + 1;
     const agreedDenseRank = agreement ? liteDenseRank : null;
-    const cheapMetadata = combineMetadata([liteResult.metadata, flashResult.metadata]);
+    let cheapMetadata = combineMetadata([liteResult.metadata, flashResult.metadata]);
 
-    if (agreement && agreedDenseRank > 0 && agreedDenseRank <= confidenceDenseRankMax) {
+    let stabilityChecked = false;
+    let stabilityPassed = true;
+    let stabilityLiteDenseRank = null;
+    let stabilityFlashDenseRank = null;
+    if (agreement && stabilityRanks?.includes(agreedDenseRank)) {
+      stabilityChecked = true;
+      metrics.stabilityRechecks += 1;
+      const reversedCandidates = [...cheapCandidates].reverse();
+      const [liteStability, flashStability] = await Promise.all([
+        lite.rerank(query, reversedCandidates),
+        flash.rerank(query, reversedCandidates)
+      ]);
+      stabilityLiteDenseRank = candidates.findIndex((candidate) => candidate.id === liteStability.id) + 1;
+      stabilityFlashDenseRank = candidates.findIndex((candidate) => candidate.id === flashStability.id) + 1;
+      stabilityPassed = liteStability.id === liteResult.id
+        && flashStability.id === flashResult.id
+        && liteStability.id === flashStability.id;
+      cheapMetadata = combineMetadata([
+        liteResult.metadata,
+        flashResult.metadata,
+        liteStability.metadata,
+        flashStability.metadata
+      ]);
+      if (!stabilityPassed) metrics.stabilityFailures += 1;
+    }
+
+    if (agreement && agreedDenseRank > 0 && agreedDenseRank <= confidenceDenseRankMax && stabilityPassed) {
       metrics.cheapAccepted += 1;
       return {
         id:liteResult.id,
         metadata:{
           ...cheapMetadata,
-          routeMode:'cheap_confident',
+          routeMode:stabilityChecked ? 'cheap_stable' : 'cheap_confident',
           cheapAgreement:true,
           agreedDenseRank,
           liteDenseRank,
           flashDenseRank,
+          stabilityChecked,
+          stabilityPassed,
+          stabilityLiteDenseRank,
+          stabilityFlashDenseRank,
           cheapCandidateK,
           confidenceDenseRankMax,
+          stabilityRecheckDenseRanks:stabilityRanks ? [...stabilityRanks] : null,
           providerCandidateAliases:true
         }
       };
@@ -154,9 +201,12 @@ export function createConfidenceGatedSemanticReranker({
 
     metrics.verifierFallbacks += 1;
     if (!agreement) metrics.cheapDisagreements += 1;
+    else if (stabilityChecked && !stabilityPassed) metrics.stabilityFailures += 0;
     else metrics.lowDenseConfidence += 1;
 
-    const observedDenseRank = Math.max(liteDenseRank || maxCandidates, flashDenseRank || maxCandidates);
+    const observedRanks = [liteDenseRank, flashDenseRank, stabilityLiteDenseRank, stabilityFlashDenseRank]
+      .filter((rank) => Number.isInteger(rank) && rank > 0);
+    const observedDenseRank = observedRanks.length > 0 ? Math.max(...observedRanks) : maxCandidates;
     const verifierCandidateK = verifierTiers
       ? (verifierTiers.find((tier) => tier >= observedDenseRank) || maxCandidates)
       : maxCandidates;
@@ -168,14 +218,19 @@ export function createConfidenceGatedSemanticReranker({
       id:verified.id,
       metadata:{
         ...totalMetadata,
-        routeMode:'verifier_fallback',
+        routeMode:stabilityChecked && !stabilityPassed ? 'stability_verifier_fallback' : 'verifier_fallback',
         cheapAgreement:agreement,
         agreedDenseRank,
         liteDenseRank,
         flashDenseRank,
+        stabilityChecked,
+        stabilityPassed,
+        stabilityLiteDenseRank,
+        stabilityFlashDenseRank,
         verifierCandidateK,
         cheapCandidateK,
         confidenceDenseRankMax,
+        stabilityRecheckDenseRanks:stabilityRanks ? [...stabilityRanks] : null,
         providerCandidateAliases:true
       }
     };
@@ -191,6 +246,7 @@ export function createConfidenceGatedSemanticReranker({
       confidenceDenseRankMax,
       maxCandidates,
       verifierCandidateTiers:verifierTiers ? [...verifierTiers] : null,
+      stabilityRecheckDenseRanks:stabilityRanks ? [...stabilityRanks] : null,
       lite:lite.stats(),
       flash:flash.stats(),
       verifier:verifier.stats(),
