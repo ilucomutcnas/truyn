@@ -17,11 +17,13 @@ Human-facing documentation for TRUYN architecture, concepts, setup, operations, 
 - [Production Semantic Index Lifecycle](architecture/SEMANTIC_INDEX_LIFECYCLE.md) — persistent root-CID index lifecycle, immutable block-vector reuse, explicit preparation, invalidation, and cold/warm startup for Semantic Retrieval Gate v2.
 - [Semantic Retrieval Scale Gate v3](architecture/SEMANTIC_SCALE_GATE_V3.md) — implemented and measured 600 → 10,000 → 100,000-block scale architecture, sharded durable vectors, fixed semantic/privacy/economic gates, latency definitions, and 100/1,000-node exercises.
 - [Distributed Semantic Retrieval](architecture/DISTRIBUTED_SEMANTIC_RETRIEVAL.md) — implemented network primitive where immutable blocks may live on multiple signed nodes: root-CID discovery, authorized partition holders, bounded candidate transfer, holder receipts, content-addressed provenance, replica placement, and fail-closed coverage.
+- [Decentralized Placement and Byzantine Read Quorum](architecture/DECENTRALIZED_PLACEMENT_BYZANTINE_RETRIEVAL.md) — relay-independent signed placement discovery using rendezvous DHT-style placement, gossip/federation, independent directory HTTP boundaries, Trustability-aware replica selection, and distinct-holder immutable-CID read quorum.
 
 ### Trustability
 
 - [Trustability index](trustability/README.md) — separates retrieval integrity, claim evidence and node operational trust.
 - [Claim-Centric Trustability v1](trustability/CLAIM_TRUSTABILITY_V1.md) — implemented signed `CLAIM` / `ATTEST`, provenance graph, conservative source-lineage independence, network verifier discovery and signed `TRUST_RECEIPT` mechanics.
+- [Active Trustability Lifecycle v2](trustability/ACTIVE_TRUST_LIFECYCLE_V2.md) — implemented signed `CHALLENGE → VERIFY → DISPUTE`, certified source-lineage commitments, freshness, issuer-authoritative revocation and network verifier challenge/response semantics.
 
 ### Provider and edge architecture
 
@@ -42,6 +44,7 @@ Human-facing documentation for TRUYN architecture, concepts, setup, operations, 
 - [Semantic Concurrent Load — 2026-08-16](benchmarks/SEMANTIC_CONCURRENT_LOAD_2026-08-16.md) — signed multi-agent concurrent NEED and semantic-work single-flight proof, including the preserved 256-event relay queue boundary failure.
 - [Distributed Semantic Retrieval — 2026-08-16](benchmarks/DISTRIBUTED_SEMANTIC_RETRIEVAL_2026-08-16.md) — 600-block / four-partition / five-holder network proof with a replica, 48/48 correct retrieval, 100% provenance/minimal/no-ID, zero unauthorized holder work and 90.025% measured context-payload reduction.
 - [Claim-Centric Trustability v1 — 2026-08-16](benchmarks/CLAIM_TRUSTABILITY_V1_2026-08-16.md) — 600-case evidence-state/resistance proof with zero correlated-echo or unknown-lineage-Sybil false verification, zero missed disputes/retrieval tamper, and signed tamper-evident trust receipts.
+- [Trust Network v2 — 2026-08-16](benchmarks/TRUST_NETWORK_V2_2026-08-16.md) — 1,000-case decentralized-placement / Byzantine-quorum / active-Trustability resistance proof plus functional independent-directory and network-verifier evidence.
 - [Multimodal Provider Parity Benchmark](benchmarks/MULTIMODAL_PROVIDER_PARITY.md) — public apples-to-apples methodology for reasoning, image and video comparisons.
 
 ### Benchmark documentation boundary
