@@ -1,0 +1,24 @@
+{
+  "benchmark": "TRUYN Semantic v2 Qwen3-Reranker-0.6B instruction-aware hard-pair diagnostic",
+  "generatedAt": "2026-08-16T05:38:01.765194+00:00",
+  "sourceSha": "6f2ddf743e83ad1704a831a7058a93ad668c6a69",
+  "githubActionsRunId": 31929412830,
+  "githubActionsArtifactId": 9258846173,
+  "artifactDigest": "sha256:c3ac5f049c5657444f60ef283f708cc6135011e5417fe4537b9b43d3e7093c03",
+  "model": "Qwen/Qwen3-Reranker-0.6B",
+  "modelRevision": "5340c0261aa49a842d1bff01db91ce407bda87a2",
+  "license": "Apache-2.0",
+  "instruction": "Given the retrieval query, judge whether the authoritative document satisfies every material semantic constraint. The subject or domain, the required operational action, and the state/condition/scope must all match. If the document conflicts with any one material constraint, including the required action even when domain and condition match, judge it not relevant.",
+  "runtime": {"python":"3.12.13","torch":"2.8.0+cpu","device":"cpu","modelLoadMs":7852.002,"totalScoringMs":22308.598},
+  "cases": [
+    {"caseIndex":5,"queryForm":"original","targetScore":0.9996390342712402,"wrongScore":0.9996479749679565,"margin":-0.000008940696716308594,"selectedExpected":false},
+    {"caseIndex":5,"queryForm":"canonical","targetScore":0.9997126460075378,"wrongScore":0.9967357516288757,"margin":0.0029768943786621094,"selectedExpected":true},
+    {"caseIndex":241,"queryForm":"original","targetScore":0.9991069436073303,"wrongScore":0.9990317821502686,"margin":0.00007516145706176758,"selectedExpected":true},
+    {"caseIndex":241,"queryForm":"canonical","targetScore":0.9987012147903442,"wrongScore":0.9997275471687317,"margin":-0.0010263323783874512,"selectedExpected":false},
+    {"caseIndex":269,"queryForm":"original","targetScore":0.9995050430297852,"wrongScore":0.9995511174201965,"margin":-0.00004607439041137695,"selectedExpected":false},
+    {"caseIndex":269,"queryForm":"canonical","targetScore":0.9980276226997375,"wrongScore":0.9964814186096191,"margin":0.0015462040901184082,"selectedExpected":true}
+  ],
+  "originalQuery":{"correct":1,"total":3,"passed":false},
+  "canonicalQuery":{"correct":2,"total":3,"passed":false},
+  "conclusion":"Qwen3-Reranker-0.6B is rejected as the final v2 reranker. The instruction-aware yes/no probabilities were highly saturated for both expected and wrong near-duplicate passages and neither original nor canonical query path reached 3/3. No corpus-wide run is justified."
+}
