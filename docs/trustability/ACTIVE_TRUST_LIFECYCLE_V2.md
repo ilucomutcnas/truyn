@@ -1,6 +1,8 @@
 # TRUYN Active Trustability Lifecycle v2
 
-Status: **implemented protocol primitive; deterministic resistance benchmark pending**
+Status: **implemented and measured deterministic/network-functional PASS**
+
+Measured evidence: [`TRUST_NETWORK_V2_2026-08-16.md`](../benchmarks/TRUST_NETWORK_V2_2026-08-16.md) — 1,000/1,000 resistance cases plus network-functional proof with two independent verifier nodes returning signed ATTEST + VERIFY objects and satisfying certified-lineage independence.
 
 Claim-Centric Trustability v1 separated retrieval integrity from claim truth assessment. Active Trustability v2 adds lifecycle state around that assessment:
 
@@ -156,6 +158,8 @@ Existing claim states such as `verified`, `contradicted`, `insufficient_independ
 ## 7. CHALLENGE → VERIFY → DISPUTE network semantics
 
 The objects are transport-neutral. A verifier can receive a CHALLENGE through TRUYN capability routing, perform an independent verification behavior, emit its normal signed ATTEST, then emit VERIFY binding that ATTEST to the challenge.
+
+A measured functional test now exercises this network path with two independently signed verifier identities. The coordinator discovers both through the canonical claim-verifier capability contract, routes the challenge, verifies both returned signer identities and challenge bindings, then admits their ATTESTs only after certified-lineage checks.
 
 A DISPUTE is not the same as an ATTEST verdict of `contradict`:
 
