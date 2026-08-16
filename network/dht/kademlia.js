@@ -94,7 +94,8 @@ export function verifyDhtRecord(record, { now = Date.now(), allowExpired = false
     const valueDigest = `sha256:${createHash('sha256').update(canonicalize(record.value)).digest('hex')}`;
     if (valueDigest !== record.valueDigest) return { ok: false, reason: 'dht_value_digest_mismatch' };
     const { publicKey, signature, ...signed } = record;
-    const expectedId = `truyn:dht:${createHash('sha256').update(canonicalize(({ recordId, ...rest }) => rest)(signed))).digest('hex')}`;
+    const { recordId, ...body } = signed;
+    const expectedId = `truyn:dht:${createHash('sha256').update(canonicalize(body)).digest('hex')}`;
     if (record.recordId !== expectedId) return { ok: false, reason: 'dht_record_id_mismatch' };
     if (!verifyValue(signed, signature, publicKey)) return { ok: false, reason: 'dht_record_signature' };
     const issued = Date.parse(record.issuedAt);
