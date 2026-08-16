@@ -1,0 +1,31 @@
+{
+  "benchmark": "TRUYN Semantic v2 BAAI/bge-reranker-v2-m3 hard-pair diagnostic",
+  "generatedAt": "2026-08-16T05:32:05.771518+00:00",
+  "sourceSha": "6f2ddf743e83ad1704a831a7058a93ad668c6a69",
+  "githubActionsRunId": 31929161785,
+  "githubActionsArtifactId": 9258785365,
+  "artifactDigest": "sha256:8809250397bb6129868b04de0345d96349b7062e28b064512f77e5871f2c2ab7",
+  "model": "BAAI/bge-reranker-v2-m3",
+  "modelRevision": "c0abf900d43de6a2652b9acd221bb1b45ab65d6e",
+  "license": "Apache-2.0",
+  "runtime": {
+    "python": "3.12.13",
+    "torch": "2.8.0+cu128",
+    "device": "cpu",
+    "modelLoadMs": 9965.096,
+    "totalScoringMs": 6304.693
+  },
+  "modelVisibleInput": "query text + passage text only; TRUYN block ids were not supplied to the model",
+  "cases": [
+    {"caseIndex":5,"queryLanguage":"en","category":"adversarial_near_duplicate","queryForm":"original","targetScore":0.7004956007003784,"wrongScore":1.1428834199905396,"marginTargetMinusWrong":-0.44238781929016113,"selectedExpected":false,"pairScoreLatencyMs":1093.132},
+    {"caseIndex":5,"queryLanguage":"en","category":"adversarial_near_duplicate","queryForm":"canonical","targetScore":-1.3297433853149414,"wrongScore":-0.6022239327430725,"marginTargetMinusWrong":-0.7275194525718689,"selectedExpected":false,"pairScoreLatencyMs":1078.914},
+    {"caseIndex":241,"queryLanguage":"tr","category":"cross_language","queryForm":"original","targetScore":0.6426598429679871,"wrongScore":2.367926597595215,"marginTargetMinusWrong":-1.7252667546272278,"selectedExpected":false,"pairScoreLatencyMs":1068.156},
+    {"caseIndex":241,"queryLanguage":"tr","category":"cross_language","queryForm":"canonical","targetScore":-0.3317531645298004,"wrongScore":-0.619351327419281,"marginTargetMinusWrong":0.2875981628894806,"selectedExpected":true,"pairScoreLatencyMs":1049.01},
+    {"caseIndex":269,"queryLanguage":"en","category":"adversarial_near_duplicate","queryForm":"original","targetScore":-2.5186378955841064,"wrongScore":1.7303045988082886,"marginTargetMinusWrong":-4.248942494392395,"selectedExpected":false,"pairScoreLatencyMs":1021.326},
+    {"caseIndex":269,"queryLanguage":"en","category":"adversarial_near_duplicate","queryForm":"canonical","targetScore":-3.0425262451171875,"wrongScore":-3.468090534210205,"marginTargetMinusWrong":0.4255642890930176,"selectedExpected":true,"pairScoreLatencyMs":994.157}
+  ],
+  "originalQuery": {"correct":0,"total":3,"passed":false},
+  "canonicalQuery": {"correct":2,"total":3,"passed":false},
+  "eligibleHardSetPassed": false,
+  "conclusion": "BAAI/bge-reranker-v2-m3 is rejected as the final Semantic Retrieval Gate v2 reranker. Evidence-backed canonical operational queries materially improved the hard set from 0/3 to 2/3, proving the query-compiler signal is useful, but case 5 remained a semantic near-duplicate failure. No corpus-wide run is justified for this model."
+}
