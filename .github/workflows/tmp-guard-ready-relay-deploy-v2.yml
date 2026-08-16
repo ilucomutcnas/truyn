@@ -1,0 +1,85 @@
+name: Temporary Guard-Ready Relay Deployment v2
+
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/tmp-guard-ready-relay-deploy-v2.yml']
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      AZURE_CLIENT_ID_VALUE: ${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID_VALUE: ${{ vars.AZURE_TENANT_ID || secrets.AZURE_TENANT_ID }}
+      AZURE_SUBSCRIPTION_ID_VALUE: ${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}
+      PUBLIC_RELAY_URL: https://relay.truyn.org
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install dependencies and prove guard tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --no-audit --no-fund
+          node --test tests/origin-guard.test.js
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID_VALUE }}
+          tenant-id: ${{ env.AZURE_TENANT_ID_VALUE }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID_VALUE }}
+      - name: Install Container Apps CLI extension
+        shell: bash
+        run: az extension add --name containerapp --upgrade --only-show-errors >/dev/null
+      - name: Build and deploy current main to relay only
+        shell: bash
+        run: |
+          set -euo pipefail
+          SUCCESS=0; APP=''; RG=''; OLD_IMAGE=''; NEW_IMAGE=''
+          mask(){ [[ -n "${1:-}" ]] && echo "::add-mask::$1"; }
+          health(){ local n="${1:-50}" c; for _ in $(seq 1 "$n"); do c="$(curl -sS --max-time 10 -D /tmp/h.headers -o /tmp/h.body -w '%{http_code}' "$PUBLIC_RELAY_URL/health" || true)"; [[ "$c" == 200 ]] && grep -qi '^cf-ray:' /tmp/h.headers && return 0; sleep 3; done; return 1; }
+          rollback(){ set +e; [[ "$SUCCESS" == 1 ]] && { echo 'RELAY_DEPLOY_CLEANUP=PASS new_image_retained=true'; return; }; if [[ -n "$APP" && -n "$OLD_IMAGE" ]]; then echo 'RELAY_DEPLOY_ROLLBACK=START'; az containerapp update -g "$RG" -n "$APP" --image "$OLD_IMAGE" --only-show-errors >/dev/null 2>&1 || true; health 80 && echo 'RELAY_DEPLOY_ROLLBACK=PASS public_health=200 cloudflare=true' || echo 'RELAY_DEPLOY_ROLLBACK=FAIL'; fi; }
+          trap rollback EXIT
+
+          found=0
+          while IFS=$'\t' read -r name rg fqdn; do
+            [[ -n "$fqdn" ]] || continue
+            j="$(az containerapp show -g "$rg" -n "$name" -o json)"
+            role="$(jq -r '[.properties.template.containers[0].env[]? | select(.name=="TRUYN_ROLE") | .value][0] // empty' <<<"$j")"
+            [[ "$role" == relay || "$name" == *relay* ]] || continue
+            found=1; APP="$name"; RG="$rg"; OLD_IMAGE="$(jq -r '.properties.template.containers[0].image // empty' <<<"$j")"
+            gv="$(jq '[.properties.template.containers[0].env[]? | select(.name=="TRUYN_ORIGIN_GUARD" or .name=="TRUYN_ORIGIN_GUARD_TOKEN")]|length' <<<"$j")"
+            [[ "$gv" == 0 ]] || { echo 'RELAY_DEPLOY=FAIL guard_env_dirty'; exit 10; }
+            mask "$APP"; mask "$RG"; mask "$fqdn"; mask "$OLD_IMAGE"; break
+          done < <(az containerapp list --query "[?properties.configuration.ingress.external==\`true\`].[name,resourceGroup,properties.configuration.ingress.fqdn]" -o tsv)
+          [[ "$found" == 1 && -n "$OLD_IMAGE" ]] || { echo 'RELAY_DEPLOY=FAIL relay_not_found'; exit 11; }
+
+          registry="${OLD_IMAGE%%/*}"; [[ "$registry" == *.azurecr.io ]] || { echo 'RELAY_DEPLOY=FAIL registry_not_acr'; exit 12; }; mask "$registry"
+          acr="$(az acr list --query "[?loginServer=='${registry}'].name | [0]" -o tsv)"; [[ -n "$acr" ]] || { echo 'RELAY_DEPLOY=FAIL acr_not_found'; exit 13; }; mask "$acr"
+          tail="${OLD_IMAGE#*/}"; repo="$(sed -E 's/@sha256:[0-9a-fA-F]+$//; s/:[^/:]+$//' <<<"$tail")"; [[ -n "$repo" && "$repo" != "$tail" ]] || repo='truyn-relay'
+          tag="guard-${GITHUB_SHA:0:12}"; NEW_IMAGE="${registry}/${repo}:${tag}"; mask "$NEW_IMAGE"
+
+          health 20 || { echo 'RELAY_DEPLOY=FAIL baseline_health'; exit 20; }
+          BREG="$(curl -sS --max-time 12 -o /tmp/breg -w '%{http_code}' -X POST -H 'content-type: application/json' --data '{}' "$PUBLIC_RELAY_URL/v1/register" || true)"; BERR="$(jq -r '.error//""' /tmp/breg 2>/dev/null || true)"
+          jq -e 'type=="object"' /tmp/breg >/dev/null || { echo 'RELAY_DEPLOY=FAIL baseline_json'; exit 21; }
+          BWS="$(curl -sS --http1.1 --max-time 12 -o /tmp/bws -w '%{http_code}' -H 'Connection: Upgrade' -H 'Upgrade: websocket' -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' "$PUBLIC_RELAY_URL/v1/fast/socket?nodeId=deploy-proof" || true)"; [[ "$BWS" != 000 && ! "$BWS" =~ ^5 ]] || { echo "RELAY_DEPLOY=FAIL baseline_ws=${BWS}"; exit 22; }
+          echo 'RELAY_DEPLOY_BASELINE=PASS'
+
+          az acr build --registry "$acr" --image "${repo}:${tag}" --file Dockerfile . --no-logs >/dev/null
+          echo 'RELAY_BUILD=PASS current_main=true origin_guard_tested=true'
+          az containerapp update -g "$RG" -n "$APP" --image "$NEW_IMAGE" --only-show-errors >/dev/null
+          health 80 || { echo 'RELAY_DEPLOY=FAIL post_health'; exit 30; }
+
+          NREG="$(curl -sS --max-time 12 -o /tmp/nreg -w '%{http_code}' -X POST -H 'content-type: application/json' --data '{}' "$PUBLIC_RELAY_URL/v1/register" || true)"; NERR="$(jq -r '.error//""' /tmp/nreg 2>/dev/null || true)"; [[ "$NREG" == "$BREG" && "$NERR" == "$BERR" ]] || { echo "RELAY_DEPLOY=FAIL http_changed before=${BREG}:${BERR} after=${NREG}:${NERR}"; exit 31; }
+          NWS="$(curl -sS --http1.1 --max-time 12 -o /tmp/nws -w '%{http_code}' -H 'Connection: Upgrade' -H 'Upgrade: websocket' -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' "$PUBLIC_RELAY_URL/v1/fast/socket?nodeId=deploy-proof" || true)"; [[ "$NWS" == "$BWS" ]] || { echo "RELAY_DEPLOY=FAIL ws_changed before=${BWS} after=${NWS}"; exit 32; }
+          live="$(az containerapp show -g "$RG" -n "$APP" -o json)"; [[ "$(jq -r '.properties.template.containers[0].image' <<<"$live")" == "$NEW_IMAGE" ]] || { echo 'RELAY_DEPLOY=FAIL image_not_live'; exit 33; }
+          rev="$(jq -r '.properties.latestRevisionName // empty' <<<"$live")"; mask "$rev"; [[ -n "$rev" ]] || { echo 'RELAY_DEPLOY=FAIL revision_missing'; exit 34; }
+          rj="$(az containerapp revision show -g "$RG" -n "$APP" --revision "$rev" -o json)"; p="$(jq -r '.properties.provisioningState // "unknown"' <<<"$rj")"; r="$(jq -r '.properties.runningState // "unknown"' <<<"$rj")"; [[ "$p" == Succeeded || "$p" == Provisioned ]] || { echo "RELAY_DEPLOY=FAIL provisioning=${p}"; exit 35; }; [[ "$r" == Running* ]] || { echo "RELAY_DEPLOY=FAIL running=${r}"; exit 36; }
+          SUCCESS=1
+          echo 'RELAY_DEPLOY=PASS public_health=200 http_baseline_equivalent=true websocket_baseline_equivalent=true'
+          echo 'RELAY_IMAGE_GUARD_CODE=LIVE'
