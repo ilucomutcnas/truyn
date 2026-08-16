@@ -18,6 +18,8 @@ export class ReplicatedTransparencyService {
     this.maxMessageBytes = maxMessageBytes;
     this.routingTimeoutMs = routingTimeoutMs;
     this.started = false;
+    this.advertisePromise = null;
+    this.churnListenerInstalled = false;
   }
 
   async start() {
@@ -51,12 +53,38 @@ export class ReplicatedTransparencyService {
       });
       this.started = true;
     }
+    if (!this.churnListenerInstalled) {
+      this.node.addEventListener('peer:disconnect', () => this.#scheduleChurnReannounce());
+      this.churnListenerInstalled = true;
+    }
     await this.advertise();
     return this.log.head();
   }
 
+  #scheduleChurnReannounce() {
+    // Provider records in a small DHT may have been stored on the peer that just
+    // disappeared. Re-provide after routing topology changes so surviving replicas
+    // become discoverable through surviving peers instead of relying on stale state.
+    for (const delayMs of [0, 250, 1_000]) {
+      const timer = setTimeout(() => {
+        if (!this.node.isStarted?.()) return;
+        this.advertise().catch(() => {});
+      }, delayMs);
+      timer.unref?.();
+    }
+  }
+
   async advertise() {
-    await this.node.contentRouting.provide(await transparencyReplicationCid(this.log.sourceOwnerId), { signal: AbortSignal.timeout(this.routingTimeoutMs) });
+    if (this.advertisePromise) return this.advertisePromise;
+    this.advertisePromise = (async () => {
+      const cid = await transparencyReplicationCid(this.log.sourceOwnerId);
+      await this.node.contentRouting.provide(cid, { signal: AbortSignal.timeout(this.routingTimeoutMs) });
+    })();
+    try {
+      await this.advertisePromise;
+    } finally {
+      this.advertisePromise = null;
+    }
   }
 
   async #headFor(peerId, timeoutMs) {
