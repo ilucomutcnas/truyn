@@ -222,7 +222,6 @@ export class FederatedByzantineContextCoordinator {
       networkBytes
     });
     result.provenance.discovery = 'dht-gossip-federation';
-    result.provenance.byztantine = undefined;
     result.provenance.byzantine = {
       replicaReads: this.replicaReads,
       quorum: this.quorum,
