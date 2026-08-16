@@ -1,0 +1,102 @@
+name: Ephemeral Semantic v2 LOW Verifier Full 360
+
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/tmp-semantic-v2-low-verifier-full.yml']
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      GCP_PROJECT_ID_VALUE: ${{ vars.GCP_PROJECT_ID || secrets.GCP_PROJECT_ID }}
+      GCP_WIF_PROVIDER_VALUE: ${{ vars.GCP_WIF_PROVIDER || secrets.GCP_WIF_PROVIDER }}
+      GCP_DEPLOYER_SA_VALUE: ${{ vars.GCP_DEPLOYER_SERVICE_ACCOUNT_EMAIL || secrets.GCP_DEPLOYER_SERVICE_ACCOUNT_EMAIL }}
+      GCP_RUNTIME_SA_VALUE: ${{ vars.GCP_RUNTIME_SERVICE_ACCOUNT_EMAIL || secrets.GCP_RUNTIME_SERVICE_ACCOUNT_EMAIL }}
+      GCP_PROXY_REGION: us-east4
+      GCP_AR_REPO: truyn-poc
+      GCP_PROXY_SERVICE: truyn-semanticv2-low-${{ github.run_id }}
+      SEMANTIC_V2_SOURCE_SHA: 6f2ddf743e83ad1704a831a7058a93ad668c6a69
+      SEMANTIC_V2_PROXY_SHA: c1ea39a3f5a0408035fea7f00604ff14310eda10
+      SEMANTIC_V2_CORPUS_SOURCE: /tmp/semantic-retrieval-v2.js
+      SEMANTIC_V2_OUTPUT: semantic-v2-low-verifier-full.json
+      ROUTING_COST_BUDGET_USD_PER_QUERY: '0.00395'
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { persist-credentials: false }
+      - uses: actions/setup-node@v4
+        with: { node-version: '24' }
+      - run: npm install --ignore-scripts --no-audit --no-fund
+      - name: Validate and pin benchmark-local routing policy
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --test tests/confidence-gated-semantic-reranker*.test.js
+          node <<'NODE'
+          const fs=require('node:fs');
+          const p='benchmarks/semantic-v2-stability-full.js';
+          let s=fs.readFileSync(p,'utf8');
+          const edits=[
+            ['confidenceDenseRankMax:15','confidenceDenseRankMax:12'],
+            ['verifierCandidateTiers:null','verifierCandidateTiers:[16,64]'],
+            ["verifierProviderOptions:{ temperature:0, maxOutputTokens:1024, responseMimeType:'application/json', responseSchema:schema }","verifierProviderOptions:{ thinkingLevel:'LOW', temperature:0, maxOutputTokens:768, responseMimeType:'application/json', responseSchema:schema }"],
+            ['confidenceDenseRankMax:15,','confidenceDenseRankMax:12,'],
+            ['verifierCandidateTiers:null,','verifierCandidateTiers:[16,64],'],
+            ["stabilityRecheck:'when both cheap judges agree on dense rank 2, repeat Lite only with reversed candidate order; accept only the same original passage, otherwise fail closed to Gemini 3.1 Pro over dense top 64'","stabilityRecheck:'when both cheap judges agree on dense rank 2, repeat Lite only with reversed candidate order; accept only the same original passage, otherwise fail closed to Gemini 3.1 Pro using the smallest safe dense tier (top 16 or top 64)'"],
+          ];
+          for(const [from,to] of edits){ if(!s.includes(from)) throw new Error('missing patch marker: '+from); s=s.replace(from,to); }
+          s=s.replace("privacy:'provider-bound payload is rejected if a semantic-record block id or ids[] field is present'","verifierThinkingLevel:'LOW', verifierMaxOutputTokens:768, privacy:'provider-bound payload is rejected if a semantic-record block id or ids[] field is present'");
+          fs.writeFileSync(p,s);
+          NODE
+          node --check benchmarks/semantic-v2-stability-full.js
+      - name: Load immutable corpus and proxy sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          load_file(){ curl -fsSL -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" "https://api.github.com/repos/${GITHUB_REPOSITORY}/contents/$1?ref=$2" | jq -r '.content' | tr -d '\n' | base64 -d > "$3"; }
+          load_file benchmarks/semantic-retrieval-v2.js "$SEMANTIC_V2_SOURCE_SHA" /tmp/semantic-retrieval-v2.js
+          load_file benchmarks/semantic-v2-gcp-proxy.js "$SEMANTIC_V2_PROXY_SHA" benchmarks/semantic-v2-gcp-proxy.js
+          load_file benchmarks/Dockerfile.semantic-v2-gcp-proxy "$SEMANTIC_V2_PROXY_SHA" benchmarks/Dockerfile.semantic-v2-gcp-proxy
+      - uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID_VALUE }}
+          workload_identity_provider: ${{ env.GCP_WIF_PROVIDER_VALUE }}
+          service_account: ${{ env.GCP_DEPLOYER_SA_VALUE }}
+          create_credentials_file: true
+          export_environment_variables: true
+      - uses: google-github-actions/setup-gcloud@v3
+        with: { project_id: '${{ env.GCP_PROJECT_ID_VALUE }}' }
+      - name: Prepare isolated Vertex proxy
+        shell: bash
+        run: |
+          set -euo pipefail
+          token="$(openssl rand -hex 32)"; echo "::add-mask::$token"
+          registry="${GCP_PROXY_REGION}-docker.pkg.dev"; image="${registry}/${GCP_PROJECT_ID_VALUE}/${GCP_AR_REPO}/semanticv2-low:${GITHUB_SHA}"
+          gcloud auth configure-docker "$registry" --quiet
+          docker build -f benchmarks/Dockerfile.semantic-v2-gcp-proxy -t "$image" . >/dev/null && docker push "$image" >/dev/null
+          gcloud run deploy "$GCP_PROXY_SERVICE" --project="$GCP_PROJECT_ID_VALUE" --region="$GCP_PROXY_REGION" --image="$image" --service-account="$GCP_RUNTIME_SA_VALUE" --port=8080 --min=0 --max=2 --cpu=1 --memory=512Mi --set-env-vars="BENCHMARK_PROXY_TOKEN=${token}" --no-invoker-iam-check --quiet >/dev/null
+          url="$(gcloud run services describe "$GCP_PROXY_SERVICE" --project="$GCP_PROJECT_ID_VALUE" --region="$GCP_PROXY_REGION" --format='value(status.url)')"
+          for a in $(seq 1 30); do curl -fsS -H "Authorization: Bearer ${token}" "${url}/health" | jq -e '.ok==true' >/dev/null && break; [[ "$a" -lt 30 ]] || exit 1; sleep 2; done
+          echo "VERTEX_API_ENDPOINT=$url" >> "$GITHUB_ENV"; echo "GCP_ACCESS_TOKEN=$token" >> "$GITHUB_ENV"; echo "GCP_PROJECT_ID=$GCP_PROJECT_ID_VALUE" >> "$GITHUB_ENV"
+      - name: Run all 360 immutable cases with LOW verifier
+        run: node benchmarks/semantic-v2-stability-full.js
+      - name: Print gate
+        if: ${{ always() && hashFiles('semantic-v2-low-verifier-full.json') != '' }}
+        run: jq '{semanticGate,privacy,rerankerStats,costsUsd,methodology}' semantic-v2-low-verifier-full.json
+      - name: Upload evidence
+        if: ${{ always() && hashFiles('semantic-v2-low-verifier-full.json') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: truyn-semantic-v2-low-verifier-full-${{ github.run_id }}
+          path: semantic-v2-low-verifier-full.json
+          retention-days: 30
+      - name: Delete isolated Vertex proxy
+        if: always()
+        shell: bash
+        run: gcloud run services delete "$GCP_PROXY_SERVICE" --project="$GCP_PROJECT_ID_VALUE" --region="$GCP_PROXY_REGION" --quiet >/dev/null 2>&1 || true
