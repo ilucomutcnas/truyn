@@ -18,6 +18,11 @@ Human-facing documentation for TRUYN architecture, concepts, setup, operations, 
 - [Semantic Retrieval Scale Gate v3](architecture/SEMANTIC_SCALE_GATE_V3.md) — implemented and measured 600 → 10,000 → 100,000-block scale architecture, sharded durable vectors, fixed semantic/privacy/economic gates, latency definitions, and 100/1,000-node exercises.
 - [Distributed Semantic Retrieval](architecture/DISTRIBUTED_SEMANTIC_RETRIEVAL.md) — implemented network primitive where immutable blocks may live on multiple signed nodes: root-CID discovery, authorized partition holders, bounded candidate transfer, holder receipts, content-addressed provenance, replica placement, and fail-closed coverage.
 
+### Trustability
+
+- [Trustability index](trustability/README.md) — separates retrieval integrity, claim evidence and node operational trust.
+- [Claim-Centric Trustability v1](trustability/CLAIM_TRUSTABILITY_V1.md) — implemented signed `CLAIM` / `ATTEST`, provenance graph, conservative source-lineage independence, network verifier discovery and signed `TRUST_RECEIPT` mechanics.
+
 ### Provider and edge architecture
 
 - [Multi-Cloud Provider Architecture](architecture/MULTI_CLOUD_PROVIDER_ARCHITECTURE.md) — public Google Cloud / Microsoft Azure capability architecture without private deployment identifiers.
@@ -36,6 +41,7 @@ Human-facing documentation for TRUYN architecture, concepts, setup, operations, 
 - [Semantic Scale Gate v3 — 2026-08-16](benchmarks/SEMANTIC_SCALE_GATE_V3_2026-08-16.md) — measured 600 / 10,000 / 100,000-block infrastructure-scale proof with cold/warm p50/p95/p99 and 100/1,000-node exercises.
 - [Semantic Concurrent Load — 2026-08-16](benchmarks/SEMANTIC_CONCURRENT_LOAD_2026-08-16.md) — signed multi-agent concurrent NEED and semantic-work single-flight proof, including the preserved 256-event relay queue boundary failure.
 - [Distributed Semantic Retrieval — 2026-08-16](benchmarks/DISTRIBUTED_SEMANTIC_RETRIEVAL_2026-08-16.md) — 600-block / four-partition / five-holder network proof with a replica, 48/48 correct retrieval, 100% provenance/minimal/no-ID, zero unauthorized holder work and 90.025% measured context-payload reduction.
+- [Claim-Centric Trustability v1 — 2026-08-16](benchmarks/CLAIM_TRUSTABILITY_V1_2026-08-16.md) — 600-case evidence-state/resistance proof with zero correlated-echo or unknown-lineage-Sybil false verification, zero missed disputes/retrieval tamper, and signed tamper-evident trust receipts.
 - [Multimodal Provider Parity Benchmark](benchmarks/MULTIMODAL_PROVIDER_PARITY.md) — public apples-to-apples methodology for reasoning, image and video comparisons.
 
 ### Benchmark documentation boundary
@@ -60,7 +66,7 @@ Documents explicitly label whether they describe:
 - approved target architecture;
 - planned future work.
 
-An approved architecture document is **not** an implementation-complete security claim. A fail-closed requester allowlist gate is now implemented before provider execution, but the broader provider-ownership, tenant, BYOK onboarding, billing/quota, private-discovery, and marketplace policy model remains incremental implementation work until code/tests prove each layer.
+An approved architecture document is **not** an implementation-complete security claim. A fail-closed requester allowlist gate is now implemented before provider execution, but the broader provider-ownership, tenant, BYOK onboarding, billing/quota, private-discovery, marketplace policy and full v0.6 Trustability resistance model remain incremental implementation work until code/tests prove each layer.
 
 ## Public documentation rule
 
