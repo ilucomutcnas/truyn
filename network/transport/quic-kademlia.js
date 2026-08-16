@@ -2,6 +2,7 @@ import { createLibp2p } from 'libp2p';
 import { quic } from '@chainsafe/libp2p-quic';
 import { identify } from '@libp2p/identify';
 import { kadDHT } from '@libp2p/kad-dht';
+import { ping } from '@libp2p/ping';
 import { multiaddr } from '@multiformats/multiaddr';
 
 export const TRUYN_KAD_PROTOCOL = '/truyn/kad/1.0.0';
@@ -18,6 +19,7 @@ export async function createQuicKademliaNode({
     transports: [quic()],
     services: {
       identify: identify(),
+      ping: ping(),
       dht: kadDHT({
         protocol: TRUYN_KAD_PROTOCOL,
         clientMode: false,
