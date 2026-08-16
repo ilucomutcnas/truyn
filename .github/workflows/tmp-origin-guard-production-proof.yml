@@ -1,4 +1,4 @@
-name: Temporary Live Relay Diagnosis
+name: Temporary Relay Front Door Recovery
 
 on:
   push:
@@ -10,16 +10,15 @@ permissions:
   id-token: write
 
 jobs:
-  diagnose:
+  recover:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 12
     env:
       AZURE_CLIENT_ID_VALUE: ${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }}
       AZURE_TENANT_ID_VALUE: ${{ vars.AZURE_TENANT_ID || secrets.AZURE_TENANT_ID }}
       AZURE_SUBSCRIPTION_ID_VALUE: ${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}
       CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKENS }}
       CF_ZONE_ID: ${{ secrets.CLOUDFLARE_ZONE_ID || vars.CLOUDFLARE_ZONE_ID }}
-      CF_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID || vars.CLOUDFLARE_ACCOUNT_ID }}
       PUBLIC_RELAY_URL: https://relay.truyn.org
     steps:
       - name: Authenticate Azure with main-only OIDC
@@ -29,68 +28,65 @@ jobs:
           tenant-id: ${{ env.AZURE_TENANT_ID_VALUE }}
           subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID_VALUE }}
 
-      - name: Diagnose Cloudflare and Azure without mutation
+      - name: Discover live Front Door and restore Cloudflare CNAME
         shell: bash
         run: |
           set -euo pipefail
-          [[ -n "${CF_TOKEN:-}" && -n "${CF_ZONE_ID:-}" && -n "${CF_ACCOUNT_ID:-}" ]] || { echo 'DIAG=FAIL missing_cloudflare_binding'; exit 10; }
+          [[ -n "${CF_TOKEN:-}" && -n "${CF_ZONE_ID:-}" ]] || { echo 'AFD_RECOVERY=FAIL missing_cloudflare_binding'; exit 10; }
 
-          found=0
-          while IFS=$'\t' read -r name rg fqdn; do
-            [[ -n "$fqdn" ]] || continue
-            role="$(az containerapp show -g "$rg" -n "$name" --query 'properties.template.containers[0].env[?name==`TRUYN_ROLE`].value | [0]' -o tsv)"
-            if [[ "$role" != 'relay' && "$name" != *relay* ]]; then continue; fi
-            found=1
-            for value in "$name" "$rg" "$fqdn"; do echo "::add-mask::$value"; done
-            app="$(az containerapp show -g "$rg" -n "$name" -o json)"
-            external="$(jq -r '.properties.configuration.ingress.external // false' <<<"$app")"
-            target_port="$(jq -r '.properties.configuration.ingress.targetPort // 0' <<<"$app")"
-            latest_rev="$(jq -r '.properties.latestRevisionName // empty' <<<"$app")"
-            guard_vars="$(jq '[.properties.template.containers[0].env[]? | select(.name=="TRUYN_ORIGIN_GUARD" or .name=="TRUYN_ORIGIN_GUARD_TOKEN")] | length' <<<"$app")"
-            ip_rules="$(jq '(.properties.configuration.ingress.ipSecurityRestrictions // []) | length' <<<"$app")"
-            direct_health="$(curl -sS --max-time 12 -o /tmp/direct.body -w '%{http_code}' "https://${fqdn}/health" || true)"
-            echo "AZURE_RELAY_STATE=external:${external} target_port:${target_port} guard_vars:${guard_vars} ip_rules:${ip_rules} direct_health:${direct_health}"
-            if [[ -n "$latest_rev" ]]; then
-              echo "::add-mask::$latest_rev"
-              revision="$(az containerapp revision show -g "$rg" -n "$name" --revision "$latest_rev" -o json 2>/dev/null || echo '{}')"
-              provisioning="$(jq -r '.properties.provisioningState // "unknown"' <<<"$revision")"
-              running="$(jq -r '.properties.runningState // "unknown"' <<<"$revision")"
-              echo "AZURE_REVISION_STATE=provisioning:${provisioning} running:${running}"
-            fi
-            break
-          done < <(az containerapp list --query "[?properties.configuration.ingress.external==\`true\`].[name,resourceGroup,properties.configuration.ingress.fqdn]" -o tsv)
-          [[ "$found" == 1 ]] || { echo 'DIAG=FAIL relay_not_found'; exit 11; }
+          # Keep the current DNS record only as an in-run rollback file; never print the origin target.
+          dns_base="https://api.cloudflare.com/client/v4/zones/${CF_ZONE_ID}/dns_records"
+          dns="$(curl -sS -G -H "Authorization: Bearer ${CF_TOKEN}" --data-urlencode 'name=relay.truyn.org' "$dns_base")"
+          jq -e '.success == true and (.result | length) == 1' <<<"$dns" >/dev/null || { echo 'AFD_RECOVERY=FAIL dns_lookup'; exit 11; }
+          record_id="$(jq -r '.result[0].id' <<<"$dns")"
+          echo "::add-mask::$record_id"
+          jq '.result[0] | {type,name,content,ttl,proxied}' <<<"$dns" > /tmp/dns-before.json
+          old_content="$(jq -r '.content' /tmp/dns-before.json)"
+          echo "::add-mask::$old_content"
 
-          dns="$(curl -sS -G -H "Authorization: Bearer ${CF_TOKEN}" --data-urlencode 'name=relay.truyn.org' "https://api.cloudflare.com/client/v4/zones/${CF_ZONE_ID}/dns_records")"
-          jq -e '.success == true' <<<"$dns" >/dev/null || { echo 'CF_DNS=FAIL'; exit 20; }
-          count="$(jq '.result | length' <<<"$dns")"
-          [[ "$count" == 1 ]] || { echo "CF_DNS=FAIL count=${count}"; exit 21; }
-          type="$(jq -r '.result[0].type' <<<"$dns")"
-          proxied="$(jq -r '.result[0].proxied // false' <<<"$dns")"
-          proxiable="$(jq -r '.result[0].proxiable // false' <<<"$dns")"
-          echo "CF_DNS=PASS type:${type} proxied:${proxied} proxiable:${proxiable}"
+          profiles="$(az resource list --resource-type Microsoft.Cdn/profiles -o json)"
+          mapfile -t profile_ids < <(jq -r '.[] | select((.sku.name // "") | test("AzureFrontDoor"; "i")) | .id' <<<"$profiles")
+          [[ "${#profile_ids[@]}" -gt 0 ]] || { echo 'AFD_RECOVERY=FAIL no_afd_profile'; exit 12; }
 
-          routes="$(curl -sS -H "Authorization: Bearer ${CF_TOKEN}" "https://api.cloudflare.com/client/v4/zones/${CF_ZONE_ID}/workers/routes")"
-          if jq -e '.success == true' <<<"$routes" >/dev/null 2>&1; then
-            exact="$(jq '[.result[]? | select(.pattern=="relay.truyn.org/*" or .pattern=="https://relay.truyn.org/*")] | length' <<<"$routes")"
-            echo "CF_WORKER_ROUTES=PASS relay_exact_routes:${exact}"
-          else
-            code="$(jq -r '.errors[0].code // "unknown"' <<<"$routes" 2>/dev/null || echo unknown)"
-            echo "CF_WORKER_ROUTES=FAIL code:${code}"
+          : > /tmp/candidates
+          for profile_id in "${profile_ids[@]}"; do
+            echo "::add-mask::$profile_id"
+            endpoints="$(az rest --method get --url "https://management.azure.com${profile_id}/afdEndpoints?api-version=2025-04-15" 2>/dev/null || echo '{}')"
+            while IFS= read -r host; do
+              [[ -n "$host" ]] || continue
+              echo "::add-mask::$host"
+              code="$(curl -sS --max-time 15 --connect-to "relay.truyn.org:443:${host}:443" -o /tmp/afd-probe.body -w '%{http_code}' "https://relay.truyn.org/health" || true)"
+              if [[ "$code" == '200' ]]; then
+                printf '%s\n' "$host" >> /tmp/candidates
+              fi
+            done < <(jq -r '.value[]? | select(.properties.enabledState=="Enabled") | .properties.hostName // empty' <<<"$endpoints")
+          done
+
+          candidate_count="$(sort -u /tmp/candidates | sed '/^$/d' | wc -l | tr -d ' ')"
+          [[ "$candidate_count" == 1 ]] || { echo "AFD_RECOVERY=FAIL live_candidate_count=${candidate_count}"; exit 13; }
+          target="$(sort -u /tmp/candidates | head -n1)"
+          echo "::add-mask::$target"
+          echo 'AFD_DISCOVERY=PASS unique_live_endpoint=true'
+
+          body="$(jq -nc --arg target "$target" '{type:"CNAME",name:"relay.truyn.org",content:$target,ttl:1,proxied:true}')"
+          changed="$(curl -sS -X PUT -H "Authorization: Bearer ${CF_TOKEN}" -H 'Content-Type: application/json' --data "$body" "${dns_base}/${record_id}")"
+          jq -e '.success == true and .result.type=="CNAME" and .result.proxied==true' <<<"$changed" >/dev/null || { echo 'AFD_RECOVERY=FAIL dns_write'; exit 14; }
+
+          ok=0; last='000'
+          for attempt in $(seq 1 60); do
+            last="$(curl -sS --max-time 10 -D /tmp/public.headers -o /tmp/public.body -w '%{http_code}' "${PUBLIC_RELAY_URL}/health" || true)"
+            if [[ "$last" == '200' ]] && grep -qi '^cf-ray:' /tmp/public.headers; then ok=1; break; fi
+            sleep 3
+          done
+          if [[ "$ok" != 1 ]]; then
+            rollback="$(cat /tmp/dns-before.json)"
+            curl -sS -X PUT -H "Authorization: Bearer ${CF_TOKEN}" -H 'Content-Type: application/json' --data "$rollback" "${dns_base}/${record_id}" >/dev/null || true
+            echo "AFD_RECOVERY=FAIL public_health=${last} rolled_back=true"
+            exit 15
           fi
 
-          scripts="$(curl -sS -H "Authorization: Bearer ${CF_TOKEN}" "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/workers/scripts")"
-          if jq -e '.success == true' <<<"$scripts" >/dev/null 2>&1; then
-            echo 'CF_WORKERS=PASS list_allowed=true'
-          else
-            code="$(jq -r '.errors[0].code // "unknown"' <<<"$scripts" 2>/dev/null || echo unknown)"
-            echo "CF_WORKERS=FAIL code:${code}"
-          fi
-
-          public_code="$(curl -sS --max-time 15 -D /tmp/public.headers -o /tmp/public.body -w '%{http_code}' "${PUBLIC_RELAY_URL}/health" || true)"
-          cf_ray=false
-          grep -qi '^cf-ray:' /tmp/public.headers 2>/dev/null && cf_ray=true
-          server_header="$(awk 'BEGIN{IGNORECASE=1} /^server:/{gsub("\r",""); print $2; exit}' /tmp/public.headers 2>/dev/null || true)"
-          [[ -n "$server_header" ]] || server_header=none
-          echo "PUBLIC_RELAY=health:${public_code} cf_ray:${cf_ray} server:${server_header}"
-          echo 'DIAG=PASS read_only=true'
+          final_dns="$(curl -sS -G -H "Authorization: Bearer ${CF_TOKEN}" --data-urlencode 'name=relay.truyn.org' "$dns_base")"
+          jq -e --arg target "$target" '.success==true and (.result|length)==1 and .result[0].type=="CNAME" and .result[0].content==$target and .result[0].proxied==true' <<<"$final_dns" >/dev/null || { echo 'AFD_RECOVERY=FAIL final_dns_mismatch'; exit 16; }
+          echo 'CLOUDFLARE_DNS=PASS proxied_cname_to_front_door=true'
+          echo 'PUBLIC_RELAY=PASS health=200 cf_ray=true'
+          echo 'AFD_RECOVERY=PASS'
