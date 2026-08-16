@@ -1,0 +1,39 @@
+name: Semantic Concurrent Load Gate
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  concurrent-load:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install dependencies
+        run: npm install --ignore-scripts --no-audit --no-fund
+      - name: Run concurrent multi-agent NEED benchmark
+        env:
+          SEMANTIC_CONCURRENT_BLOCKS: '10000'
+          SEMANTIC_CONCURRENT_ROOTS: '5'
+        run: node benchmarks/semantic-concurrent-load.js
+      - name: Hash evidence
+        run: sha256sum semantic-concurrent-load.json | tee semantic-concurrent-load.sha256
+      - name: Upload evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: truyn-semantic-concurrent-load-${{ github.run_id }}
+          path: |
+            semantic-concurrent-load.json
+            semantic-concurrent-load.sha256
+          if-no-files-found: error
+          retention-days: 30
