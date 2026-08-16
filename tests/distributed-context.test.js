@@ -125,7 +125,8 @@ test('root CID discovers authorized holders and retrieves minimal verified conte
   const holderIdentities = [createIdentity(), createIdentity(), createIdentity()];
   const relay = createRelay({
     allowedNodeIds:[coordinatorIdentity.nodeId, unauthorizedIdentity.nodeId, ...holderIdentities.map((identity) => identity.nodeId)],
-    trustedRequesterNodeIds:[coordinatorIdentity.nodeId, unauthorizedIdentity.nodeId],
+    trustedRequesterNodeIds:[coordinatorIdentity.nodeId],
+    allowPublicDispatch:true,
     nodeFreshnessMs:30_000
   });
   const relayUrl = await relay.listen({ port:0 });
