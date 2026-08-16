@@ -35,3 +35,24 @@ export {
   trustReceiptDigest,
   verifyTrustReceipt
 } from './claim-verification.js';
+
+export {
+  CHALLENGE_PROTOCOL,
+  DISPUTE_PROTOCOL,
+  LINEAGE_CERT_PROTOCOL,
+  TRUST_LIFECYCLE_VERSION,
+  TRUST_REVOCATION_PROTOCOL,
+  VERIFY_PROTOCOL,
+  assessActiveTrust,
+  createChallenge,
+  createDispute,
+  createLineageCertificate,
+  createTrustRevocation,
+  createVerification,
+  sourceLineageCommitment,
+  verifyChallenge,
+  verifyDispute,
+  verifyLineageCertificate,
+  verifyTrustRevocation,
+  verifyVerification
+} from './lifecycle.js';
