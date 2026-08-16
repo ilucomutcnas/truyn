@@ -5,6 +5,7 @@ import {
   createDistributedHolderReceipt,
   distributedDiscoveryCapability,
   distributedPartitionForBlockCid,
+  distributedRequestCapability,
   resolveDistributedCoverage,
   verifyDistributedCandidate
 } from '../core/context/distributed-retrieval.js';
@@ -28,7 +29,6 @@ function partitionBlocks(document, partitionIndex, partitionCount) {
 }
 
 function offerFor({ identity, document, partitionIndex, partitionCount, allowedRequesterId }) {
-  const requestCapability = `context.distributed.${'a'.repeat(32)}.${partitionIndex}.placeholder`;
   return {
     from:identity.nodeId,
     publicKey:identity.publicKeyPem,
@@ -44,7 +44,7 @@ function offerFor({ identity, document, partitionIndex, partitionCount, allowedR
           holderNodeId:identity.nodeId,
           partitionIndex,
           partitionCount,
-          requestCapability,
+          requestCapability:distributedRequestCapability(document.cid, identity.nodeId, partitionIndex),
           blockCount:partitionBlocks(document, partitionIndex, partitionCount).length
         }
       }
@@ -110,13 +110,6 @@ test('distributed coverage fails closed when a manifest partition has no authori
     partitionCount,
     allowedRequesterId:requester.nodeId
   }));
-  // Replace placeholder request capabilities with the exact deterministic values expected by the parser.
-  for (const offer of offers) {
-    const metadata = offer.payload.metadata.distributedContext;
-    const suffix = metadata.holderNodeId;
-    const crypto = await import('../core/context/distributed-retrieval.js');
-    metadata.requestCapability = crypto.distributedRequestCapability(document.cid, suffix, metadata.partitionIndex);
-  }
   assert.equal(resolveDistributedCoverage(document.manifest, offers, document.cid).partitionCount, 3);
   assert.throws(
     () => resolveDistributedCoverage(document.manifest, offers.slice(0, 2), document.cid),
