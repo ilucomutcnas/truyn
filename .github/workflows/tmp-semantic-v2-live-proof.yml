@@ -114,36 +114,12 @@ jobs:
             source = source.slice(0, a) + replacement + source.slice(b);
           }
 
-          replaceOnce(
-            'fs import',
-            "import { writeFile } from 'node:fs/promises';",
-            "import { readFile, writeFile } from 'node:fs/promises';"
-          );
-          replaceOnce(
-            'reranker import',
-            "import { createVertexEmbeddingClient } from '../adapters/providers/vertex-embedding.js';",
-            "import { createVertexEmbeddingClient } from '../adapters/providers/vertex-embedding.js';\nimport { createProviderSemanticReranker } from '../core/context/provider-semantic-reranker.js';"
-          );
-          replaceOnce(
-            'proof path env',
-            "const geminiLocation = process.env.GOOGLE_CLOUD_LOCATION || 'global';",
-            "const geminiLocation = process.env.GOOGLE_CLOUD_LOCATION || 'global';\nconst retrievalProofPath = process.env.SEMANTIC_V2_RETRIEVAL_PROOF;\nconst retrievalProofArtifactId = process.env.RETRIEVAL_PROOF_ARTIFACT_ID;\nconst retrievalProofRunId = process.env.RETRIEVAL_PROOF_RUN_ID;\nconst retrievalProofZipSha256 = process.env.RETRIEVAL_PROOF_ZIP_SHA256;"
-          );
-          replaceOnce(
-            'proof required',
-            '  GCP_ACCESS_TOKEN: proxyToken',
-            '  GCP_ACCESS_TOKEN: proxyToken,\n  SEMANTIC_V2_RETRIEVAL_PROOF: retrievalProofPath'
-          );
-          replaceOnce(
-            'dense gate',
-            '  retrievalAccuracyPercentMin: 99,',
-            '  retrievalAccuracyPercentMin: 99,\n  denseCandidateRecallPercentMin: 99,'
-          );
-          replaceOnce(
-            'verifier reference rates',
-            "const comparableRates = {\n  gpt: { input: 0.44, output: 1.76 },\n  gemini: { input: 0.30, output: 2.50 }\n};",
-            "const comparableRates = {\n  gpt: { input: 0.44, output: 1.76 },\n  gemini: { input: 0.30, output: 2.50 }\n};\nconst semanticVerifierRates = { input:2.00, output:12.00 };"
-          );
+          replaceOnce('fs import', "import { writeFile } from 'node:fs/promises';", "import { readFile, writeFile } from 'node:fs/promises';");
+          replaceOnce('reranker import', "import { createVertexEmbeddingClient } from '../adapters/providers/vertex-embedding.js';", "import { createVertexEmbeddingClient } from '../adapters/providers/vertex-embedding.js';\nimport { createProviderSemanticReranker } from '../core/context/provider-semantic-reranker.js';");
+          replaceOnce('proof path env', "const geminiLocation = process.env.GOOGLE_CLOUD_LOCATION || 'global';", "const geminiLocation = process.env.GOOGLE_CLOUD_LOCATION || 'global';\nconst retrievalProofPath = process.env.SEMANTIC_V2_RETRIEVAL_PROOF;\nconst retrievalProofArtifactId = process.env.RETRIEVAL_PROOF_ARTIFACT_ID;\nconst retrievalProofRunId = process.env.RETRIEVAL_PROOF_RUN_ID;\nconst retrievalProofZipSha256 = process.env.RETRIEVAL_PROOF_ZIP_SHA256;");
+          replaceOnce('proof required', '  GCP_ACCESS_TOKEN: proxyToken', '  GCP_ACCESS_TOKEN: proxyToken,\n  SEMANTIC_V2_RETRIEVAL_PROOF: retrievalProofPath');
+          replaceOnce('dense gate', '  retrievalAccuracyPercentMin: 99,', '  retrievalAccuracyPercentMin: 99,\n  denseCandidateRecallPercentMin: 99,');
+          replaceOnce('verifier reference rates', "const comparableRates = {\n  gpt: { input: 0.44, output: 1.76 },\n  gemini: { input: 0.30, output: 2.50 }\n};", "const comparableRates = {\n  gpt: { input: 0.44, output: 1.76 },\n  gemini: { input: 0.30, output: 2.50 }\n};\nconst semanticVerifierRates = { input:2.00, output:12.00 };");
           replaceOnce(
             'semantic router construction',
             '  const semanticRouter = createSemanticContextRouterV2({ embedder });',
@@ -177,22 +153,13 @@ jobs:
               name:'gemini-3.1-pro-semantic-verifier',
               providerOptions:{
                 responseMimeType:'application/json',
-                responseSchema:{
-                  type:'OBJECT',
-                  properties:{ id:{ type:'STRING' } },
-                  required:['id']
-                }
+                responseSchema:{ type:'OBJECT', properties:{ id:{ type:'STRING' } }, required:['id'] }
               },
               shortlistSize:1,
               repairAttempts:1
             });
-            const semanticRouter = createSemanticContextRouterV2({
-              embedder,
-              reranker:semanticReranker,
-              candidateK:64
-            });`
+            const semanticRouter = createSemanticContextRouterV2({ embedder, reranker:semanticReranker, candidateK:64 });`
           );
-
           replaceRange(
             'reuse immutable retrieval proof',
             '  // Force a single document-index build before concurrent query evaluation.',
@@ -205,33 +172,14 @@ jobs:
             const noBlockIdPercent = retrievalProof.retrieval.noBlockIdPercent;
             const lexicalV1Accuracy = retrievalProof.retrieval.lexicalV1BaselineAccuracyPercent;
             const denseCandidateRecallPercent = retrievalProof.retrieval.denseCandidateRecallPercent;
-            const byCategory = metricsBy(retrievalResults, 'category');`
+            `
           );
-          replaceOnce(
-            'retrieval-only dense check',
-            '  const retrievalOnlyPassed = retrievalAccuracy >= gate.retrievalAccuracyPercentMin\n    && provenancePercent >= gate.provenancePassPercentMin',
-            '  const retrievalOnlyPassed = retrievalAccuracy >= gate.retrievalAccuracyPercentMin\n    && denseCandidateRecallPercent >= gate.denseCandidateRecallPercentMin\n    && provenancePercent >= gate.provenancePassPercentMin'
-          );
-          replaceOnce(
-            'retrieval report proof fields',
-            '      accuracyPercent:retrievalAccuracy,\n      provenancePercent,',
-            '      accuracyPercent:retrievalAccuracy,\n      denseCandidateRecallPercent,\n      provenancePercent,\n      proofRunId:retrievalProofRunId,\n      proofArtifactId:retrievalProofArtifactId,\n      proofZipSha256:retrievalProofZipSha256,'
-          );
-          replaceOnce(
-            'methodology live verifier',
-            "      topK:1,\n      blockIdsInRequesterQueries:false,",
-            "      topK:1,\n      denseCandidateK:64,\n      verifierModel:'gemini-3.1-pro-preview',\n      verifierMode:'single structured top-1 over dense64; cached once per unique question/root CID',\n      retrievalProofReuse:'360-case immutable proof is SHA-256 verified; live cases are independently rerun through the same router',\n      blockIdsInRequesterQueries:false,"
-          );
-          replaceOnce(
-            'live verifier baseline',
-            '    const liveResults = [];',
-            `    const rerankerStatsBeforeLive = semanticRouter.stats().rerankerStats || { requests:0, inputTokens:0, outputTokens:0, totalTokens:0, requestBodyBytes:0, providerLatencyMs:0 };
-            const liveResults = [];`
-          );
-          replaceOnce(
-            'live verifier delta',
-            '    const allTruynActorMetrics = liveResults.flatMap((run) => Object.entries(run.truyn.actorMetrics).map(([alias,metric]) => ({ alias, ...metric })));',
-            `    const rerankerStatsAfterLive = semanticRouter.stats().rerankerStats || rerankerStatsBeforeLive;
+          replaceOnce('retrieval-only dense check', '  const retrievalOnlyPassed = retrievalAccuracy >= gate.retrievalAccuracyPercentMin\n    && provenancePercent >= gate.provenancePassPercentMin', '  const retrievalOnlyPassed = retrievalAccuracy >= gate.retrievalAccuracyPercentMin\n    && denseCandidateRecallPercent >= gate.denseCandidateRecallPercentMin\n    && provenancePercent >= gate.provenancePassPercentMin');
+          replaceOnce('retrieval report proof fields', '      accuracyPercent:retrievalAccuracy,\n      provenancePercent,', '      accuracyPercent:retrievalAccuracy,\n      denseCandidateRecallPercent,\n      provenancePercent,\n      proofRunId:retrievalProofRunId,\n      proofArtifactId:retrievalProofArtifactId,\n      proofZipSha256:retrievalProofZipSha256,');
+          replaceOnce('methodology live verifier', "      topK:1,\n      blockIdsInRequesterQueries:false,", "      topK:1,\n      denseCandidateK:64,\n      verifierModel:'gemini-3.1-pro-preview',\n      verifierMode:'single structured top-1 over dense64; cached once per unique question/root CID',\n      retrievalProofReuse:'360-case immutable proof is SHA-256 verified; live cases are independently rerun through the same router',\n      blockIdsInRequesterQueries:false,");
+          replaceOnce('live verifier baseline', '    const liveResults = [];', `    const rerankerStatsBeforeLive = semanticRouter.stats().rerankerStats || { requests:0, inputTokens:0, outputTokens:0, totalTokens:0, requestBodyBytes:0, providerLatencyMs:0 };
+            const liveResults = [];`);
+          replaceOnce('live verifier delta', '    const allTruynActorMetrics = liveResults.flatMap((run) => Object.entries(run.truyn.actorMetrics).map(([alias,metric]) => ({ alias, ...metric })));', `    const rerankerStatsAfterLive = semanticRouter.stats().rerankerStats || rerankerStatsBeforeLive;
             const liveVerifier = {
               requests:(rerankerStatsAfterLive.requests || 0) - (rerankerStatsBeforeLive.requests || 0),
               inputTokens:(rerankerStatsAfterLive.inputTokens || 0) - (rerankerStatsBeforeLive.inputTokens || 0),
@@ -241,12 +189,8 @@ jobs:
               providerLatencyMs:(rerankerStatsAfterLive.providerLatencyMs || 0) - (rerankerStatsBeforeLive.providerLatencyMs || 0)
             };
             liveVerifier.costUsd = ((liveVerifier.inputTokens * semanticVerifierRates.input) + (liveVerifier.outputTokens * semanticVerifierRates.output)) / 1_000_000;
-            const allTruynActorMetrics = liveResults.flatMap((run) => Object.entries(run.truyn.actorMetrics).map(([alias,metric]) => ({ alias, ...metric })));`
-          );
-          replaceOnce(
-            'honest live accounting',
-            '    const directInputTokens = sum(liveResults, (run) => run.direct.inputTokens);\n    const truynInputTokens = sum(liveResults, (run) => run.truyn.inputTokens);\n    const directCost = sum(liveResults, (run) => run.direct.comparablePairCostUsd);\n    const truynCost = sum(liveResults, (run) => run.truyn.comparablePairCostUsd);',
-            `    const directInputTokens = sum(liveResults, (run) => run.direct.inputTokens);
+            const allTruynActorMetrics = liveResults.flatMap((run) => Object.entries(run.truyn.actorMetrics).map(([alias,metric]) => ({ alias, ...metric })));`);
+          replaceOnce('honest live accounting', '    const directInputTokens = sum(liveResults, (run) => run.direct.inputTokens);\n    const truynInputTokens = sum(liveResults, (run) => run.truyn.inputTokens);\n    const directCost = sum(liveResults, (run) => run.direct.comparablePairCostUsd);\n    const truynCost = sum(liveResults, (run) => run.truyn.comparablePairCostUsd);', `    const directInputTokens = sum(liveResults, (run) => run.direct.inputTokens);
             const truynActorInputTokens = sum(liveResults, (run) => run.truyn.inputTokens);
             const truynInputTokens = truynActorInputTokens + liveVerifier.inputTokens;
             const directCost = sum(liveResults, (run) => run.direct.comparablePairCostUsd);
@@ -254,48 +198,26 @@ jobs:
             const truynCost = truynActorCost + liveVerifier.costUsd;
             const directProviderRequestBodyBytes = sum(liveResults, (run) => run.direct.providerRequestBodyBytes);
             const truynActorProviderRequestBodyBytes = sum(liveResults, (run) => run.truyn.providerRequestBodyBytes);
-            const truynProviderRequestBodyBytes = truynActorProviderRequestBodyBytes + liveVerifier.requestBodyBytes;`
-          );
-          replaceOnce(
-            'dense final check',
-            '      retrievalAccuracy:retrievalAccuracy >= gate.retrievalAccuracyPercentMin,\n      perLanguageAccuracy:',
-            '      retrievalAccuracy:retrievalAccuracy >= gate.retrievalAccuracyPercentMin,\n      denseCandidateRecall:denseCandidateRecallPercent >= gate.denseCandidateRecallPercentMin,\n      perLanguageAccuracy:'
-          );
-          replaceOnce(
-            'live token reporting',
-            '        directInputTokens,\n        truynInputTokens,\n        inputTokenReductionPercent,',
-            `        directInputTokens,
+            const truynProviderRequestBodyBytes = truynActorProviderRequestBodyBytes + liveVerifier.requestBodyBytes;`);
+          replaceOnce('dense final check', '      retrievalAccuracy:retrievalAccuracy >= gate.retrievalAccuracyPercentMin,\n      perLanguageAccuracy:', '      retrievalAccuracy:retrievalAccuracy >= gate.retrievalAccuracyPercentMin,\n      denseCandidateRecall:denseCandidateRecallPercent >= gate.denseCandidateRecallPercentMin,\n      perLanguageAccuracy:');
+          replaceOnce('live token reporting', '        directInputTokens,\n        truynInputTokens,\n        inputTokenReductionPercent,', `        directInputTokens,
             truynActorInputTokens,
             liveVerifierInputTokens:liveVerifier.inputTokens,
             liveVerifierOutputTokens:liveVerifier.outputTokens,
             liveVerifierTotalTokens:liveVerifier.totalTokens,
             liveVerifierRequests:liveVerifier.requests,
             truynInputTokens,
-            inputTokenReductionPercent,`
-          );
-          replaceOnce(
-            'live cost reporting',
-            '        directComparablePairCostUsd:round(directCost, 9),\n        truynComparablePairCostUsd:round(truynCost, 9),',
-            `        directComparablePairCostUsd:round(directCost, 9),
+            inputTokenReductionPercent,`);
+          replaceOnce('live cost reporting', '        directComparablePairCostUsd:round(directCost, 9),\n        truynComparablePairCostUsd:round(truynCost, 9),', `        directComparablePairCostUsd:round(directCost, 9),
             truynActorComparablePairCostUsd:round(truynActorCost, 9),
             liveVerifierCostUsd:round(liveVerifier.costUsd, 9),
-            truynComparablePairCostUsd:round(truynCost, 9),`
-          );
-          replaceOnce(
-            'provider body reporting',
-            '        directProviderRequestBodyBytes:sum(liveResults, (run) => run.direct.providerRequestBodyBytes),\n        truynProviderRequestBodyBytes:sum(liveResults, (run) => run.truyn.providerRequestBodyBytes),\n        providerRequestBodyReductionPercent:reductionPercent(\n          sum(liveResults, (run) => run.direct.providerRequestBodyBytes),\n          sum(liveResults, (run) => run.truyn.providerRequestBodyBytes)\n        ),',
-            `        directProviderRequestBodyBytes,
+            truynComparablePairCostUsd:round(truynCost, 9),`);
+          replaceOnce('provider body reporting', '        directProviderRequestBodyBytes:sum(liveResults, (run) => run.direct.providerRequestBodyBytes),\n        truynProviderRequestBodyBytes:sum(liveResults, (run) => run.truyn.providerRequestBodyBytes),\n        providerRequestBodyReductionPercent:reductionPercent(\n          sum(liveResults, (run) => run.direct.providerRequestBodyBytes),\n          sum(liveResults, (run) => run.truyn.providerRequestBodyBytes)\n        ),', `        directProviderRequestBodyBytes,
             truynActorProviderRequestBodyBytes,
             liveVerifierProviderRequestBodyBytes:liveVerifier.requestBodyBytes,
             truynProviderRequestBodyBytes,
-            providerRequestBodyReductionPercent:reductionPercent(directProviderRequestBodyBytes, truynProviderRequestBodyBytes),`
-          );
-          replaceOnce(
-            'cost methodology verifier',
-            "        usdPerMillionTokens:comparableRates",
-            "        usdPerMillionTokens:comparableRates,\n        semanticVerifierUsdPerMillionTokens:semanticVerifierRates,\n        semanticVerifierOutputIncludesReasoningTokens:true"
-          );
-
+            providerRequestBodyReductionPercent:reductionPercent(directProviderRequestBodyBytes, truynProviderRequestBodyBytes),`);
+          replaceOnce('cost methodology verifier', '        usdPerMillionTokens:comparableRates', '        usdPerMillionTokens:comparableRates,\n        semanticVerifierUsdPerMillionTokens:semanticVerifierRates,\n        semanticVerifierOutputIncludesReasoningTokens:true');
           fs.writeFileSync(path, source);
           NODE
           node --check benchmarks/semantic-retrieval-v2.js
@@ -326,7 +248,6 @@ jobs:
           echo "AZURE_OPENAI_ENDPOINT=$gpt_endpoint" >> "$GITHUB_ENV"
           echo "AZURE_OPENAI_API_KEY=$gpt_key" >> "$GITHUB_ENV"
           echo "AZURE_OPENAI_DEPLOYMENT=$AZURE_GPT_DEPLOYMENT" >> "$GITHUB_ENV"
-
           suffix="$(printf '%s' '${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}' | sha256sum | cut -c1-12)"
           account="truynai${suffix}"
           echo "FOUNDRY_ACCOUNT=$account" >> "$GITHUB_ENV"
@@ -336,7 +257,6 @@ jobs:
           echo "::add-mask::$key"
           echo "AZURE_FOUNDRY_ENDPOINT=$endpoint" >> "$GITHUB_ENV"
           echo "AZURE_FOUNDRY_API_KEY=$key" >> "$GITHUB_ENV"
-
           resize() {
             dep="$1"; cap="$2"
             data="$(az cognitiveservices account deployment show -g "$AZURE_RG" -n "$account" --deployment-name "$dep" -o json)"
@@ -379,14 +299,7 @@ jobs:
           gcloud auth configure-docker "$registry" --quiet
           docker build -f benchmarks/Dockerfile.semantic-v2-gcp-proxy -t "$image" .
           docker push "$image" >/dev/null
-          gcloud run deploy "$GCP_PROXY_SERVICE" \
-            --project="$GCP_PROJECT_ID_VALUE" \
-            --region="$GCP_PROXY_REGION" \
-            --image="$image" \
-            --service-account="$GCP_RUNTIME_SA_VALUE" \
-            --port=8080 --min=0 --max=4 --cpu=1 --memory=512Mi \
-            --set-env-vars="BENCHMARK_PROXY_TOKEN=${token}" \
-            --no-invoker-iam-check --quiet >/dev/null
+          gcloud run deploy "$GCP_PROXY_SERVICE" --project="$GCP_PROJECT_ID_VALUE" --region="$GCP_PROXY_REGION" --image="$image" --service-account="$GCP_RUNTIME_SA_VALUE" --port=8080 --min=0 --max=4 --cpu=1 --memory=512Mi --set-env-vars="BENCHMARK_PROXY_TOKEN=${token}" --no-invoker-iam-check --quiet >/dev/null
           url="$(gcloud run services describe "$GCP_PROXY_SERVICE" --project="$GCP_PROJECT_ID_VALUE" --region="$GCP_PROXY_REGION" --format='value(status.url)')"
           for attempt in $(seq 1 30); do
             if curl -fsS -H "Authorization: Bearer ${token}" "${url}/health" | jq -e '.ok == true' >/dev/null; then break; fi
