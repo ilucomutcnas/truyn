@@ -67,7 +67,7 @@ export class ReplicatedTransparencyService {
     // become discoverable through surviving peers instead of relying on stale state.
     for (const delayMs of [0, 250, 1_000]) {
       const timer = setTimeout(() => {
-        if (!this.node.isStarted?.()) return;
+        if (this.node.status !== 'started') return;
         this.advertise().catch(() => {});
       }, delayMs);
       timer.unref?.();
