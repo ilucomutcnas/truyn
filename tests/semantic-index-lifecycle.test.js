@@ -123,6 +123,26 @@ test('production factory cold-loads a ready root directly from durable storage',
   });
 });
 
+test('identical production retrieval reuses the result cache without another query embedding', async () => {
+  await withTempStore(async (directory) => {
+    const embedder = countingEmbedder();
+    const index = createProductionSemanticIndex({ directory, embedder });
+    const published = await index.publishContext([
+      { id:'alpha', text:'alpha durable object' },
+      { id:'beta', text:'beta durable object' }
+    ]);
+
+    const first = await index.retrieve(published.cid, 'alpha question');
+    const queryInputsAfterFirst = embedder.counts.queryInputs;
+    assert.ok(queryInputsAfterFirst > 0);
+    const second = await index.retrieve(published.cid, 'alpha question');
+
+    assert.equal(second.blocks[0].id, first.blocks[0].id);
+    assert.equal(embedder.counts.queryInputs, queryInputsAfterFirst);
+    assert.equal(index.stats().lifecycle.resultCacheHits, 1);
+  });
+});
+
 test('interrupted preparing root resumes explicitly and then cold-loads without re-embedding', async () => {
   await withTempStore(async (directory) => {
     const store = createFileSemanticIndexStore({ directory });
@@ -162,33 +182,31 @@ test('interrupted preparing root resumes explicitly and then cold-loads without 
   });
 });
 
-test('new root embeds only new immutable block CIDs and reuses unchanged vectors', async () => {
+test('publishDelta creates a new root and embeds only new immutable block CIDs', async () => {
   await withTempStore(async (directory) => {
     const embedder = countingEmbedder();
-    const router = createSemanticContextRouterV2({
-      embedder,
-      indexStore:createFileSemanticIndexStore({ directory }),
-      lexicalTieBreakWeight:0
-    });
+    const index = createProductionSemanticIndex({ directory, embedder });
 
-    const first = await router.publishContext([
+    const first = await index.publishContext([
       { id:'alpha', text:'alpha durable object' },
       { id:'beta', text:'beta durable object' }
     ]);
     assert.equal(embedder.counts.documentInputs, 2);
 
-    const second = await router.publishContext([
-      { id:'alpha', text:'alpha durable object' },
-      { id:'beta', text:'beta durable object' },
-      { id:'gamma', text:'gamma durable object' }
+    const second = await index.publishDelta(first.cid, [
+      { op:'upsert', id:'gamma', text:'gamma durable object' }
     ]);
     assert.notEqual(second.cid, first.cid);
+    assert.equal(second.parentCid, first.cid);
+    assert.equal(second.reusedParentRoot, true);
     assert.equal(second.index.embeddedBlockVectors, 1);
     assert.equal(second.index.reusedBlockVectors, 2);
     assert.equal(embedder.counts.documentInputs, 3);
 
-    const result = await router.retrieve(second.cid, 'gamma question');
-    assert.equal(result.blocks[0].id, 'gamma');
+    const oldResult = await index.retrieve(first.cid, 'beta question');
+    const newResult = await index.retrieve(second.cid, 'gamma question');
+    assert.equal(oldResult.blocks[0].id, 'beta');
+    assert.equal(newResult.blocks[0].id, 'gamma');
     assert.equal(embedder.counts.documentInputs, 3);
   });
 });
