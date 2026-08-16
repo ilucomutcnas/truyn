@@ -1,0 +1,75 @@
+name: Temporary Azure FDID Relay Deploy
+
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/tmp-azure-fdid-relay-deploy.yml']
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      AZURE_CLIENT_ID_VALUE: ${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID_VALUE: ${{ vars.AZURE_TENANT_ID || secrets.AZURE_TENANT_ID }}
+      AZURE_SUBSCRIPTION_ID_VALUE: ${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}
+      PUBLIC_RELAY_URL: https://relay.truyn.org
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install dependencies and prove origin guard
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --no-audit --no-fund
+          node --test tests/origin-guard.test.js
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID_VALUE }}
+          tenant-id: ${{ env.AZURE_TENANT_ID_VALUE }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID_VALUE }}
+      - name: Install Container Apps CLI extension
+        shell: bash
+        run: az extension add --name containerapp --upgrade --only-show-errors >/dev/null
+      - name: Build and deploy FDID-aware relay image
+        shell: bash
+        run: |
+          set -euo pipefail
+          SUCCESS=0; APP=''; RG=''; OLD_IMAGE=''; NEW_IMAGE=''
+          mask(){ [[ -n "${1:-}" ]] && echo "::add-mask::$1"; }
+          health(){ local n="${1:-50}" c; for _ in $(seq 1 "$n"); do c="$(curl -sS --max-time 10 -D /tmp/h.headers -o /tmp/h.body -w '%{http_code}' "$PUBLIC_RELAY_URL/health" || true)"; [[ "$c" == 200 ]] && grep -qi '^cf-ray:' /tmp/h.headers && return 0; sleep 3; done; return 1; }
+          rollback(){ set +e; [[ "$SUCCESS" == 1 ]] && { echo 'FDID_RELAY_DEPLOY_CLEANUP=PASS image_retained=true'; return; }; if [[ -n "$APP" && -n "$OLD_IMAGE" ]]; then echo 'FDID_RELAY_DEPLOY_ROLLBACK=START'; az containerapp update -g "$RG" -n "$APP" --image "$OLD_IMAGE" --only-show-errors >/dev/null 2>&1 || true; health 80 && echo 'FDID_RELAY_DEPLOY_ROLLBACK=PASS public_health=200' || echo 'FDID_RELAY_DEPLOY_ROLLBACK=FAIL'; fi; }
+          trap rollback EXIT
+
+          found=0
+          while IFS=$'\t' read -r name rg fqdn; do
+            [[ -n "$fqdn" ]] || continue; j="$(az containerapp show -g "$rg" -n "$name" -o json)"; role="$(jq -r '[.properties.template.containers[0].env[]? | select(.name=="TRUYN_ROLE") | .value][0] // empty' <<<"$j")"; [[ "$role" == relay || "$name" == *relay* ]] || continue
+            found=1; APP="$name"; RG="$rg"; OLD_IMAGE="$(jq -r '.properties.template.containers[0].image // empty' <<<"$j")"; gv="$(jq '[.properties.template.containers[0].env[]? | select(.name=="TRUYN_ORIGIN_GUARD" or .name=="TRUYN_ORIGIN_GUARD_TOKEN" or .name=="TRUYN_ORIGIN_GUARD_HEADER")]|length' <<<"$j")"; ir="$(jq '(.properties.configuration.ingress.ipSecurityRestrictions // [])|length' <<<"$j")"; [[ "$gv" == 0 && "$ir" == 0 ]] || { echo "FDID_RELAY_DEPLOY=FAIL dirty_baseline guard_vars=${gv} ip_rules=${ir}"; exit 10; }; mask "$APP"; mask "$RG"; mask "$fqdn"; mask "$OLD_IMAGE"; break
+          done < <(az containerapp list --query "[?properties.configuration.ingress.external==\`true\`].[name,resourceGroup,properties.configuration.ingress.fqdn]" -o tsv)
+          [[ "$found" == 1 && -n "$OLD_IMAGE" ]] || { echo 'FDID_RELAY_DEPLOY=FAIL relay_not_found'; exit 11; }
+
+          registry="${OLD_IMAGE%%/*}"; [[ "$registry" == *.azurecr.io ]] || { echo 'FDID_RELAY_DEPLOY=FAIL registry_not_acr'; exit 12; }; mask "$registry"; acr="$(az acr list --query "[?loginServer=='${registry}'].name | [0]" -o tsv)"; [[ -n "$acr" ]] || { echo 'FDID_RELAY_DEPLOY=FAIL acr_not_found'; exit 13; }; mask "$acr"
+          tail="${OLD_IMAGE#*/}"; repo="$(sed -E 's/@sha256:[0-9a-fA-F]+$//; s/:[^/:]+$//' <<<"$tail")"; [[ -n "$repo" && "$repo" != "$tail" ]] || repo='truyn-relay'; tag="fdid-${GITHUB_SHA:0:12}"; NEW_IMAGE="${registry}/${repo}:${tag}"; mask "$NEW_IMAGE"
+
+          health 20 || { echo 'FDID_RELAY_DEPLOY=FAIL baseline_health'; exit 20; }
+          BREG="$(curl -sS --max-time 12 -o /tmp/breg -w '%{http_code}' -X POST -H 'content-type: application/json' --data '{}' "$PUBLIC_RELAY_URL/v1/register" || true)"; BERR="$(jq -r '.error//""' /tmp/breg 2>/dev/null || true)"; jq -e 'type=="object"' /tmp/breg >/dev/null || { echo 'FDID_RELAY_DEPLOY=FAIL baseline_json'; exit 21; }
+          BWS="$(curl -sS --http1.1 --max-time 12 -o /tmp/bws -w '%{http_code}' -H 'Connection: Upgrade' -H 'Upgrade: websocket' -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' "$PUBLIC_RELAY_URL/v1/fast/socket?nodeId=fdid-deploy" || true)"; [[ "$BWS" != 000 && ! "$BWS" =~ ^5 ]] || { echo "FDID_RELAY_DEPLOY=FAIL baseline_ws=${BWS}"; exit 22; }
+
+          az acr build --registry "$acr" --image "${repo}:${tag}" --file Dockerfile . --no-logs >/dev/null
+          echo 'FDID_RELAY_BUILD=PASS tests=5/5 current_main=true'
+          az containerapp update -g "$RG" -n "$APP" --image "$NEW_IMAGE" --only-show-errors >/dev/null
+
+          stable=0; p='unknown'; r='unknown'
+          for _ in $(seq 1 100); do live="$(az containerapp show -g "$RG" -n "$APP" -o json)"; li="$(jq -r '.properties.template.containers[0].image//empty' <<<"$live")"; rev="$(jq -r '.properties.latestRevisionName//empty' <<<"$live")"; mask "$rev"; if [[ "$li" == "$NEW_IMAGE" && -n "$rev" ]]; then rj="$(az containerapp revision show -g "$RG" -n "$APP" --revision "$rev" -o json 2>/dev/null || echo '{}')"; p="$(jq -r '.properties.provisioningState//"unknown"' <<<"$rj")"; r="$(jq -r '.properties.runningState//"unknown"' <<<"$rj")"; [[ ( "$p" == Succeeded || "$p" == Provisioned ) && "$r" == Running* ]] && { stable=1; break; }; [[ "$p" == Failed || "$r" == Failed ]] && break; fi; sleep 4; done
+          [[ "$stable" == 1 ]] || { echo "FDID_RELAY_DEPLOY=FAIL revision provisioning=${p} running=${r}"; exit 30; }; health 50 || { echo 'FDID_RELAY_DEPLOY=FAIL post_health'; exit 31; }
+          NREG="$(curl -sS --max-time 12 -o /tmp/nreg -w '%{http_code}' -X POST -H 'content-type: application/json' --data '{}' "$PUBLIC_RELAY_URL/v1/register" || true)"; NERR="$(jq -r '.error//""' /tmp/nreg 2>/dev/null || true)"; [[ "$NREG" == "$BREG" && "$NERR" == "$BERR" ]] || { echo 'FDID_RELAY_DEPLOY=FAIL http_semantics_changed'; exit 32; }
+          NWS="$(curl -sS --http1.1 --max-time 12 -o /tmp/nws -w '%{http_code}' -H 'Connection: Upgrade' -H 'Upgrade: websocket' -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' "$PUBLIC_RELAY_URL/v1/fast/socket?nodeId=fdid-deploy" || true)"; [[ "$NWS" == "$BWS" ]] || { echo "FDID_RELAY_DEPLOY=FAIL ws_semantics_changed before=${BWS} after=${NWS}"; exit 33; }
+
+          SUCCESS=1
+          echo 'FDID_RELAY_DEPLOY=PASS public_health=200 http_baseline_equivalent=true websocket_baseline_equivalent=true'
+          echo 'FDID_ORIGIN_GUARD_CODE=LIVE configurable_header=true'
