@@ -1,0 +1,41 @@
+name: Semantic Scale Gate v3
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  scale-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install dependencies
+        run: npm install --ignore-scripts --no-audit --no-fund
+      - name: Run Scale Gate v3
+        env:
+          SEMANTIC_SCALE_V3_BLOCKS: 600,10000,100000
+          SEMANTIC_SCALE_V3_CASES: '60'
+          SEMANTIC_SCALE_V3_COLD_SAMPLES: '9'
+          SEMANTIC_SCALE_V3_NODE_EXERCISES: 100,1000
+        run: node --expose-gc benchmarks/semantic-scale-v3.js
+      - name: Hash evidence
+        run: sha256sum semantic-scale-v3.json | tee semantic-scale-v3.sha256
+      - name: Upload evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: truyn-semantic-scale-v3-${{ github.run_id }}
+          path: |
+            semantic-scale-v3.json
+            semantic-scale-v3.sha256
+          if-no-files-found: error
+          retention-days: 30
