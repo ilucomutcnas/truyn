@@ -1,7 +1,7 @@
 import { createLibp2p } from 'libp2p';
 import { quic } from '@chainsafe/libp2p-quic';
 import { identify } from '@libp2p/identify';
-import { kadDHT } from '@libp2p/kad-dht';
+import { kadDHT, passthroughMapper } from '@libp2p/kad-dht';
 import { ping } from '@libp2p/ping';
 import { multiaddr } from '@multiformats/multiaddr';
 
@@ -24,6 +24,12 @@ export async function createQuicKademliaNode({
         protocol: TRUYN_KAD_PROTOCOL,
         clientMode: false,
         kBucketSize,
+        // TRUYN testnets must support both loopback/private test peers and public
+        // internet peers. The default WAN mapper removes private multiaddrs, which
+        // would leave a real local QUIC testnet connected in PeerStore but absent
+        // from the Kademlia routing table. Authorization is handled above routing,
+        // so the DHT keeps all directly reachable peer addresses here.
+        peerInfoMapper: passthroughMapper,
         // A fresh private testnet must be able to issue its first query before the
         // background self-query has completed. The query still goes through the
         // real Kad routing/content-routing implementation and remote ADD_PROVIDER.
