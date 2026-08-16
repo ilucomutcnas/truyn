@@ -26,6 +26,8 @@ const candidates = (n = 16) => Array.from({ length:n }, (_, i) => ({
   text:`passage ${i}`
 }));
 
+const withoutStability = { stabilityRecheckDenseRanks:null };
+
 test('accepts independent cheap agreement only inside dense confidence rank', async () => {
   const calls = {};
   const reranker = createConfidenceGatedSemanticReranker({
@@ -34,7 +36,8 @@ test('accepts independent cheap agreement only inside dense confidence rank', as
     verifierProvider:providerReturning('c0', calls, 'verifier'),
     cheapCandidateK:16,
     confidenceDenseRankMax:12,
-    maxCandidates:16
+    maxCandidates:16,
+    ...withoutStability
   });
   const result = await reranker.rerank('query', candidates());
   assert.equal(result.id, 'candidate-real-1');
@@ -52,7 +55,8 @@ test('falls back to strong verifier when cheap judges disagree', async () => {
     verifierProvider:providerReturning('c4', calls, 'verifier'),
     cheapCandidateK:16,
     confidenceDenseRankMax:12,
-    maxCandidates:16
+    maxCandidates:16,
+    ...withoutStability
   });
   const result = await reranker.rerank('query', candidates());
   assert.equal(result.id, 'candidate-real-4');
@@ -70,7 +74,8 @@ test('falls back when cheap consensus is beyond dense confidence boundary', asyn
     verifierProvider:providerReturning('c9', calls, 'verifier'),
     cheapCandidateK:16,
     confidenceDenseRankMax:12,
-    maxCandidates:16
+    maxCandidates:16,
+    ...withoutStability
   });
   const result = await reranker.rerank('query', candidates());
   assert.equal(result.id, 'candidate-real-9');
@@ -95,7 +100,8 @@ test('aggregates usage and keeps real routing identifiers out of every provider 
     verifierProvider:make('c2'),
     cheapCandidateK:4,
     confidenceDenseRankMax:2,
-    maxCandidates:4
+    maxCandidates:4,
+    ...withoutStability
   });
   const result = await reranker.rerank('query', [
     { id:'semantic-record-private-a', text:'a' },
