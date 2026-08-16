@@ -1,0 +1,132 @@
+{
+  "benchmark": "TRUYN Semantic v2 dual semantic compiler aligned-facet hard-pair diagnostic",
+  "generatedAt": "2026-08-16T05:43:04.333Z",
+  "sourceSha": "6f2ddf743e83ad1704a831a7058a93ad668c6a69",
+  "githubActionsRunId": 31929634022,
+  "githubActionsArtifactId": 9258899286,
+  "artifactDigest": "sha256:9a0a5b1bc22aef1c1b841d343c5a3eabd3354f332baa0e866e84ace63e3d6702",
+  "documentCompiler": {
+    "model": "gemini-2.5-flash",
+    "thinkingBudget": 0,
+    "batchPassages": 6,
+    "usage": {
+      "promptTokenCount": 740,
+      "candidatesTokenCount": 309,
+      "totalTokenCount": 1049,
+      "trafficType": "ON_DEMAND"
+    }
+  },
+  "embedding": {
+    "model": "gemini-embedding-001",
+    "outputDimensionality": 768,
+    "stats": {
+      "requests": 27,
+      "inputs": 27,
+      "retries": 0,
+      "requestBytes": 4436,
+      "responseBytes": 687554,
+      "providerLatencyMs": 4569,
+      "effectiveBatchSize": 1
+    }
+  },
+  "privacyBoundary": "document compiler sees local aliases + passage text only; no real block ids, queries, expected labels, or answer-code metadata",
+  "rows": [
+    {
+      "caseIndex": 5,
+      "queryFacets": {
+        "domain": "ship route control",
+        "action": "operators must confirm permission validity",
+        "condition": "utilization has crossed the protective limit and saturation controls are engaged"
+      },
+      "compiledWrong": {
+        "domain": "maritime navigation",
+        "action": "route a time-sensitive shipment",
+        "condition": "system load is above the safety threshold and overload protection is active",
+        "actionEvidence": "route a time-sensitive shipment"
+      },
+      "compiledTarget": {
+        "domain": "maritime navigation",
+        "action": "validate an authorization",
+        "condition": "system load is above the safety threshold and overload protection is active",
+        "actionEvidence": "validate an authorization"
+      },
+      "facetCosine": {
+        "domain": {"target": 0.7379366222078947, "wrong": 0.7379366222078947},
+        "action": {"target": 0.7296602247036433, "wrong": 0.5686266377514637},
+        "condition": {"target": 0.7797244509201655, "wrong": 0.7797244509201655}
+      },
+      "strategies": {
+        "minCoverage": {"target": 0.7296602247036433, "wrong": 0.5686266377514637, "selectedExpected": true},
+        "meanCoverage": {"target": 0.7491070992772345, "wrong": 0.6954292369598413, "selectedExpected": true},
+        "harmonicCoverage": {"target": 0.7484777491605166, "wrong": 0.68239861141951, "selectedExpected": true}
+      }
+    },
+    {
+      "caseIndex": 241,
+      "queryFacets": {
+        "domain": "greenhouse gas record management",
+        "action": "recover the malfunctioning system",
+        "condition": "the main facility is offline at the remote continuity center"
+      },
+      "compiledWrong": {
+        "domain": "carbon accounting",
+        "action": "fail over a critical service",
+        "condition": "at the remote disaster-recovery site while the primary site is unavailable",
+        "actionEvidence": "fail over a critical service"
+      },
+      "compiledTarget": {
+        "domain": "carbon accounting",
+        "action": "recover degraded service",
+        "condition": "at the remote disaster-recovery site while the primary site is unavailable",
+        "actionEvidence": "恢复降级服务"
+      },
+      "facetCosine": {
+        "domain": {"target": 0.7040852217472933, "wrong": 0.7040852217472933},
+        "action": {"target": 0.7648843598634587, "wrong": 0.6714029453683569},
+        "condition": {"target": 0.7445570619674629, "wrong": 0.7445570619674629}
+      },
+      "strategies": {
+        "minCoverage": {"target": 0.7040852217472933, "wrong": 0.6714029453683569, "selectedExpected": true},
+        "meanCoverage": {"target": 0.7378422145260716, "wrong": 0.7066817430277043, "selectedExpected": true},
+        "harmonicCoverage": {"target": 0.7369648980896264, "wrong": 0.7054206646372198, "selectedExpected": true}
+      }
+    },
+    {
+      "caseIndex": 269,
+      "queryFacets": {
+        "domain": "store stock control",
+        "action": "preserve audit proof",
+        "condition": "outward-facing launch after users can already see it"
+      },
+      "compiledWrong": {
+        "domain": "retail inventory management",
+        "action": "validate information source",
+        "condition": "inside a customer-facing public release after visibility has been enabled",
+        "actionEvidence": "验证信息来源"
+      },
+      "compiledTarget": {
+        "domain": "retail inventory management",
+        "action": "archive compliance evidence",
+        "condition": "inside a customer-facing public release after visibility has been enabled",
+        "actionEvidence": "archive compliance evidence"
+      },
+      "facetCosine": {
+        "domain": {"target": 0.7469660630160663, "wrong": 0.7469660630160663},
+        "action": {"target": 0.7396879786169772, "wrong": 0.6318780245910399},
+        "condition": {"target": 0.7763305820892892, "wrong": 0.7763305820892892}
+      },
+      "strategies": {
+        "minCoverage": {"target": 0.7396879786169772, "wrong": 0.6318780245910399, "selectedExpected": true},
+        "meanCoverage": {"target": 0.7543282079074443, "wrong": 0.7183915565654652, "selectedExpected": true},
+        "harmonicCoverage": {"target": 0.7539997150443262, "wrong": 0.7126832167079012, "selectedExpected": true}
+      }
+    }
+  ],
+  "summary": {
+    "minCoverage": {"correct": 3, "total": 3, "passed": true},
+    "meanCoverage": {"correct": 3, "total": 3, "passed": true},
+    "harmonicCoverage": {"correct": 3, "total": 3, "passed": true}
+  },
+  "passed": true,
+  "conclusion": "Dual semantic compilation is the first evaluated architecture that resolves all three previously eligible near-duplicate failures without case-specific scoring rules. Query and document are independently normalized into aligned domain/action/condition fields, eliminating cross-field lexical contamination. This is hard-set evidence only; a held-out matrix is required before corpus-wide acceptance."
+}
