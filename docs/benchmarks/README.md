@@ -25,6 +25,7 @@ The repository regression suite treats the evidence files below as protected and
 
 ### Measured results
 
+- [`V01_CONNECT_GATE_2026-08-17.md`](V01_CONNECT_GATE_2026-08-17.md) — first real lower-network gate: 184/184 repository tests pass with real QUIC/UDP signed NEED transport, authenticated peer sessions, relay-free three-node Kademlia discovery, networked `PING/FIND_NODE/STORE/FIND_VALUE`, composed `TruynNetworkNode`, real UDP STUN exchange, same-QUIC-port hole punching, explicit relay fallback and backpressure.
 - [`CROSS_CLOUD_AB_2026-08-15.md`](CROSS_CLOUD_AB_2026-08-15.md) — first paired Azure OpenAI → Vertex Gemini direct-vs-TRUYN baseline; includes the negative baseline result and per-sample evidence.
 - [`CROSS_CLOUD_8X_OPTIMIZATION_2026-08-15.md`](CROSS_CLOUD_8X_OPTIMIZATION_2026-08-15.md) — fixed 8× hot-path optimization gate; measured protocol and orchestration overhead.
 - [`CONTEXT_EFFICIENCY_2026-08-15.md`](CONTEXT_EFFICIENCY_2026-08-15.md) — content-addressed context and signed-delta economic A/B gate.
