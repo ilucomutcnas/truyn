@@ -1,0 +1,60 @@
+name: Ephemeral Semantic v2 GPT Mini Hard Top3
+
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/tmp-semantic-v2-gptmini-hard.yml']
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  diagnostic:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      AZURE_RG: truyn
+      AZURE_GPT_ACCOUNT: truyn-openai-1334540181
+      AZURE_GPT_DEPLOYMENT: truyn-gpt-4-1-mini
+      SEMANTIC_V2_SOURCE_SHA: 6f2ddf743e83ad1704a831a7058a93ad668c6a69
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { persist-credentials: false }
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      - name: Load immutable Semantic v2 corpus
+        shell: bash
+        run: |
+          curl -fsSL -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" "https://api.github.com/repos/${GITHUB_REPOSITORY}/contents/benchmarks/semantic-retrieval-v2.js?ref=${SEMANTIC_V2_SOURCE_SHA}" | jq -r '.content' | tr -d '\n' | base64 -d > /tmp/semantic-retrieval-v2.js
+      - name: Resolve Azure endpoint and token
+        shell: bash
+        run: |
+          set -euo pipefail
+          endpoint="$(az cognitiveservices account show -g "$AZURE_RG" -n "$AZURE_GPT_ACCOUNT" --query properties.endpoint -o tsv)"
+          token="$(az account get-access-token --resource https://cognitiveservices.azure.com/ --query accessToken -o tsv)"
+          echo "::add-mask::$endpoint"; echo "::add-mask::$token"
+          echo "AZURE_GPT_ENDPOINT=$endpoint" >> "$GITHUB_ENV"; echo "AZURE_GPT_TOKEN=$token" >> "$GITHUB_ENV"
+      - name: Test hard top3 in both candidate orders
+        shell: bash
+        run: |
+          cat > /tmp/gpt-hard.cjs <<'NODE'
+          const fs=require('node:fs'),vm=require('node:vm');
+          const src=fs.readFileSync('/tmp/semantic-retrieval-v2.js','utf8'),a=src.indexOf('const domains = ['),b=src.indexOf('const fullContext =');const box={};vm.createContext(box);vm.runInContext('const corpusSize=600,retrievalCaseCount=360;'+src.slice(a,b)+';globalThis.__d={records,retrievalCases};',box);const {records,retrievalCases}=box.__d;
+          const specs=[{caseIndex:5,ids:['semantic-record-305','semantic-record-185','semantic-record-545']},{caseIndex:241,ids:['semantic-record-437','semantic-record-517','semantic-record-436']},{caseIndex:269,ids:['semantic-record-553','semantic-record-353','semantic-record-073']}];
+          const rows=[];let totals={requests:0,input:0,output:0,total:0,requestBytes:0,latencyMs:0};
+          async function call(question,ids,order){const ordered=order==='forward'?ids:[...ids].reverse(),payload=ordered.map((id,i)=>({id:`c${i}`,text:records.find(r=>r.id===id).text}));const prompt=`Choose the single passage matching the complete operational meaning of the query. Every material constraint matters: real-world domain, controlled action, and condition/state. A near-duplicate that conflicts on one material constraint is wrong. Ignore ANSWER_CODE as a retrieval signal. Return exactly one local label and nothing else (example: c1).\n\nQUERY:\n${question}\n\nCANDIDATES:\n${JSON.stringify(payload)}`;const body=JSON.stringify({model:process.env.AZURE_GPT_DEPLOYMENT,input:prompt,store:false,max_output_tokens:32});const started=Date.now(),r=await fetch(process.env.AZURE_GPT_ENDPOINT.replace(/\/$/,'')+'/openai/v1/responses',{method:'POST',headers:{'content-type':'application/json',authorization:'Bearer '+process.env.AZURE_GPT_TOKEN},body});const text=await r.text();if(!r.ok)throw new Error('Azure GPT HTTP '+r.status+': '+text.slice(0,300));const j=JSON.parse(text),out=j.output_text||((j.output||[]).flatMap(x=>x.content||[]).find(x=>x.type==='output_text')?.text)||'',m=String(out).match(/\bc([0-2])\b/i),idx=m?Number(m[1]):-1,selected=ordered[idx]||null,u=j.usage||{};const usage={input:u.input_tokens||0,output:u.output_tokens||0,total:u.total_tokens||0,requestBytes:Buffer.byteLength(body),latencyMs:Date.now()-started};totals.requests++;for(const k of ['input','output','total','requestBytes','latencyMs'])totals[k]+=usage[k];return{selected,raw:out,usage,ordered};}
+          (async()=>{for(const s of specs){const item=retrievalCases.find(x=>x.caseIndex===s.caseIndex);for(const order of ['forward','reverse']){const o=await call(item.question,s.ids,order);rows.push({caseIndex:s.caseIndex,expectedId:item.id,order,selectedId:o.selected,correct:o.selected===item.id,orderedIds:o.ordered,raw:o.raw,usage:o.usage});}}const report={benchmark:'TRUYN Semantic v2 GPT-4.1-mini hard top3 order-invariance diagnostic',generatedAt:new Date().toISOString(),sourceSha:process.env.SEMANTIC_V2_SOURCE_SHA,rows,totals,correct:rows.filter(x=>x.correct).length,totalCases:rows.length,passed:rows.every(x=>x.correct)};fs.writeFileSync('semantic-v2-gptmini-hard.json',JSON.stringify(report,null,2));console.log(JSON.stringify(report,null,2));if(!report.passed)process.exitCode=2;})().catch(e=>{console.error(e);process.exitCode=1});
+          NODE
+          node /tmp/gpt-hard.cjs
+      - name: Upload evidence
+        if: ${{ always() && hashFiles('semantic-v2-gptmini-hard.json') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: truyn-semantic-v2-gptmini-hard-${{ github.run_id }}
+          path: semantic-v2-gptmini-hard.json
+          retention-days: 30
