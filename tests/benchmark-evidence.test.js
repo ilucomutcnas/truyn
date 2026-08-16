@@ -66,6 +66,11 @@ const evidenceLedger = [
     markers: ['# TRUYN Claim-Centric Trustability v1', 'Status: **PASS', '## Primary measured result', 'Correlated echo incorrectly marked verified']
   },
   {
+    path: 'docs/benchmarks/TRUST_NETWORK_V2_2026-08-16.md',
+    minBytes: 10000,
+    markers: ['# TRUYN Trust Network v2', 'Status: **MEASURED PASS**', '1,000 / 1,000', '## Byzantine replica / quorum proof', '## Active `CHALLENGE → VERIFY → DISPUTE` network proof']
+  },
+  {
     path: 'docs/benchmarks/MULTIMODAL_PROVIDER_PARITY.md',
     minBytes: 3000,
     markers: ['# TRUYN Multimodal Provider Parity Benchmark', 'Status: **planned methodology', '## Principle']
