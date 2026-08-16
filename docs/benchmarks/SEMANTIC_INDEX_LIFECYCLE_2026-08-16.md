@@ -54,6 +54,7 @@ The production router requires explicit preparation before retrieval and does no
 | Concurrent same-root prepare duplicates document embeddings | **0 duplicates** | **PASS** |
 | Root invalidation deletes reusable immutable block vectors | **0** | **0 — PASS** |
 | Retrieval after preparation increases document embedding count | **0** | **0 — PASS** |
+| Identical repeated retrieval creates another query embedding | **0** | **0 — PASS** |
 
 ## CI evidence
 
@@ -84,7 +85,27 @@ A further regression test explicitly simulates a durable root left in `preparing
 4. explicit `prepareContext(rootCid)` resumes preparation and creates only the missing document vectors;
 5. after another process-style restart, the production index retrieves the ready root from durable state with **zero document re-embedding**.
 
-This follow-up extends the earlier 145/145 proof; it does not replace or rewrite it. The earlier tested commit/run remain the primary full-suite lifecycle evidence, and the interrupted-preparation case is retained as additional crash-recovery evidence.
+This follow-up extends the earlier 145/145 proof; it does not replace or rewrite it. The earlier tested commit/run remain retained evidence, and the interrupted-preparation case is additional crash-recovery evidence.
+
+## Additional incremental-delta and request-cache proof
+
+Follow-up commit: **`c961d30c3daa03cb6417bdb3ee3a9c03ea885551`**
+
+GitHub Actions CI run: **`31959425564`** — **SUCCESS**
+
+CI job: **`95195018929`** — **SUCCESS**
+
+This follow-up converts incremental root evolution into an explicit production API and proves request-cache reuse:
+
+1. `createProductionSemanticIndex().publishDelta(parentRootCid, ops)` requires a ready parent root;
+2. the canonical delta creates a new immutable child root CID rather than mutating the parent;
+3. unchanged parent block CIDs reuse their already persisted document vectors;
+4. adding one new immutable block creates exactly one additional document embedding;
+5. the parent root remains independently retrievable after the child is published;
+6. an identical repeated `root CID + query + retrieval configuration` is served from the result cache and creates **zero additional query embeddings**;
+7. the complete CI job and `git diff --check` passed.
+
+This is the direct regression proof for the requested incremental `OBJECT` lifecycle and cache reuse between requests.
 
 ## What this proves
 
@@ -102,9 +123,13 @@ Warmup remains available as an optimization, but a ready root does not require a
 
 ### Incremental immutable-block reuse
 
-The proof publishes one root containing two immutable blocks, then a new root containing the same two blocks plus one new block. The second root reuses the two existing vectors and creates exactly one new document vector.
+The production factory exposes `publishDelta(parentRootCid, ops)`. The proof publishes a parent root containing two immutable blocks, then adds one new immutable block through the delta API. The child root reuses both existing vectors and creates exactly one new document vector.
 
-Thus root evolution is incremental with respect to content-addressed blocks.
+The parent remains valid and independently addressable. Root evolution is therefore incremental with respect to content-addressed blocks rather than an in-place mutable rebuild.
+
+### Request cache reuse
+
+Within one runtime, identical retrieval requests reuse the result cache keyed by root CID, query and retrieval configuration. The regression proof records no additional query embedding on the repeated request.
 
 ### Local concurrency deduplication
 
@@ -142,13 +167,16 @@ The lifecycle work changes when document vectors are prepared/reused, not the va
 
 The current durable file store is a **single-node reference implementation**. It provides process-restart durability and immutable vector reuse but is not presented as a distributed index database.
 
-The next scale milestone should replace or complement it with a shared store contract and prove:
+The semantic index lifecycle is also deliberately separate from relay authorization state. The existing relay's context ACL/ownership metadata is not made durable by this vector/root store and must not be inferred to survive relay restart merely because the semantic index does.
+
+The next scale milestone should replace or complement the file store with a shared store contract and prove:
 
 - 10,000+ blocks;
 - multiple root CIDs sharing immutable blocks;
 - concurrent readers/writers across replicas;
 - lease/CAS protection for first-time vector creation;
 - p50/p95/p99 cold-storage and warm-memory retrieval latency;
-- no document re-embedding across replica restart/failover.
+- no document re-embedding across replica restart/failover;
+- explicit durable authorization/ACL state where the semantic index is exposed through a production relay.
 
 This limitation is explicit and does not invalidate the lifecycle gates proved above.
