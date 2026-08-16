@@ -1,3 +1,4 @@
+import { applyContextDelta } from './index.js';
 import { createFileSemanticIndexStore } from './semantic-index-store.js';
 import { createSemanticContextRouterV2 } from './semantic-router-v2.js';
 
@@ -35,10 +36,31 @@ export function createProductionSemanticIndex({
     requirePreparedIndex:true
   });
 
+  async function publishDelta(parentCid, ops, metadata = {}) {
+    const parent = await indexStore.loadRoot(parentCid);
+    if (!parent) throw new Error('context_not_found');
+    if (parent.index?.status !== 'ready') {
+      const error = new Error('semantic_index_not_ready');
+      error.code = 'semantic_index_not_ready';
+      throw error;
+    }
+    const blocks = applyContextDelta(parent.blocks, ops);
+    const child = await router.publishContext(blocks, {
+      ...(metadata && typeof metadata === 'object' ? metadata : {}),
+      parentCid
+    });
+    return {
+      ...child,
+      parentCid,
+      reusedParentRoot:true
+    };
+  }
+
   return {
     router,
     indexStore,
     publishContext:(blocks, metadata) => router.publishContext(blocks, metadata),
+    publishDelta,
     prepareContext:(cid) => router.prepareContext(cid),
     warmContext:(cid) => router.warmContext(cid),
     warmContexts:(cids) => router.warmContexts(cids),
