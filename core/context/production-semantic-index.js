@@ -2,6 +2,7 @@ import { applyContextDelta } from './index.js';
 import { createFileSemanticIndexStore } from './semantic-index-store.js';
 import { createShardedFileSemanticIndexStore } from './sharded-semantic-index-store.js';
 import { createSemanticContextRouterV2 } from './semantic-router-v2.js';
+import { createSingleFlightSemanticRouter } from './singleflight-semantic-router.js';
 
 /**
  * Production composition for the Semantic Retrieval Gate index lifecycle.
@@ -10,6 +11,11 @@ import { createSemanticContextRouterV2 } from './semantic-router-v2.js';
  * already-authorized embedder/reranker owned by the runtime that pays for it.
  * Creating a public TRUYN relay must never implicitly create access to an
  * owner-funded semantic provider.
+ *
+ * Production retrieval is wrapped in a process-local single-flight coordinator
+ * so concurrent identical NEEDs share root warm/load, query embedding and the
+ * complete same-root semantic retrieval/rerank work instead of paying for the
+ * same cache miss repeatedly.
  */
 export function createProductionSemanticIndex({
   directory,
@@ -23,7 +29,8 @@ export function createProductionSemanticIndex({
   storeKind = 'file',
   indexStore = null,
   shardPrefixLength = 2,
-  ioConcurrency = 16
+  ioConcurrency = 16,
+  singleFlight = true
 } = {}) {
   if (!embedder || typeof embedder.embedMany !== 'function') {
     throw new Error('production semantic index requires an authorized embedder');
@@ -34,7 +41,7 @@ export function createProductionSemanticIndex({
     else if (storeKind === 'sharded-file') resolvedIndexStore = createShardedFileSemanticIndexStore({ directory, shardPrefixLength, ioConcurrency });
     else throw new Error('production semantic index storeKind must be file or sharded-file');
   }
-  const router = createSemanticContextRouterV2({
+  const baseRouter = createSemanticContextRouterV2({
     embedder,
     reranker,
     queryProjector,
@@ -45,6 +52,7 @@ export function createProductionSemanticIndex({
     indexStore:resolvedIndexStore,
     requirePreparedIndex:true
   });
+  const router = singleFlight ? createSingleFlightSemanticRouter(baseRouter) : baseRouter;
 
   async function publishDelta(parentCid, ops, metadata = {}) {
     const parent = await resolvedIndexStore.loadRoot(parentCid);
@@ -68,6 +76,7 @@ export function createProductionSemanticIndex({
 
   return {
     router,
+    baseRouter,
     indexStore:resolvedIndexStore,
     publishContext:(blocks, metadata) => router.publishContext(blocks, metadata),
     publishDelta,
