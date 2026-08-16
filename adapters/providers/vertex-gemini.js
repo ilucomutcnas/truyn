@@ -44,11 +44,24 @@ async function googleMetadataAccessToken({ fetchImpl = fetch } = {}) {
 function buildGenerationConfig(providerOptions) {
   const config = {};
   const thinkingBudget = providerOptions.thinkingBudget;
+  const thinkingLevel = providerOptions.thinkingLevel;
+  if (thinkingBudget != null && thinkingLevel != null) {
+    throw new Error('Vertex Gemini thinkingBudget and thinkingLevel cannot be used together');
+  }
   if (thinkingBudget != null) {
     if (!Number.isInteger(thinkingBudget) || thinkingBudget < -1) {
       throw new Error('Vertex Gemini thinkingBudget must be an integer >= -1');
     }
     config.thinkingConfig = { thinkingBudget };
+  } else if (thinkingLevel != null) {
+    if (typeof thinkingLevel !== 'string') {
+      throw new Error('Vertex Gemini thinkingLevel must be one of MINIMAL, LOW, MEDIUM, HIGH');
+    }
+    const normalizedThinkingLevel = thinkingLevel.trim().toUpperCase();
+    if (!['MINIMAL', 'LOW', 'MEDIUM', 'HIGH'].includes(normalizedThinkingLevel)) {
+      throw new Error('Vertex Gemini thinkingLevel must be one of MINIMAL, LOW, MEDIUM, HIGH');
+    }
+    config.thinkingConfig = { thinkingLevel:normalizedThinkingLevel };
   }
 
   const responseMimeType = providerOptions.responseMimeType;
@@ -169,6 +182,7 @@ export function createVertexGeminiProvider({
           providerResponseBodyBytes,
           providerBodyBytes: providerRequestBodyBytes + providerResponseBodyBytes,
           thinkingBudget: providerOptions.thinkingBudget ?? null,
+          thinkingLevel: providerOptions.thinkingLevel == null ? null : String(providerOptions.thinkingLevel).trim().toUpperCase(),
           responseMimeType: providerOptions.responseMimeType ?? null,
           maxOutputTokens: providerOptions.maxOutputTokens ?? null,
           requestTimeoutMs,
