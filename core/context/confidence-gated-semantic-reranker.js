@@ -59,13 +59,12 @@ function normalizeStabilityRanks(stabilityRecheckDenseRanks, confidenceDenseRank
  * contains the observed cheap selections; maxCandidates remains the final
  * fail-closed tier. No case/language/category/expected-answer hints are used.
  *
- * stabilityRecheckDenseRanks hardens selected ranks against position-sensitive
- * false agreement. At those ranks the cheaper Lite judge is repeated with the
- * candidate order reversed. The initial agreement is accepted only if that
- * independent reordered pass resolves to the same original passage; otherwise
- * the request fails closed to the strong verifier. The second initial cheap
- * judge is intentionally not repeated: the recheck is an instability detector,
- * not another vote, which keeps the routing cost inside the economic gate.
+ * Rank-2 agreement is stability-checked by default because this is the first
+ * ambiguous dense position: the cheaper Lite judge is repeated with candidate
+ * order reversed. The initial agreement is accepted only if that reordered pass
+ * resolves to the same original passage; otherwise the request fails closed to
+ * the strong verifier. This is an instability detector, not another vote, and
+ * it uses no case id, language, category, expected answer, or block identifier.
  *
  * Provider-facing calls always go through createProviderSemanticReranker, which
  * replaces real block IDs/CIDs with request-local aliases.
@@ -79,7 +78,7 @@ export function createConfidenceGatedSemanticReranker({
   confidenceDenseRankMax = 15,
   maxCandidates = 64,
   verifierCandidateTiers = null,
-  stabilityRecheckDenseRanks = null,
+  stabilityRecheckDenseRanks = [2],
   liteProviderOptions = {},
   flashProviderOptions = {},
   verifierProviderOptions = {},
