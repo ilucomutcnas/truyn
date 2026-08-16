@@ -56,3 +56,32 @@ export {
   verifyTrustRevocation,
   verifyVerification
 } from './lifecycle.js';
+
+export {
+  SOURCE_DELEGATION_PROTOCOL,
+  SOURCE_OWNER_PKI_VERSION,
+  SOURCE_OWNER_PROTOCOL,
+  authorityChainDigest,
+  createDelegationCertificate,
+  createSourceOwnerCertificate,
+  sourceOwnerIdFromPublicKey,
+  verifyDelegationCertificate,
+  verifySourceOwnerCertificate
+} from './source-owner-pki.js';
+
+export {
+  DurableTransparencyLog,
+  TRANSPARENCY_ENTRY_PROTOCOL,
+  TRANSPARENCY_EVENT_TYPES,
+  TRANSPARENCY_LOG_VERSION,
+  transparencyLogId,
+  verifyTransparencyEntry
+} from './transparency-log.js';
+
+export {
+  TRUST_RECEIPT_V2_PROTOCOL,
+  TRUST_RECEIPT_V2_VERSION,
+  createTrustReceiptV2,
+  trustReceiptV2Digest,
+  verifyTrustReceiptV2
+} from './receipt-v2.js';
