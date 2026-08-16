@@ -9,8 +9,9 @@ import { createEnvelope } from '../core/protocol/index.js';
 import { createSessionHello, createSessionAccept, verifySessionHello, verifySessionAccept, sessionId, SessionReplayCache } from '../network/sessions/authenticated-session.js';
 import { KademliaRoutingTable, KademliaRecordStore, createDhtRecord, verifyDhtRecord } from '../network/dht/kademlia.js';
 import { PeerDiscovery, createPeerRecord } from '../network/discovery/peer-discovery.js';
+import { QuicDiscoveryRpc, createQuicDiscoveryControlHandler } from '../network/discovery/quic-rpc.js';
 import { STUN_MAGIC_COOKIE, STUN_ATTR_XOR_MAPPED_ADDRESS, createBindingRequest, parseBindingResponse } from '../network/nat/stun.js';
-import { createPunchPlan, isPunchProbe } from '../network/nat/hole-punch.js';
+import { createPunchPlan, isPunchProbe, punchUdp } from '../network/nat/hole-punch.js';
 import { DirectFirstP2P, ExplicitBackpressureQueue } from '../network/transport/p2p.js';
 import { TruynQuicTransport } from '../network/transport/quic.js';
 
@@ -73,7 +74,7 @@ test('v0.1 iterative peer discovery resolves a target through another Kademlia p
   assert.equal(found.nodeId, c.nodeId);
 });
 
-test('v0.1 STUN parser resolves XOR-MAPPED-ADDRESS and punch plan is explicit', () => {
+test('v0.1 STUN parser resolves XOR-MAPPED-ADDRESS and punch plan uses a live-style UDP socket API', async () => {
   const { transactionId } = createBindingRequest({ transactionId: Buffer.from('00112233445566778899aabb', 'hex') });
   const address = [203, 0, 113, 7];
   const port = 54321;
@@ -95,10 +96,16 @@ test('v0.1 STUN parser resolves XOR-MAPPED-ADDRESS and punch plan is explicit', 
   const plan = createPunchPlan({
     localNodeId: 'a', peerNodeId: 'b',
     localMapped: { address: '198.51.100.1', port: 40000 },
-    peerMapped: { address: '203.0.113.7', port }
+    peerMapped: { address: '203.0.113.7', port },
+    attempts: 2,
+    intervalMs: 20
   });
   const probe = Buffer.from(JSON.stringify({ protocol: plan.protocol, token: plan.token, from: 'a', to: 'b' }));
   assert.equal(isPunchProbe(probe, { token: plan.token, localNodeId: 'b' }), true);
+  const sends = [];
+  const punched = await punchUdp({ socket: { async send(payload, targetPort, targetAddress) { sends.push({ payload, targetPort, targetAddress }); return payload.length; } }, plan });
+  assert.equal(punched.sent, 2);
+  assert.equal(sends.every((item) => item.targetPort === port && item.targetAddress === '203.0.113.7'), true);
 });
 
 test('v0.1 direct-first routing falls back explicitly and bounded queue rejects overload', async () => {
@@ -163,6 +170,50 @@ test('v0.1 real QUIC carries signed NEED directly peer-to-peer without relay', {
     assert.equal(relayCalls, 0);
   } finally {
     await Promise.allSettled([qa.close(), qb.close()]);
+    await rm(tls.dir, { recursive: true, force: true });
+  }
+});
+
+test('v0.1 relay-free Kademlia discovery over QUIC finds an unknown peer and then routes direct', { timeout: 30_000 }, async () => {
+  const tls = await generateTls();
+  const a = createIdentity();
+  const b = createIdentity();
+  const c = createIdentity();
+  const qa = new TruynQuicTransport({ identity: a, host: '127.0.0.1', tls });
+  const qb = new TruynQuicTransport({ identity: b, host: '127.0.0.1', tls });
+  const qc = new TruynQuicTransport({ identity: c, host: '127.0.0.1', tls });
+  let relayCalls = 0;
+  try {
+    await Promise.all([qa.start(), qb.start(), qc.start()]);
+    const recordB = createPeerRecord({ identity: b, endpoints: [`quic://127.0.0.1:${qb.port}`] });
+    const recordC = createPeerRecord({ identity: c, endpoints: [`quic://127.0.0.1:${qc.port}`] });
+
+    const discoveryB = new PeerDiscovery({ identity: b });
+    discoveryB.ingest(recordC);
+    qb.onControl(createQuicDiscoveryControlHandler(discoveryB));
+
+    const discoveryA = new PeerDiscovery({ identity: a });
+    discoveryA.rpc = new QuicDiscoveryRpc({ quicTransport: qa });
+    discoveryA.ingest(recordB);
+    assert.equal(discoveryA.get(c.nodeId), null);
+
+    const found = await discoveryA.findNode(c.nodeId);
+    assert.equal(found.nodeId, c.nodeId);
+    assert.equal(found.recordId, recordC.recordId);
+
+    qc.onEnvelope(async (received, context) => ({ type: received.type, from: received.from, via: context.transport }));
+    const route = new DirectFirstP2P({
+      quicTransport: qa,
+      discovery: discoveryA,
+      relayFallback: async () => { relayCalls += 1; return null; }
+    });
+    const need = envelope(a, 'NEED', { capability: { name: 'relay-free-echo' }, input: { value: 11 }, policy: {} }, c.nodeId);
+    const result = await route.send(c.nodeId, need);
+    assert.equal(result.transport, 'quic-direct');
+    assert.deepEqual(result.result, { type: 'NEED', from: a.nodeId, via: 'quic' });
+    assert.equal(relayCalls, 0);
+  } finally {
+    await Promise.allSettled([qa.close(), qb.close(), qc.close()]);
     await rm(tls.dir, { recursive: true, force: true });
   }
 });
