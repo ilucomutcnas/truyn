@@ -39,6 +39,32 @@ test('Vertex Gemini applies signed thinkingBudget provider option without leakin
   assert.match(prompt, /semantic/);
   assert.doesNotMatch(prompt, /thinkingBudget|providerOptions/);
   assert.equal(result.metadata.thinkingBudget, 0);
+  assert.equal(result.metadata.thinkingLevel, null);
+});
+
+test('Vertex Gemini applies Gemini 3 thinkingLevel provider option without leaking it into prompt policy text', async () => {
+  let captured;
+  const provider = createVertexGeminiProvider({
+    projectId:'project-test',
+    location:'global',
+    model:'gemini-3-flash-preview',
+    accessTokenProvider:async () => 'token-test',
+    fetchImpl:async (_url, options) => {
+      captured = JSON.parse(options.body);
+      return fakeResponse();
+    }
+  });
+  const result = await provider.execute({
+    capability:'reasoning.general',
+    input:{ task:'Choose one candidate' },
+    policy:{ benchmark:'semantic-v2', providerOptions:{ thinkingLevel:'minimal' } }
+  });
+  assert.equal(captured.generationConfig.thinkingConfig.thinkingLevel, 'MINIMAL');
+  const prompt = captured.contents[0].parts[0].text;
+  assert.match(prompt, /semantic-v2/);
+  assert.doesNotMatch(prompt, /thinkingLevel|providerOptions/);
+  assert.equal(result.metadata.thinkingBudget, null);
+  assert.equal(result.metadata.thinkingLevel, 'MINIMAL');
 });
 
 test('Vertex Gemini forwards structured output options only through generationConfig', async () => {
@@ -95,9 +121,10 @@ test('Vertex Gemini leaves thinking configuration on provider default when optio
   const result = await provider.execute({ capability: 'review', input: 'x', policy: { benchmark: 'default' } });
   assert.equal(captured.generationConfig, undefined);
   assert.equal(result.metadata.thinkingBudget, null);
+  assert.equal(result.metadata.thinkingLevel, null);
 });
 
-test('Vertex Gemini rejects invalid thinkingBudget before provider request', async () => {
+test('Vertex Gemini rejects invalid thinking controls before provider request', async () => {
   const provider = createVertexGeminiProvider({
     projectId: 'project-test',
     accessTokenProvider: async () => 'token-test',
@@ -106,6 +133,14 @@ test('Vertex Gemini rejects invalid thinkingBudget before provider request', asy
   await assert.rejects(
     provider.execute({ capability: 'review', input: 'x', policy: { providerOptions: { thinkingBudget: -2 } } }),
     /thinkingBudget must be an integer >= -1/
+  );
+  await assert.rejects(
+    provider.execute({ capability:'review', input:'x', policy:{ providerOptions:{ thinkingLevel:'extreme' } } }),
+    /thinkingLevel must be one of MINIMAL, LOW, MEDIUM, HIGH/
+  );
+  await assert.rejects(
+    provider.execute({ capability:'review', input:'x', policy:{ providerOptions:{ thinkingBudget:0, thinkingLevel:'LOW' } } }),
+    /thinkingBudget and thinkingLevel cannot be used together/
   );
 });
 
