@@ -95,9 +95,9 @@ test('signed placement records survive DHT placement, gossip, federation and hol
 test('Trustability-aware replica selection prefers stronger holders while preserving failure-domain diversity', () => {
   const holders = [
     { nodeId: 'a', trust: { score: 0.99 }, offer: { payload: { metadata: { distributedContext: { placement: { failureDomainCommitment: 'zone-a' } } } } } },
-    { nodeId: 'b', trust: { score: 0.95 }, offer: { payload: { metadata: { distributedContext: { placement: { failureDomainCommitment: 'zone-a' } } } } },
-    { nodeId: 'c', trust: { score: 0.80 }, offer: { payload: { metadata: { distributedContext: { placement: { failureDomainCommitment: 'zone-b' } } } } },
-    { nodeId: 'd', trust: { score: 0.70 }, offer: { payload: { metadata: { distributedContext: { placement: { failureDomainCommitment: 'zone-c' } } } } }
+    { nodeId: 'b', trust: { score: 0.95 }, offer: { payload: { metadata: { distributedContext: { placement: { failureDomainCommitment: 'zone-a' } } } } } },
+    { nodeId: 'c', trust: { score: 0.80 }, offer: { payload: { metadata: { distributedContext: { placement: { failureDomainCommitment: 'zone-b' } } } } } },
+    { nodeId: 'd', trust: { score: 0.70 }, offer: { payload: { metadata: { distributedContext: { placement: { failureDomainCommitment: 'zone-c' } } } } } }
   ];
   const selected = selectTrustedReplicaSet(holders, { replicaReads: 3, quorum: 2, requireFailureDomainDiversity: true });
   assert.deepEqual(selected.map((item) => item.nodeId), ['a', 'c', 'd']);
