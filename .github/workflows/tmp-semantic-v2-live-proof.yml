@@ -1,4 +1,4 @@
-name: Temporary Semantic v2 Query Projection Retrieval
+name: Temporary Semantic v2 Flash8 Retrieval
 
 on:
   push:
@@ -20,7 +20,7 @@ jobs:
       GCP_RUNTIME_SA_VALUE: ${{ vars.GCP_RUNTIME_SERVICE_ACCOUNT_EMAIL || secrets.GCP_RUNTIME_SERVICE_ACCOUNT_EMAIL }}
       GCP_PROXY_REGION: us-east4
       GCP_AR_REPO: truyn-poc
-      GCP_PROXY_SERVICE: truyn-semanticv2-project-${{ github.run_id }}
+      GCP_PROXY_SERVICE: truyn-semanticv2-flash8-${{ github.run_id }}
       GEMINI_MODEL: gemini-2.5-flash
       GOOGLE_CLOUD_LOCATION: global
       VERTEX_EMBEDDING_LOCATION: us-central1
@@ -29,7 +29,7 @@ jobs:
       SEMANTIC_V2_CORPUS_BLOCKS: '600'
       SEMANTIC_V2_RETRIEVAL_CASES: '360'
       SEMANTIC_V2_LIVE_CASES: '6'
-      SEMANTIC_V2_OUTPUT: semantic-v2-projector.json
+      SEMANTIC_V2_OUTPUT: semantic-v2-flash8.json
       SEMANTIC_V2_SOURCE_SHA: 6f2ddf743e83ad1704a831a7058a93ad668c6a69
       SEMANTIC_V2_PROXY_SHA: c1ea39a3f5a0408035fea7f00604ff14310eda10
       GH_TOKEN: ${{ github.token }}
@@ -58,7 +58,7 @@ jobs:
           load_file benchmarks/semantic-v2-gcp-proxy.js "$SEMANTIC_V2_PROXY_SHA"
           load_file benchmarks/Dockerfile.semantic-v2-gcp-proxy "$SEMANTIC_V2_PROXY_SHA"
 
-      - name: Patch retrieval benchmark for Flash query projection and fusion diagnostics
+      - name: Patch benchmark for Flash projection plus top-8 reranking
         shell: bash
         run: |
           set -euo pipefail
@@ -78,9 +78,9 @@ jobs:
           }
 
           replaceOnce(
-            'projector import',
+            'semantic imports',
             "import { createVertexEmbeddingClient } from '../adapters/providers/vertex-embedding.js';",
-            "import { createVertexEmbeddingClient } from '../adapters/providers/vertex-embedding.js';\nimport { createProviderSemanticProjector } from '../core/context/provider-semantic-projector.js';"
+            "import { createVertexEmbeddingClient } from '../adapters/providers/vertex-embedding.js';\nimport { createProviderSemanticProjector } from '../core/context/provider-semantic-projector.js';\nimport { createProviderSemanticReranker } from '../core/context/provider-semantic-reranker.js';"
           );
           replaceRange(
             'gcp-only required env',
@@ -96,7 +96,7 @@ jobs:
           replaceOnce(
             'router construction',
             '  const semanticRouter = createSemanticContextRouterV2({ embedder });',
-            `  const projectorProvider = createVertexGeminiProvider({
+            `  const flashProvider = createVertexGeminiProvider({
               projectId:gcpProjectId,
               location:geminiLocation,
               model:geminiModel,
@@ -106,7 +106,7 @@ jobs:
               requestTimeoutMs:90000
             });
             const queryProjector = createProviderSemanticProjector({
-              provider:projectorProvider,
+              provider:flashProvider,
               name:'gemini-2.5-flash-multilingual-query-projector',
               providerOptions:{
                 thinkingBudget:0,
@@ -114,67 +114,90 @@ jobs:
                 responseMimeType:'application/json',
                 responseSchema:{
                   type:'OBJECT',
-                  properties:{
-                    variants:{
-                      type:'OBJECT',
-                      properties:{ en:{type:'STRING'}, zh:{type:'STRING'}, tr:{type:'STRING'} },
-                      required:['en','zh','tr']
-                    }
-                  },
+                  properties:{ variants:{ type:'OBJECT', properties:{ en:{type:'STRING'}, zh:{type:'STRING'}, tr:{type:'STRING'} }, required:['en','zh','tr'] } },
                   required:['variants']
                 }
               },
               repairAttempts:1
             });
+            const semanticReranker = createProviderSemanticReranker({
+              provider:flashProvider,
+              name:'gemini-2.5-flash-semantic-reranker-top8',
+              providerOptions:{
+                thinkingBudget:0,
+                temperature:0,
+                maxOutputTokens:32,
+                responseMimeType:'application/json',
+                responseSchema:{ type:'OBJECT', properties:{ id:{type:'STRING'} }, required:['id'] }
+              },
+              shortlistSize:1,
+              repairAttempts:1
+            });
             const semanticRouter = createSemanticContextRouterV2({
               embedder,
               queryProjector,
-              candidateK:64,
-              fusionStrategy:'mean',
+              reranker:semanticReranker,
+              candidateK:8,
+              fusionStrategy:'original_weighted',
               diagnosticFusion:true
             });`
           );
           replaceOnce(
-            'fusion diagnostics per result',
+            'result diagnostics',
             '        lexicalV1Correct:lexicalSelectedId === item.id',
             `        lexicalV1Correct:lexicalSelectedId === item.id,
-            fusionTopIds:Object.fromEntries(Object.entries(retrieved.retrieval?.fusionDiagnostics?.topByStrategy || {}).map(([strategy,list]) => [strategy,list?.[0]?.id || null])),
-            fusionCorrect:Object.fromEntries(Object.entries(retrieved.retrieval?.fusionDiagnostics?.topByStrategy || {}).map(([strategy,list]) => [strategy,list?.[0]?.id === item.id]))`
+            denseCandidateRecall:(retrieved.retrieval?.denseCandidates || []).some((candidate) => candidate.id === item.id),
+            denseRank:(retrieved.retrieval?.denseCandidates || []).find((candidate) => candidate.id === item.id)?.rank || null,
+            fusionTop8Ids:Object.fromEntries(Object.entries(retrieved.retrieval?.fusionDiagnostics?.topByStrategy || {}).map(([strategy,list]) => [strategy,(list || []).map((entry) => entry.id)])),
+            fusionTop8Recall:Object.fromEntries(Object.entries(retrieved.retrieval?.fusionDiagnostics?.topByStrategy || {}).map(([strategy,list]) => [strategy,(list || []).some((entry) => entry.id === item.id)])),
+            rerankerUsage:retrieved.retrieval?.rerankerMetadata?.usage || { input:0, output:0, total:0 }`
           );
           replaceOnce(
-            'fusion aggregates',
+            'aggregate routing metrics',
             "  const lexicalV1Accuracy = percent(retrievalResults.filter((item) => item.lexicalV1Correct).length, retrievalResults.length);",
             `  const lexicalV1Accuracy = percent(retrievalResults.filter((item) => item.lexicalV1Correct).length, retrievalResults.length);
-            const fusionStrategies = Object.keys(retrievalResults[0]?.fusionCorrect || {});
-            const fusionByStrategy = Object.fromEntries(fusionStrategies.map((strategy) => {
-              const rows = retrievalResults.map((item) => ({ ...item, correct:Boolean(item.fusionCorrect?.[strategy]) }));
+            const denseCandidateRecallPercent = percent(retrievalResults.filter((item) => item.denseCandidateRecall).length, retrievalResults.length);
+            const fusionStrategies = Object.keys(retrievalResults[0]?.fusionTop8Recall || {});
+            const top8RecallByFusion = Object.fromEntries(fusionStrategies.map((strategy) => {
+              const rows = retrievalResults.map((item) => ({ ...item, correct:Boolean(item.fusionTop8Recall?.[strategy]) }));
               const byCategory = metricsBy(rows, 'category');
               const byQueryLanguageRaw = metricsBy(rows, 'queryLanguage');
+              const recallPercent = percent(rows.filter((item) => item.correct).length, rows.length);
               return [strategy, {
                 cases:rows.length,
-                correct:rows.filter((item) => item.correct).length,
-                accuracyPercent:percent(rows.filter((item) => item.correct).length, rows.length),
+                recallPercent,
                 byCategory,
                 byQueryLanguage:Object.fromEntries(Object.entries(byQueryLanguageRaw).map(([key,value]) => [queryLabels[key] || key,value])),
-                hardGatePassed:Object.values(byCategory).every((metric) => metric.accuracyPercent >= gate.perCategoryAccuracyPercentMin)
-                  && Object.values(byQueryLanguageRaw).every((metric) => metric.accuracyPercent >= gate.perLanguageAccuracyPercentMin)
-                  && percent(rows.filter((item) => item.correct).length, rows.length) >= gate.retrievalAccuracyPercentMin
+                hardRecallGatePassed:recallPercent >= 99
+                  && Object.values(byCategory).every((metric) => metric.accuracyPercent >= 99)
+                  && Object.values(byQueryLanguageRaw).every((metric) => metric.accuracyPercent >= 99)
               }];
-            }));`
+            }));
+            const routingStats = semanticRouter.stats();
+            const projectorStats = queryProjector.stats();
+            const rerankerStats = semanticReranker.stats();
+            const flashRoutingCostUsd = (((projectorStats.inputTokens + rerankerStats.inputTokens) * 0.30) + ((projectorStats.outputTokens + rerankerStats.outputTokens) * 2.50)) / 1_000_000;`
           );
           replaceOnce(
-            'report projection stats',
+            'report routing stats',
+            '      lexicalV1BaselineAccuracyPercent:lexicalV1Accuracy,\n      algorithm:CONTEXT_RETRIEVAL_ALGORITHM_V2',
+            '      lexicalV1BaselineAccuracyPercent:lexicalV1Accuracy,\n      denseCandidateRecallPercent,\n      top8RecallByFusion,\n      algorithm:CONTEXT_RETRIEVAL_ALGORITHM_V2'
+          );
+          replaceOnce(
+            'report semantic stats',
             '    embedding:embedder.stats(),\n    methodology:{',
             `    embedding:embedder.stats(),
-            semanticRouterStats:semanticRouter.stats(),
-            queryProjectorStats:queryProjector.stats(),
-            fusionByStrategy,
+            semanticRouterStats:routingStats,
+            queryProjectorStats:projectorStats,
+            semanticRerankerStats:rerankerStats,
+            flashRoutingCostUsd:round(flashRoutingCostUsd, 9),
+            flashRoutingCostUsdPerQuery:round(flashRoutingCostUsd / retrievalResults.length, 9),
             methodology:{`
           );
           replaceOnce(
-            'projection methodology',
+            'methodology route',
             "      topK:1,\n      blockIdsInRequesterQueries:false,",
-            "      topK:1,\n      queryProjectionModel:'gemini-2.5-flash',\n      queryProjectionLanguages:['en','zh','tr'],\n      queryProjectorSeesCorpus:false,\n      queryProjectorSeesCandidateIds:false,\n      primaryFusionStrategy:'mean',\n      diagnosticFusionStrategies:'all router-supported strategies computed from identical projected vectors without extra provider calls',\n      blockIdsInRequesterQueries:false,"
+            "      topK:1,\n      queryProjectionModel:'gemini-2.5-flash',\n      queryProjectionLanguages:['en','zh','tr'],\n      queryProjectorSeesCorpus:false,\n      queryProjectorSeesCandidateIds:false,\n      denseCandidateK:8,\n      fusionStrategy:'original_weighted',\n      semanticRerankerModel:'gemini-2.5-flash',\n      semanticRerankerCandidateCount:8,\n      semanticRerankerThinkingBudget:0,\n      blockIdsInRequesterQueries:false,"
           );
           replaceOnce(
             'retrieval-only pass exit',
@@ -184,8 +207,8 @@ jobs:
               checks:{ retrievalOnlyPassed },
               passed:retrievalOnlyPassed
             };
-            await writeFile(outputPath, JSON.stringify({ ...reportBase, status:'retrieval_only_pass', semanticGate, retrievalResults }, null, 2));
-            console.log(JSON.stringify({ ...reportBase, status:'retrieval_only_pass', semanticGate }, null, 2));
+            await writeFile(outputPath, JSON.stringify({ ...reportBase, status:retrievalOnlyPassed ? 'retrieval_only_pass' : 'failed_retrieval', semanticGate, retrievalResults }, null, 2));
+            console.log(JSON.stringify({ ...reportBase, status:retrievalOnlyPassed ? 'retrieval_only_pass' : 'failed_retrieval', semanticGate }, null, 2));
             return;
 
             const relay = createRelay({ localDevelopmentMode:true, exposeDiagnostics:true, maxNodes:128, maxOffers:256 });`
@@ -223,7 +246,7 @@ jobs:
           token="$(openssl rand -hex 32)"
           echo "::add-mask::$token"
           registry="${GCP_PROXY_REGION}-docker.pkg.dev"
-          image="${registry}/${GCP_PROJECT_ID_VALUE}/${GCP_AR_REPO}/semanticv2-project:${GITHUB_SHA}"
+          image="${registry}/${GCP_PROJECT_ID_VALUE}/${GCP_AR_REPO}/semanticv2-flash8:${GITHUB_SHA}"
           gcloud auth configure-docker "$registry" --quiet
           docker build -f benchmarks/Dockerfile.semantic-v2-gcp-proxy -t "$image" .
           docker push "$image" >/dev/null
@@ -238,30 +261,30 @@ jobs:
           echo "GCP_ACCESS_TOKEN=$token" >> "$GITHUB_ENV"
           echo "GCP_PROJECT_ID=$GCP_PROJECT_ID_VALUE" >> "$GITHUB_ENV"
 
-      - name: Preflight embedding and Flash projection
+      - name: Preflight embedding and Flash structured generation
         shell: bash
         run: |
           set -euo pipefail
           embed_path="/v1/projects/${GCP_PROJECT_ID}/locations/${VERTEX_EMBEDDING_LOCATION}/publishers/google/models/${VERTEX_EMBEDDING_MODEL}:predict"
-          embed_body='{"instances":[{"task_type":"RETRIEVAL_QUERY","content":"projection retrieval preflight"}],"parameters":{"autoTruncate":true,"outputDimensionality":768}}'
+          embed_body='{"instances":[{"task_type":"RETRIEVAL_QUERY","content":"flash8 retrieval preflight"}],"parameters":{"autoTruncate":true,"outputDimensionality":768}}'
           curl -fsS -H "Authorization: Bearer ${GCP_ACCESS_TOKEN}" -H 'Content-Type: application/json' -d "$embed_body" "${VERTEX_API_ENDPOINT}${embed_path}" | jq -e '.predictions[0].embeddings.values | length > 0' >/dev/null
           flash_path="/v1/projects/${GCP_PROJECT_ID}/locations/global/publishers/google/models/${GEMINI_MODEL}:generateContent"
-          flash_body='{"contents":[{"role":"user","parts":[{"text":"Return JSON only: {\"variants\":{\"en\":\"approval\",\"zh\":\"批准\",\"tr\":\"onay\"}}"}]}],"generationConfig":{"temperature":0,"thinkingConfig":{"thinkingBudget":0},"responseMimeType":"application/json"}}'
+          flash_body='{"contents":[{"role":"user","parts":[{"text":"Return JSON only: {\"id\":\"candidate-a\"}."}]}],"generationConfig":{"temperature":0,"thinkingConfig":{"thinkingBudget":0},"responseMimeType":"application/json"}}'
           curl -fsS -H "Authorization: Bearer ${GCP_ACCESS_TOKEN}" -H 'Content-Type: application/json' -d "$flash_body" "${VERTEX_API_ENDPOINT}${flash_path}" | jq -e '.candidates | length > 0' >/dev/null
 
-      - name: Run 360-case query-projection retrieval experiment
+      - name: Run 360-case Flash8 retrieval experiment
         run: node benchmarks/semantic-retrieval-v2.js
 
-      - name: Print projection and fusion summary
-        if: ${{ always() && hashFiles('semantic-v2-projector.json') != '' }}
-        run: jq '{status,corpus,retrieval,queryProjectorStats,semanticRouterStats,fusionByStrategy,embedding,methodology,semanticGate}' semantic-v2-projector.json
+      - name: Print Flash8 summary
+        if: ${{ always() && hashFiles('semantic-v2-flash8.json') != '' }}
+        run: jq '{status,corpus,retrieval,queryProjectorStats,semanticRerankerStats,flashRoutingCostUsd,flashRoutingCostUsdPerQuery,semanticRouterStats,embedding,methodology,semanticGate}' semantic-v2-flash8.json
 
-      - name: Upload projection evidence
-        if: ${{ always() && hashFiles('semantic-v2-projector.json') != '' }}
+      - name: Upload Flash8 evidence
+        if: ${{ always() && hashFiles('semantic-v2-flash8.json') != '' }}
         uses: actions/upload-artifact@v4
         with:
-          name: truyn-semantic-v2-projector-${{ github.run_id }}
-          path: semantic-v2-projector.json
+          name: truyn-semantic-v2-flash8-${{ github.run_id }}
+          path: semantic-v2-flash8.json
           if-no-files-found: error
           retention-days: 30
 
