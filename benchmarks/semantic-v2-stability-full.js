@@ -9,9 +9,11 @@ const outputPath = process.env.SEMANTIC_V2_OUTPUT || 'semantic-v2-stability-full
 const sourceSha = process.env.SEMANTIC_V2_SOURCE_SHA || null;
 const projectId = process.env.GCP_PROJECT_ID;
 const endpoint = process.env.VERTEX_API_ENDPOINT;
-const accessToken = process.env.GCP_ACCESS_TOKEN;
+// The public benchmark harness accepts only a generic job-local bearer input.
+// Ephemeral/private workflow wiring is responsible for obtaining that value.
+const providerBearer = process.env.SEMANTIC_PROVIDER_BEARER;
 const budget = Number(process.env.ROUTING_COST_BUDGET_USD_PER_QUERY || 0.00395);
-if (!projectId || !endpoint || !accessToken) throw new Error('GCP_PROJECT_ID, VERTEX_API_ENDPOINT and GCP_ACCESS_TOKEN are required');
+if (!projectId || !endpoint || !providerBearer) throw new Error('benchmark project, provider endpoint and SEMANTIC_PROVIDER_BEARER are required');
 
 const source = fs.readFileSync(corpusSource, 'utf8');
 const start = source.indexOf('const domains = [');
@@ -22,7 +24,7 @@ vm.createContext(box);
 vm.runInContext(`const corpusSize=600,retrievalCaseCount=360;${source.slice(start, end)};globalThis.__d={records,blocks,retrievalCases};`, box);
 const { records, blocks, retrievalCases } = box.__d;
 
-const accessTokenProvider = async () => accessToken;
+const accessTokenProvider = async () => providerBearer;
 const makeProvider = (model) => createVertexGeminiProvider({
   projectId,
   location:'global',
