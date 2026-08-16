@@ -79,7 +79,7 @@ export class TruynQuicTransport {
     this.port = port;
     this.tls = tls;
     this.maxMessageBytes = maxMessageBytes;
-    this.socket = new QUICSocket();
+    this.socket = new QUICSocket({});
     this.server = null;
     this.clients = new Set();
     this.serverSessions = new WeakMap();
