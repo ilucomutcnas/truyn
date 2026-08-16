@@ -3,13 +3,15 @@ import assert from 'node:assert/strict';
 import { createProviderSemanticReranker } from '../core/context/provider-semantic-reranker.js';
 import { createSemanticContextRouterV2 } from '../core/context/semantic-router-v2.js';
 
-test('provider semantic reranker returns only a candidate id and tracks usage', async () => {
+test('provider semantic reranker hides real candidate ids behind compact local aliases and tracks usage', async () => {
   const provider = {
     async execute(request) {
       assert.equal(request.capability, 'reasoning.general');
-      assert.ok(request.input.context.includes('candidate-b'));
+      const context = JSON.parse(request.input.context);
+      assert.deepEqual(context.map((item) => item.id), ['c0','c1']);
+      assert.doesNotMatch(request.input.context, /candidate-[ab]/);
       return {
-        output: '{"id":"candidate-b"}',
+        output: '{"id":"c1"}',
         metadata: {
           usage: { promptTokenCount: 21, candidatesTokenCount: 5, totalTokenCount: 26 },
           providerRequestBodyBytes: 321,
@@ -26,15 +28,18 @@ test('provider semantic reranker returns only a candidate id and tracks usage', 
   assert.equal(result.id, 'candidate-b');
   assert.deepEqual(result.metadata.usage, { input:21, output:5, total:26 });
   assert.equal(result.metadata.repairAttemptsUsed, 0);
+  assert.equal(result.metadata.providerCandidateAliases, true);
   assert.equal(reranker.stats().requests, 1);
   assert.equal(reranker.stats().repairs, 0);
+  assert.equal(reranker.stats().providerCandidateAliases, true);
 });
 
-test('provider semantic reranker repairs placeholder or invented ids and counts both calls', async () => {
+test('provider semantic reranker repairs placeholder or invented aliases and counts both calls', async () => {
   let calls = 0;
   const provider = {
-    async execute() {
+    async execute(request) {
       calls += 1;
+      assert.doesNotMatch(request.input.context, /candidate-[ab]/);
       return calls === 1
         ? {
             output:'{"id":"<candidate id>"}',
@@ -45,7 +50,7 @@ test('provider semantic reranker repairs placeholder or invented ids and counts 
             }
           }
         : {
-            output:'{"id":"candidate-b"}',
+            output:'{"id":"c1"}',
             metadata:{
               usage:{ promptTokenCount:11, candidatesTokenCount:2, totalTokenCount:13 },
               providerRequestBodyBytes:110,
@@ -68,7 +73,7 @@ test('provider semantic reranker repairs placeholder or invented ids and counts 
   assert.equal(reranker.stats().repairs, 1);
 });
 
-test('provider semantic reranker can shortlist large candidate sets before final top-1', async () => {
+test('provider semantic reranker can shortlist aliases and maps them back to original ids', async () => {
   let calls = 0;
   const provider = {
     async execute(request) {
@@ -76,14 +81,16 @@ test('provider semantic reranker can shortlist large candidate sets before final
       const context = JSON.parse(request.input.context);
       if (calls === 1) {
         assert.equal(context.length, 4);
+        assert.deepEqual(context.map((item) => item.id), ['c0','c1','c2','c3']);
+        assert.doesNotMatch(request.input.context, /candidate-[abcd]/);
         return {
-          output:'{"ids":["candidate-c","candidate-b"]}',
+          output:'{"ids":["c2","c1"]}',
           metadata:{ usage:{ promptTokenCount:40, candidatesTokenCount:8, totalTokenCount:48 }, providerRequestBodyBytes:400, providerLatencyMs:20 }
         };
       }
-      assert.deepEqual(context.map((item) => item.id), ['candidate-c','candidate-b']);
+      assert.deepEqual(context.map((item) => item.id), ['c2','c1']);
       return {
-        output:'{"id":"candidate-b"}',
+        output:'{"id":"c1"}',
         metadata:{ usage:{ promptTokenCount:20, candidatesTokenCount:4, totalTokenCount:24 }, providerRequestBodyBytes:200, providerLatencyMs:10 }
       };
     }
@@ -103,6 +110,29 @@ test('provider semantic reranker can shortlist large candidate sets before final
   assert.equal(result.metadata.providerLatencyMs, 30);
   assert.equal(reranker.stats().shortlistRequests, 1);
   assert.equal(reranker.stats().finalRequests, 1);
+});
+
+test('compact aliases keep long immutable routing identifiers out of provider-visible task and context', async () => {
+  const longA = 'semantic-record-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+  const longB = 'semantic-record-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+  const provider = {
+    async execute(request) {
+      const visible = `${request.input.task}\n${request.input.context}`;
+      assert.doesNotMatch(visible, /semantic-record-/);
+      assert.match(request.input.context, /"id":"c0"/);
+      assert.match(request.input.context, /"id":"c1"/);
+      return {
+        output:'{"id":"c1"}',
+        metadata:{ usage:{ promptTokenCount:10, candidatesTokenCount:3, totalTokenCount:13 } }
+      };
+    }
+  };
+  const reranker = createProviderSemanticReranker({ provider });
+  const result = await reranker.rerank('target rule?', [
+    { id:longA, text:'wrong rule' },
+    { id:longB, text:'target rule' }
+  ]);
+  assert.equal(result.id, longB);
 });
 
 test('semantic router reranks only dense candidates and preserves selected block provenance', async () => {
