@@ -1,0 +1,83 @@
+name: Ephemeral Semantic v2 Atomic Facet Diagnostic
+
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/tmp-semantic-v2-facet-diagnostic.yml']
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  diagnostic:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      GCP_PROJECT_ID_VALUE: ${{ vars.GCP_PROJECT_ID || secrets.GCP_PROJECT_ID }}
+      GCP_WIF_PROVIDER_VALUE: ${{ vars.GCP_WIF_PROVIDER || secrets.GCP_WIF_PROVIDER }}
+      GCP_DEPLOYER_SA_VALUE: ${{ vars.GCP_DEPLOYER_SERVICE_ACCOUNT_EMAIL || secrets.GCP_DEPLOYER_SERVICE_ACCOUNT_EMAIL }}
+      GCP_RUNTIME_SA_VALUE: ${{ vars.GCP_RUNTIME_SERVICE_ACCOUNT_EMAIL || secrets.GCP_RUNTIME_SERVICE_ACCOUNT_EMAIL }}
+      GCP_PROXY_REGION: us-east4
+      GCP_AR_REPO: truyn-poc
+      GCP_PROXY_SERVICE: truyn-semanticv2-facet-${{ github.run_id }}
+      SEMANTIC_V2_SOURCE_SHA: 6f2ddf743e83ad1704a831a7058a93ad668c6a69
+      SEMANTIC_V2_PROXY_SHA: c1ea39a3f5a0408035fea7f00604ff14310eda10
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { persist-credentials: false }
+      - uses: actions/setup-node@v4
+        with: { node-version: '20' }
+      - run: npm install --ignore-scripts --no-audit --no-fund
+      - name: Load immutable sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          load_file(){ mkdir -p "$(dirname "$1")"; curl -fsSL -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" "https://api.github.com/repos/${GITHUB_REPOSITORY}/contents/$1?ref=$2" | jq -r '.content' | tr -d '\n' | base64 -d > "$1"; }
+          load_file benchmarks/semantic-retrieval-v2.js "$SEMANTIC_V2_SOURCE_SHA"
+          load_file benchmarks/semantic-v2-gcp-proxy.js "$SEMANTIC_V2_PROXY_SHA"
+          load_file benchmarks/Dockerfile.semantic-v2-gcp-proxy "$SEMANTIC_V2_PROXY_SHA"
+      - uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID_VALUE }}
+          workload_identity_provider: ${{ env.GCP_WIF_PROVIDER_VALUE }}
+          service_account: ${{ env.GCP_DEPLOYER_SA_VALUE }}
+          create_credentials_file: true
+          export_environment_variables: true
+      - uses: google-github-actions/setup-gcloud@v3
+        with: { project_id: '${{ env.GCP_PROJECT_ID_VALUE }}' }
+      - name: Prepare runtime proxy
+        shell: bash
+        run: |
+          set -euo pipefail
+          token="$(openssl rand -hex 32)"; echo "::add-mask::$token"; registry="${GCP_PROXY_REGION}-docker.pkg.dev"; image="${registry}/${GCP_PROJECT_ID_VALUE}/${GCP_AR_REPO}/semanticv2-facet:${GITHUB_SHA}"
+          gcloud auth configure-docker "$registry" --quiet; docker build -f benchmarks/Dockerfile.semantic-v2-gcp-proxy -t "$image" . >/dev/null; docker push "$image" >/dev/null
+          gcloud run deploy "$GCP_PROXY_SERVICE" --project="$GCP_PROJECT_ID_VALUE" --region="$GCP_PROXY_REGION" --image="$image" --service-account="$GCP_RUNTIME_SA_VALUE" --port=8080 --min=0 --max=1 --cpu=1 --memory=512Mi --set-env-vars="BENCHMARK_PROXY_TOKEN=${token}" --no-invoker-iam-check --quiet >/dev/null
+          url="$(gcloud run services describe "$GCP_PROXY_SERVICE" --project="$GCP_PROJECT_ID_VALUE" --region="$GCP_PROXY_REGION" --format='value(status.url)')"; for a in $(seq 1 30); do curl -fsS -H "Authorization: Bearer ${token}" "${url}/health" | jq -e '.ok==true' >/dev/null && break; [[ "$a" -lt 30 ]] || exit 1; sleep 2; done
+          echo "VERTEX_API_ENDPOINT=$url" >> "$GITHUB_ENV"; echo "GCP_ACCESS_TOKEN=$token" >> "$GITHUB_ENV"; echo "GCP_PROJECT_ID=$GCP_PROJECT_ID_VALUE" >> "$GITHUB_ENV"
+      - name: Evaluate atomic facet coverage on hard cases
+        shell: bash
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const fs=require('node:fs'); const s=fs.readFileSync('benchmarks/semantic-retrieval-v2.js','utf8'); const a=s.indexOf('const domains = ['); const b=s.indexOf('const fullContext ='); if(a<0||b<0) throw new Error('markers'); const corpus=s.slice(a,b);
+          fs.writeFileSync('semantic-v2-facet-diagnostic.mjs', `
+          import { writeFile } from 'node:fs/promises'; import { createVertexGeminiProvider } from './adapters/providers/vertex-gemini.js'; import { createVertexEmbeddingClient } from './adapters/providers/vertex-embedding.js';
+          const corpusSize=600,retrievalCaseCount=360; ${corpus}
+          const provider=createVertexGeminiProvider({projectId:process.env.GCP_PROJECT_ID,location:'global',model:'gemini-2.5-flash',endpoint:process.env.VERTEX_API_ENDPOINT,accessTokenProvider:async()=>process.env.GCP_ACCESS_TOKEN,capabilities:['reasoning.general'],requestTimeoutMs:120000});
+          const embedder=createVertexEmbeddingClient({projectId:process.env.GCP_PROJECT_ID,location:'us-central1',model:'gemini-embedding-001',endpoint:process.env.VERTEX_API_ENDPOINT,accessTokenProvider:async()=>process.env.GCP_ACCESS_TOKEN,batchSize:5,outputDimensionality:768});
+          const docVectors=await embedder.embedMany(blocks.map(b=>b.text),{taskType:'RETRIEVAL_DOCUMENT'}); const norm=v=>Math.sqrt(v.reduce((s,x)=>s+x*x,0)); const cos=(a,b)=>{let d=0;for(let i=0;i<Math.min(a.length,b.length);i++)d+=a[i]*b[i];return d/(norm(a)*norm(b));}; const mean=v=>v.reduce((a,b)=>a+b,0)/v.length;
+          const hard=[5,112,241,269],rows=[]; let inputTokens=0,outputTokens=0; for(const caseIndex of hard){const item=retrievalCases.find(x=>x.caseIndex===caseIndex); const ex=await provider.execute({capability:'reasoning.general',input:{task:'Extract the independent semantic constraints needed to identify the authoritative passage. Return exactly 3 concise English facets: subject/domain, requested action/operation, and state/condition/scope. Preserve negation, threshold, temporal, location and approval distinctions. Do not answer the query.',context:item.question},policy:{providerOptions:{thinkingBudget:0,temperature:0,maxOutputTokens:160,responseMimeType:'application/json',responseSchema:{type:'OBJECT',properties:{facets:{type:'ARRAY',items:{type:'STRING'},minItems:3,maxItems:3}},required:['facets']}}}}); const u=ex.metadata?.usage||{}; inputTokens+=u.promptTokenCount||0; outputTokens+=u.candidatesTokenCount||0; const facets=JSON.parse(ex.output).facets; const qv=await embedder.embedMany(facets,{taskType:'RETRIEVAL_QUERY'}); const scored=blocks.map((b,i)=>{const ss=qv.map(q=>cos(q,docVectors[i]));return{id:b.id,min:Math.min(...ss),mean:mean(ss),harmonic:ss.length/ss.reduce((s,x)=>s+1/Math.max(.000001,x),0)}}); const rank=k=>[...scored].sort((x,y)=>y[k]-x[k]||x.id.localeCompare(y.id)); rows.push({caseIndex,expectedId:item.id,facets,top:{min:rank('min')[0].id,mean:rank('mean')[0].id,harmonic:rank('harmonic')[0].id},expectedRank:{min:rank('min').findIndex(x=>x.id===item.id)+1,mean:rank('mean').findIndex(x=>x.id===item.id)+1,harmonic:rank('harmonic').findIndex(x=>x.id===item.id)+1}});}
+          const summary=Object.fromEntries(['min','mean','harmonic'].map(k=>[k,{correct:rows.filter(r=>r.top[k]===r.expectedId).length,total:rows.length}])); const report={benchmark:'TRUYN Semantic v2 atomic facet coverage diagnostic',generatedAt:new Date().toISOString(),rows,summary,projectorUsage:{inputTokens,outputTokens},embeddingStats:embedder.stats()}; await writeFile('semantic-v2-facet-diagnostic.json',JSON.stringify(report,null,2)); console.log(JSON.stringify(report,null,2));
+          `);
+          NODE
+          node --check semantic-v2-facet-diagnostic.mjs && node semantic-v2-facet-diagnostic.mjs
+      - name: Upload evidence
+        if: ${{ always() && hashFiles('semantic-v2-facet-diagnostic.json') != '' }}
+        uses: actions/upload-artifact@v4
+        with: { name: 'truyn-semantic-v2-facet-diagnostic-${{ github.run_id }}', path: semantic-v2-facet-diagnostic.json, retention-days: 30 }
+      - name: Cleanup proxy
+        if: always()
+        shell: bash
+        run: gcloud run services delete "$GCP_PROXY_SERVICE" --project="$GCP_PROJECT_ID_VALUE" --region="$GCP_PROXY_REGION" --quiet >/dev/null 2>&1 || true
