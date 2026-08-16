@@ -1,0 +1,90 @@
+name: Ephemeral Semantic v2 Vertex Ranking API Hard Cases
+
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/tmp-semantic-v2-rank-api-hard.yml']
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  diagnostic:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      GCP_PROJECT_ID_VALUE: ${{ vars.GCP_PROJECT_ID || secrets.GCP_PROJECT_ID }}
+      GCP_WIF_PROVIDER_VALUE: ${{ vars.GCP_WIF_PROVIDER || secrets.GCP_WIF_PROVIDER }}
+      GCP_DEPLOYER_SA_VALUE: ${{ vars.GCP_DEPLOYER_SERVICE_ACCOUNT_EMAIL || secrets.GCP_DEPLOYER_SERVICE_ACCOUNT_EMAIL }}
+      GCP_RUNTIME_SA_VALUE: ${{ vars.GCP_RUNTIME_SERVICE_ACCOUNT_EMAIL || secrets.GCP_RUNTIME_SERVICE_ACCOUNT_EMAIL }}
+      GCP_PROXY_REGION: us-east4
+      GCP_AR_REPO: truyn-poc
+      GCP_PROXY_SERVICE: truyn-semanticv2-rank-hard-${{ github.run_id }}
+      SEMANTIC_V2_SOURCE_SHA: 6f2ddf743e83ad1704a831a7058a93ad668c6a69
+      SEMANTIC_V2_PROXY_SHA: c1ea39a3f5a0408035fea7f00604ff14310eda10
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { persist-credentials: false }
+      - uses: actions/setup-node@v4
+        with: { node-version: '20' }
+      - run: npm install --ignore-scripts --no-audit --no-fund
+      - name: Load immutable benchmark and proxy dockerfile
+        shell: bash
+        run: |
+          set -euo pipefail
+          load_file(){ mkdir -p "$(dirname "$1")"; curl -fsSL -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" "https://api.github.com/repos/${GITHUB_REPOSITORY}/contents/$1?ref=$2" | jq -r '.content' | tr -d '\n' | base64 -d > "$1"; }
+          load_file benchmarks/semantic-retrieval-v2.js "$SEMANTIC_V2_SOURCE_SHA"
+          load_file benchmarks/Dockerfile.semantic-v2-gcp-proxy "$SEMANTIC_V2_PROXY_SHA"
+      - uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID_VALUE }}
+          workload_identity_provider: ${{ env.GCP_WIF_PROVIDER_VALUE }}
+          service_account: ${{ env.GCP_DEPLOYER_SA_VALUE }}
+          create_credentials_file: true
+          export_environment_variables: true
+      - uses: google-github-actions/setup-gcloud@v3
+        with: { project_id: '${{ env.GCP_PROJECT_ID_VALUE }}' }
+      - name: Ensure Ranking API service is enabled
+        shell: bash
+        run: gcloud services enable discoveryengine.googleapis.com --project="$GCP_PROJECT_ID_VALUE" --quiet
+      - name: Build isolated runtime proxy with Vertex embedding and RankService routes
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > benchmarks/semantic-v2-gcp-proxy.js <<'NODE'
+          import http from 'node:http';
+          const host='0.0.0.0',port=Number(process.env.PORT||8080),authToken=process.env.BENCHMARK_PROXY_TOKEN,projectId=process.env.GCP_PROJECT_ID;
+          async function token(){const r=await fetch('http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token',{headers:{'Metadata-Flavor':'Google'}});const b=await r.json();if(!r.ok||!b.access_token)throw new Error(b?.error||'metadata token failed');return b.access_token;}
+          function send(res,status,body){const d=Buffer.from(JSON.stringify(body));res.writeHead(status,{'content-type':'application/json','content-length':d.length,'cache-control':'no-store'});res.end(d);}
+          const server=http.createServer(async(req,res)=>{if(req.headers.authorization!==`Bearer ${authToken}`)return send(res,401,{error:'unauthorized'});if(req.method==='GET'&&req.url==='/health')return send(res,200,{ok:true});try{const chunks=[];for await(const c of req)chunks.push(c);const raw=Buffer.concat(chunks),t=await token();let url,headers={authorization:`Bearer ${t}`,'content-type':'application/json'};if(req.method==='POST'&&req.url?.startsWith('/v1/projects/')&&req.url.endsWith(':predict')){url=`https://aiplatform.googleapis.com${req.url}`;}else if(req.method==='POST'&&req.url==='/rank'){url=`https://discoveryengine.googleapis.com/v1/projects/${projectId}/locations/global/rankingConfigs/default_ranking_config:rank`;headers['x-goog-user-project']=projectId;}else{return send(res,404,{error:'not_found'});}const up=await fetch(url,{method:'POST',headers,body:raw});const body=Buffer.from(await up.arrayBuffer());res.writeHead(up.status,{'content-type':up.headers.get('content-type')||'application/json','content-length':body.length,'cache-control':'no-store'});res.end(body);}catch(e){send(res,500,{error:e.message});}});server.listen(port,host);
+          NODE
+          token="$(openssl rand -hex 32)"; echo "::add-mask::$token"; registry="${GCP_PROXY_REGION}-docker.pkg.dev"; image="${registry}/${GCP_PROJECT_ID_VALUE}/${GCP_AR_REPO}/semanticv2-rank-hard:${GITHUB_SHA}"
+          gcloud auth configure-docker "$registry" --quiet; docker build -f benchmarks/Dockerfile.semantic-v2-gcp-proxy -t "$image" . >/dev/null; docker push "$image" >/dev/null
+          gcloud run deploy "$GCP_PROXY_SERVICE" --project="$GCP_PROJECT_ID_VALUE" --region="$GCP_PROXY_REGION" --image="$image" --service-account="$GCP_RUNTIME_SA_VALUE" --port=8080 --min=0 --max=1 --cpu=1 --memory=512Mi --set-env-vars="BENCHMARK_PROXY_TOKEN=${token},GCP_PROJECT_ID=${GCP_PROJECT_ID_VALUE}" --no-invoker-iam-check --quiet >/dev/null
+          url="$(gcloud run services describe "$GCP_PROXY_SERVICE" --project="$GCP_PROJECT_ID_VALUE" --region="$GCP_PROXY_REGION" --format='value(status.url)')"; for a in $(seq 1 30); do curl -fsS -H "Authorization: Bearer ${token}" "${url}/health" | jq -e '.ok==true' >/dev/null && break; [[ "$a" -lt 30 ]] || exit 1; sleep 2; done
+          echo "RANK_PROXY_URL=$url" >> "$GITHUB_ENV"; echo "RANK_PROXY_TOKEN=$token" >> "$GITHUB_ENV"; echo "GCP_PROJECT_ID=$GCP_PROJECT_ID_VALUE" >> "$GITHUB_ENV"
+      - name: Recreate dense top-24 and rank hard cases with dedicated rankers
+        shell: bash
+        run: |
+          node <<'NODE'
+          const fs=require('node:fs');const s=fs.readFileSync('benchmarks/semantic-retrieval-v2.js','utf8');const a=s.indexOf('const domains = ['),b=s.indexOf('const fullContext =');if(a<0||b<0)throw new Error('corpus markers');const corpus=s.slice(a,b);fs.writeFileSync('semantic-v2-rank-hard.mjs',`
+          import { writeFile } from 'node:fs/promises';import { createVertexEmbeddingClient } from './adapters/providers/vertex-embedding.js';
+          const corpusSize=600,retrievalCaseCount=360;${corpus}
+          async function mapLimit(items,limit,fn){const out=new Array(items.length);let next=0;async function worker(){for(;;){const i=next++;if(i>=items.length)return;out[i]=await fn(items[i],i);}}await Promise.all(Array.from({length:Math.min(limit,items.length)},worker));return out;}
+          const embedder=createVertexEmbeddingClient({projectId:process.env.GCP_PROJECT_ID,location:'us-central1',model:'gemini-embedding-001',endpoint:process.env.RANK_PROXY_URL,accessTokenProvider:async()=>process.env.RANK_PROXY_TOKEN,batchSize:1,outputDimensionality:768,maxRetries:8});const norm=v=>Math.sqrt(v.reduce((s,x)=>s+x*x,0));const cos=(x,y)=>{let d=0;for(let i=0;i<x.length;i++)d+=x[i]*y[i];return d/(norm(x)*norm(y));};
+          const docs=await mapLimit(blocks,8,async block=>(await embedder.embedMany([block.text],{taskType:'RETRIEVAL_DOCUMENT'}))[0]);const hard=[5,112,241,269],models=['semantic-ranker-fast-004','semantic-ranker-default-004'],rows=[];
+          for(const caseIndex of hard){const item=retrievalCases.find(x=>x.caseIndex===caseIndex);const q=(await embedder.embedMany([item.question],{taskType:'RETRIEVAL_QUERY'}))[0];const dense=blocks.map((block,i)=>({id:block.id,text:block.text,score:cos(q,docs[i])})).sort((x,y)=>y.score-x.score||x.id.localeCompare(y.id)).slice(0,24);const expectedDenseRank=dense.findIndex(x=>x.id===item.id)+1;const byModel={};for(const model of models){const alias=dense.map((r,i)=>({alias:'c'+i.toString(36),originalId:r.id,text:r.text}));const response=await fetch(process.env.RANK_PROXY_URL+'/rank',{method:'POST',headers:{authorization:'Bearer '+process.env.RANK_PROXY_TOKEN,'content-type':'application/json'},body:JSON.stringify({model,topN:24,query:item.question,records:alias.map(r=>({id:r.alias,content:r.text})),ignoreRecordDetailsInResponse:true})});const text=await response.text();let body;try{body=JSON.parse(text)}catch{body=null}if(!response.ok)throw new Error('Ranking API '+response.status+': '+text.slice(0,500));const map=new Map(alias.map(r=>[r.alias,r.originalId]));const ranked=(body.records||[]).map(r=>({id:map.get(r.id),score:r.score,alias:r.id}));byModel[model]={selectedId:ranked[0]?.id||null,pass:ranked[0]?.id===item.id,ranked};}rows.push({caseIndex,expectedId:item.id,expectedDenseRank:expectedDenseRank||null,denseTop24Ids:dense.map(x=>x.id),byModel});}
+          const report={benchmark:'TRUYN Semantic v2 Vertex Ranking API hard-case diagnostic',generatedAt:new Date().toISOString(),candidateK:24,models,rows,summary:Object.fromEntries(models.map(m=>[m,{correct:rows.filter(r=>r.byModel[m].pass).length,eligible:rows.filter(r=>r.expectedDenseRank).length,correctAmongEligible:rows.filter(r=>r.expectedDenseRank&&r.byModel[m].pass).length}])),embedding:embedder.stats()};await writeFile('semantic-v2-rank-hard.json',JSON.stringify(report,null,2));console.log(JSON.stringify({summary:report.summary,rows:rows.map(r=>({caseIndex:r.caseIndex,expectedDenseRank:r.expectedDenseRank,fast:r.byModel['semantic-ranker-fast-004'].selectedId,default:r.byModel['semantic-ranker-default-004'].selectedId}))},null,2));
+          `);
+          NODE
+          node --check semantic-v2-rank-hard.mjs && node semantic-v2-rank-hard.mjs
+      - name: Upload evidence
+        if: ${{ always() && hashFiles('semantic-v2-rank-hard.json') != '' }}
+        uses: actions/upload-artifact@v4
+        with: { name: 'truyn-semantic-v2-rank-hard-${{ github.run_id }}', path: semantic-v2-rank-hard.json, retention-days: 30 }
+      - name: Cleanup proxy
+        if: always()
+        shell: bash
+        run: gcloud run services delete "$GCP_PROXY_SERVICE" --project="$GCP_PROJECT_ID_VALUE" --region="$GCP_PROXY_REGION" --quiet >/dev/null 2>&1 || true
