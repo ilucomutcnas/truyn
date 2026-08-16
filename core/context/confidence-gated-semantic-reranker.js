@@ -77,7 +77,7 @@ export function createConfidenceGatedSemanticReranker({
   cheapCandidateK = 24,
   confidenceDenseRankMax = 15,
   maxCandidates = 64,
-  verifierCandidateTiers = null,
+  verifierCandidateTiers = [16,64],
   stabilityRecheckDenseRanks = [2],
   liteProviderOptions = {},
   flashProviderOptions = {},
