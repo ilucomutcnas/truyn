@@ -1,5 +1,6 @@
 import { applyContextDelta } from './index.js';
 import { createFileSemanticIndexStore } from './semantic-index-store.js';
+import { createShardedFileSemanticIndexStore } from './sharded-semantic-index-store.js';
 import { createSemanticContextRouterV2 } from './semantic-router-v2.js';
 
 /**
@@ -18,12 +19,21 @@ export function createProductionSemanticIndex({
   candidateK = 64,
   lexicalTieBreakWeight = 0,
   fusionStrategy = 'max',
-  diagnosticFusion = false
+  diagnosticFusion = false,
+  storeKind = 'file',
+  indexStore = null,
+  shardPrefixLength = 2,
+  ioConcurrency = 16
 } = {}) {
   if (!embedder || typeof embedder.embedMany !== 'function') {
     throw new Error('production semantic index requires an authorized embedder');
   }
-  const indexStore = createFileSemanticIndexStore({ directory });
+  let resolvedIndexStore = indexStore;
+  if (!resolvedIndexStore) {
+    if (storeKind === 'file') resolvedIndexStore = createFileSemanticIndexStore({ directory });
+    else if (storeKind === 'sharded-file') resolvedIndexStore = createShardedFileSemanticIndexStore({ directory, shardPrefixLength, ioConcurrency });
+    else throw new Error('production semantic index storeKind must be file or sharded-file');
+  }
   const router = createSemanticContextRouterV2({
     embedder,
     reranker,
@@ -32,12 +42,12 @@ export function createProductionSemanticIndex({
     lexicalTieBreakWeight,
     fusionStrategy,
     diagnosticFusion,
-    indexStore,
+    indexStore:resolvedIndexStore,
     requirePreparedIndex:true
   });
 
   async function publishDelta(parentCid, ops, metadata = {}) {
-    const parent = await indexStore.loadRoot(parentCid);
+    const parent = await resolvedIndexStore.loadRoot(parentCid);
     if (!parent) throw new Error('context_not_found');
     if (parent.index?.status !== 'ready') {
       const error = new Error('semantic_index_not_ready');
@@ -58,7 +68,7 @@ export function createProductionSemanticIndex({
 
   return {
     router,
-    indexStore,
+    indexStore:resolvedIndexStore,
     publishContext:(blocks, metadata) => router.publishContext(blocks, metadata),
     publishDelta,
     prepareContext:(cid) => router.prepareContext(cid),
