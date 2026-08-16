@@ -1,0 +1,226 @@
+name: Temporary Azure Front Door Origin Guard Proof v2
+
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/tmp-origin-guard-production-proof-v2.yml']
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  prove:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      AZURE_CLIENT_ID_VALUE: ${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID_VALUE: ${{ vars.AZURE_TENANT_ID || secrets.AZURE_TENANT_ID }}
+      AZURE_SUBSCRIPTION_ID_VALUE: ${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}
+      PUBLIC_RELAY_URL: https://relay.truyn.org
+    steps:
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID_VALUE }}
+          tenant-id: ${{ env.AZURE_TENANT_ID_VALUE }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID_VALUE }}
+
+      - name: Install Container Apps CLI extension
+        shell: bash
+        run: az extension add --name containerapp --upgrade --only-show-errors >/dev/null
+
+      - name: Prove and retain production origin guard
+        shell: bash
+        run: |
+          set -euo pipefail
+          API='2025-04-15'
+          HEADER='x-truyn-origin-token'
+          RULESET_NAME="truynOriginGuard${GITHUB_RUN_ID}"
+          RULE_NAME='originGuardHeader'
+          SECRET_NAME="og-$(openssl rand -hex 8)"
+          SUCCESS=0; RULESET_CREATED=0; ROUTE_ATTACHED=0; SECRET_SET=0; GUARD_SET=0
+          PROFILE_ID=''; ENDPOINT_ID=''; ROUTE_ID=''; RULESET_ID=''; APP=''; RG=''; FQDN=''
+          mask(){ [[ -n "${1:-}" ]] && echo "::add-mask::$1"; }
+          mask "$SECRET_NAME"
+
+          health_ok(){
+            local n="${1:-50}" c
+            for _ in $(seq 1 "$n"); do
+              c="$(curl -sS --max-time 10 -D /tmp/h.headers -o /tmp/h.body -w '%{http_code}' "${PUBLIC_RELAY_URL}/health" || true)"
+              [[ "$c" == 200 ]] && grep -qi '^cf-ray:' /tmp/h.headers && return 0
+              sleep 3
+            done
+            return 1
+          }
+
+          cleanup(){
+            set +e
+            rm -f /tmp/token /tmp/*.body /tmp/*.headers /tmp/*.tsv /tmp/baseline-*
+            if [[ "$SUCCESS" == 1 ]]; then
+              echo 'ORIGIN_GUARD_CLEANUP=PASS production_guard_retained=true'
+              return
+            fi
+            echo 'ORIGIN_GUARD_ROLLBACK=START'
+            if [[ "$GUARD_SET" == 1 && -n "$APP" ]]; then
+              az containerapp update -g "$RG" -n "$APP" --remove-env-vars TRUYN_ORIGIN_GUARD TRUYN_ORIGIN_GUARD_TOKEN --only-show-errors >/dev/null 2>&1 || true
+              health_ok 60 || true
+            fi
+            if [[ "$SECRET_SET" == 1 && -n "$APP" ]]; then
+              az containerapp secret remove -g "$RG" -n "$APP" --secret-names "$SECRET_NAME" --only-show-errors >/dev/null 2>&1 || true
+            fi
+            if [[ "$ROUTE_ATTACHED" == 1 && -n "$ROUTE_ID" && -n "$RULESET_ID" ]]; then
+              cr="$(az rest --method get --url "https://management.azure.com${ROUTE_ID}?api-version=${API}" 2>/dev/null || echo '{}')"
+              kept="$(jq --arg ours "${RULESET_ID,,}" '[.properties.ruleSets[]? | select((.id|ascii_downcase)!=$ours)]' <<<"$cr" 2>/dev/null || echo '[]')"
+              p="$(jq -nc --argjson rs "$kept" '{properties:{ruleSets:$rs}}')"
+              az rest --method patch --url "https://management.azure.com${ROUTE_ID}?api-version=${API}" --headers 'Content-Type=application/json' --body "$p" >/dev/null 2>&1 || true
+            fi
+            if [[ "$RULESET_CREATED" == 1 && -n "$RULESET_ID" ]]; then
+              az rest --method delete --url "https://management.azure.com${RULESET_ID}?api-version=${API}" >/dev/null 2>&1 || true
+            fi
+            if health_ok 80; then echo 'ORIGIN_GUARD_ROLLBACK=PASS public_health=200 cloudflare=true'; else echo 'ORIGIN_GUARD_ROLLBACK=FAIL'; fi
+          }
+          trap cleanup EXIT
+
+          # Container Apps relay.
+          found=0
+          while IFS=$'\t' read -r name rg fqdn; do
+            [[ -n "$fqdn" ]] || continue
+            j="$(az containerapp show -g "$rg" -n "$name" -o json)"
+            role="$(jq -r '[.properties.template.containers[0].env[]? | select(.name=="TRUYN_ROLE") | .value][0] // empty' <<<"$j")"
+            [[ "$role" == relay || "$name" == *relay* ]] || continue
+            found=1; APP="$name"; RG="$rg"; FQDN="$fqdn"; mask "$APP"; mask "$RG"; mask "$FQDN"
+            gv="$(jq '[.properties.template.containers[0].env[]? | select(.name=="TRUYN_ORIGIN_GUARD" or .name=="TRUYN_ORIGIN_GUARD_TOKEN")]|length' <<<"$j")"
+            ir="$(jq '(.properties.configuration.ingress.ipSecurityRestrictions // [])|length' <<<"$j")"
+            [[ "$gv" == 0 && "$ir" == 0 ]] || { echo "GATE=FAIL dirty_container_baseline guard_vars=${gv} ip_rules=${ir}"; exit 10; }
+            break
+          done < <(az containerapp list --query "[?properties.configuration.ingress.external==\`true\`].[name,resourceGroup,properties.configuration.ingress.fqdn]" -o tsv)
+          [[ "$found" == 1 ]] || { echo 'GATE=FAIL relay_not_found'; exit 11; }
+          ORIGIN="https://${FQDN}"; mask "$ORIGIN"
+          [[ "$(az containerapp secret list -g "$RG" -n "$APP" -o json | jq --arg n "$SECRET_NAME" '[.[]?|select(.name==$n)]|length')" == 0 ]] || { echo 'GATE=FAIL random_secret_collision'; exit 12; }
+
+          # Unique Front Door endpoint serving relay.truyn.org.
+          : >/tmp/live.tsv
+          profiles="$(az resource list --resource-type Microsoft.Cdn/profiles -o json)"
+          mapfile -t pids < <(jq -r '.[]|select((.sku.name//"")|test("AzureFrontDoor";"i"))|.id' <<<"$profiles")
+          for pid in "${pids[@]}"; do
+            mask "$pid"
+            es="$(az rest --method get --url "https://management.azure.com${pid}/afdEndpoints?api-version=${API}" 2>/dev/null || echo '{}')"
+            while IFS=$'\t' read -r eid eh enabled; do
+              [[ "$enabled" == Enabled && -n "$eid" && -n "$eh" ]] || continue
+              mask "$eid"; mask "$eh"
+              c="$(curl -sS --max-time 15 --connect-to "relay.truyn.org:443:${eh}:443" -o /tmp/afd.body -w '%{http_code}' https://relay.truyn.org/health || true)"
+              [[ "$c" == 200 ]] && printf '%s\t%s\n' "$pid" "$eid" >>/tmp/live.tsv
+            done < <(jq -r '.value[]?|[.id, (.properties.hostName//""), (.properties.enabledState//"")]|@tsv' <<<"$es")
+          done
+          [[ "$(sort -u /tmp/live.tsv|sed '/^$/d'|wc -l|tr -d ' ')" == 1 ]] || { echo 'GATE=FAIL afd_endpoint_not_unique'; exit 13; }
+          IFS=$'\t' read -r PROFILE_ID ENDPOINT_ID < <(sort -u /tmp/live.tsv)
+          ds="$(az rest --method get --url "https://management.azure.com${PROFILE_ID}/customDomains?api-version=${API}")"
+          mapfile -t dids < <(jq -r '.value[]?|select((.properties.hostName//"")=="relay.truyn.org")|.id' <<<"$ds")
+          [[ "${#dids[@]}" == 1 ]] || { echo 'GATE=FAIL custom_domain_not_unique'; exit 14; }
+          DID="${dids[0]}"; mask "$DID"
+          rs="$(az rest --method get --url "https://management.azure.com${ENDPOINT_ID}/routes?api-version=${API}")"
+          rr="$(jq --arg d "${DID,,}" '[.value[]?|select([.properties.customDomains[]?.id|ascii_downcase]|index($d))]' <<<"$rs")"
+          [[ "$(jq length <<<"$rr")" == 1 ]] || { echo 'GATE=FAIL route_not_unique'; exit 15; }
+          ROUTE_ID="$(jq -r '.[0].id' <<<"$rr")"; mask "$ROUTE_ID"
+          [[ "$(jq '.[0].properties.ruleSets//[]|length' <<<"$rr")" == 0 ]] || { echo 'GATE=FAIL route_has_unexpected_rules'; exit 16; }
+          echo 'LIVE_TOPOLOGY=PASS cloudflare_frontdoor_containerapps=true unique_route=true'
+
+          # Baseline public semantics.
+          health_ok 20 || { echo 'GATE=FAIL baseline_health'; exit 20; }
+          BREG="$(curl -sS --max-time 12 -o /tmp/breg.body -w '%{http_code}' -X POST -H 'content-type: application/json' --data '{}' "${PUBLIC_RELAY_URL}/v1/register" || true)"
+          BERR="$(jq -r '.error//""' /tmp/breg.body 2>/dev/null || true)"
+          jq -e 'type=="object"' /tmp/breg.body >/dev/null || { echo 'GATE=FAIL baseline_json'; exit 21; }
+          [[ "$BERR" != origin_guard_denied ]] || { echo 'GATE=FAIL already_guarded'; exit 22; }
+          BWS="$(curl -sS --http1.1 --max-time 12 -o /tmp/bws.body -w '%{http_code}' -H 'Connection: Upgrade' -H 'Upgrade: websocket' -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' "${PUBLIC_RELAY_URL}/v1/fast/socket?nodeId=origin-proof" || true)"
+          [[ "$BWS" != 000 && ! "$BWS" =~ ^5 ]] || { echo "GATE=FAIL baseline_ws=${BWS}"; exit 23; }
+          printf %s "$BREG" >/tmp/baseline-reg; printf %s "$BERR" >/tmp/baseline-err; printf %s "$BWS" >/tmp/baseline-ws
+          echo 'PUBLIC_BASELINE=PASS'
+
+          TOKEN="$(openssl rand -hex 32)"; mask "$TOKEN"; printf %s "$TOKEN" >/tmp/token; chmod 600 /tmp/token
+
+          # Front Door unconditional overwrite of the private proof header.
+          RULESET_ID="${PROFILE_ID}/ruleSets/${RULESET_NAME}"; mask "$RULESET_ID"
+          az rest --method put --url "https://management.azure.com${RULESET_ID}?api-version=${API}" --headers 'Content-Type=application/json' --body '{}' >/dev/null
+          RULESET_CREATED=1
+          RULE_ID="${RULESET_ID}/rules/${RULE_NAME}"; mask "$RULE_ID"
+          rb="$(jq -nc --arg h "$HEADER" --arg v "$TOKEN" '{properties:{order:1,conditions:[],actions:[{name:"ModifyRequestHeader",parameters:{typeName:"DeliveryRuleHeaderActionParameters",headerAction:"Overwrite",headerName:$h,value:$v}}],matchProcessingBehavior:"Continue"}}')"
+          az rest --method put --url "https://management.azure.com${RULE_ID}?api-version=${API}" --headers 'Content-Type=application/json' --body "$rb" >/dev/null
+
+          ready=0
+          for _ in $(seq 1 80); do
+            x="$(az rest --method get --url "https://management.azure.com${RULE_ID}?api-version=${API}" 2>/dev/null || echo '{}')"
+            p="$(jq -r '.properties.provisioningState//"unknown"' <<<"$x")"; d="$(jq -r '.properties.deploymentStatus//"unknown"' <<<"$x")"
+            [[ "$p" == Succeeded && ( "$d" == Succeeded || "$d" == NotStarted ) ]] && { ready=1; break; }
+            [[ "$p" == Failed || "$d" == Failed ]] && break
+            sleep 3
+          done
+          [[ "$ready" == 1 ]] || { echo "AFD_RULE=FAIL provisioning=${p} deployment=${d}"; exit 30; }
+
+          cr="$(az rest --method get --url "https://management.azure.com${ROUTE_ID}?api-version=${API}")"
+          m="$(jq --arg id "$RULESET_ID" '(.properties.ruleSets//[])+[{id:$id}]' <<<"$cr")"
+          patch="$(jq -nc --argjson r "$m" '{properties:{ruleSets:$r}}')"
+          az rest --method patch --url "https://management.azure.com${ROUTE_ID}?api-version=${API}" --headers 'Content-Type=application/json' --body "$patch" >/dev/null
+          ROUTE_ATTACHED=1
+
+          ready=0
+          for _ in $(seq 1 100); do
+            x="$(az rest --method get --url "https://management.azure.com${ROUTE_ID}?api-version=${API}" 2>/dev/null || echo '{}')"
+            a="$(jq --arg o "${RULESET_ID,,}" '[.properties.ruleSets[]?.id|ascii_downcase]|index($o)!=null' <<<"$x" 2>/dev/null || echo false)"
+            p="$(jq -r '.properties.provisioningState//"unknown"' <<<"$x")"; d="$(jq -r '.properties.deploymentStatus//"unknown"' <<<"$x")"
+            [[ "$a" == true && "$p" == Succeeded && ( "$d" == Succeeded || "$d" == NotStarted ) ]] && { ready=1; break; }
+            [[ "$p" == Failed || "$d" == Failed ]] && break
+            sleep 3
+          done
+          [[ "$ready" == 1 ]] || { echo "AFD_ATTACH=FAIL provisioning=${p} deployment=${d} attached=${a}"; exit 31; }
+          health_ok 30 || { echo 'AFD_ATTACH=FAIL health'; exit 32; }
+          PREG="$(curl -sS --max-time 12 -o /tmp/preg.body -w '%{http_code}' -X POST -H 'content-type: application/json' --data '{}' "${PUBLIC_RELAY_URL}/v1/register" || true)"
+          PERR="$(jq -r '.error//""' /tmp/preg.body 2>/dev/null || true)"
+          [[ "$PREG" == "$BREG" && "$PERR" == "$BERR" ]] || { echo 'AFD_ATTACH=FAIL public_semantics_changed'; exit 33; }
+          echo 'AFD_HEADER_OVERWRITE=PASS public_semantics_unchanged=true'
+
+          # Enable runtime guard.
+          az containerapp secret set -g "$RG" -n "$APP" --secrets "${SECRET_NAME}=${TOKEN}" --only-show-errors >/dev/null
+          SECRET_SET=1
+          az containerapp update -g "$RG" -n "$APP" --set-env-vars TRUYN_ORIGIN_GUARD=1 "TRUYN_ORIGIN_GUARD_TOKEN=secretref:${SECRET_NAME}" --only-show-errors >/dev/null
+          GUARD_SET=1
+
+          ok=0; EC=000; DC=000; EE=''; DE=''
+          for _ in $(seq 1 100); do
+            EC="$(curl -sS --max-time 10 -D /tmp/edge.headers -o /tmp/edge.body -w '%{http_code}' -X POST -H 'content-type: application/json' --data '{}' "${PUBLIC_RELAY_URL}/v1/register" || true)"
+            EE="$(jq -r '.error//""' /tmp/edge.body 2>/dev/null || true)"
+            DC="$(curl -sS --max-time 10 -o /tmp/direct.body -w '%{http_code}' -X POST -H 'content-type: application/json' --data '{}' "${ORIGIN}/v1/register" || true)"
+            DE="$(jq -r '.error//""' /tmp/direct.body 2>/dev/null || true)"
+            [[ "$EC" == "$BREG" && "$EE" == "$BERR" && "$DC" == 403 && "$DE" == origin_guard_denied ]] && grep -qi '^cf-ray:' /tmp/edge.headers && { ok=1; break; }
+            sleep 4
+          done
+          [[ "$ok" == 1 ]] || { echo "CONVERGENCE=FAIL edge=${EC}:${EE} direct=${DC}:${DE}"; exit 40; }
+
+          DS="$(curl -sS --max-time 12 -o /tmp/ds.body -w '%{http_code}' -X POST -H 'content-type: application/json' -H "${HEADER}: attacker-controlled" -H 'CF-Connecting-IP: 173.245.48.1' -H 'X-Forwarded-For: 173.245.48.1' --data '{}' "${ORIGIN}/v1/register" || true)"
+          DSE="$(jq -r '.error//""' /tmp/ds.body 2>/dev/null || true)"
+          [[ "$DS" == 403 && "$DSE" == origin_guard_denied ]] || { echo "DIRECT_SPOOF=FAIL ${DS}:${DSE}"; exit 41; }
+
+          DWS="$(curl -sS --http1.1 --max-time 12 -o /tmp/dws.body -w '%{http_code}' -H 'Connection: Upgrade' -H 'Upgrade: websocket' -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' "${ORIGIN}/v1/fast/socket?nodeId=origin-proof" || true)"
+          [[ "$DWS" == 403 ]] || { echo "DIRECT_WS=FAIL http=${DWS}"; exit 42; }
+
+          ES="$(curl -sS --max-time 12 -D /tmp/es.headers -o /tmp/es.body -w '%{http_code}' -X POST -H 'content-type: application/json' -H "${HEADER}: attacker-controlled" --data '{}' "${PUBLIC_RELAY_URL}/v1/register" || true)"
+          ESE="$(jq -r '.error//""' /tmp/es.body 2>/dev/null || true)"
+          [[ "$ES" == "$BREG" && "$ESE" == "$BERR" ]] && grep -qi '^cf-ray:' /tmp/es.headers || { echo "EDGE_OVERWRITE=FAIL ${ES}:${ESE}"; exit 43; }
+
+          EWS="$(curl -sS --http1.1 --max-time 12 -o /tmp/ews.body -w '%{http_code}' -H 'Connection: Upgrade' -H 'Upgrade: websocket' -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' "${PUBLIC_RELAY_URL}/v1/fast/socket?nodeId=origin-proof" || true)"
+          [[ "$EWS" == "$BWS" ]] || { echo "EDGE_WS=FAIL baseline=${BWS} edge=${EWS}"; exit 44; }
+
+          DH="$(curl -sS --max-time 12 -o /tmp/dh.body -w '%{http_code}' "${ORIGIN}/health" || true)"
+          SHAPE="$(jq -r 'if .ok==true and .protocol=="TRUYN/1" and (keys|sort)==["ok","protocol"] then "guard_only" else "other" end' /tmp/dh.body 2>/dev/null || true)"
+          [[ "$DH" == 200 && "$SHAPE" == guard_only ]] || { echo "DIRECT_HEALTH=FAIL ${DH}:${SHAPE}"; exit 45; }
+
+          SUCCESS=1; rm -f /tmp/token
+          echo 'PUBLIC_EDGE_HTTP=PASS baseline_equivalent=true cf_ray=true'
+          echo 'PUBLIC_EDGE_WEBSOCKET=PASS baseline_equivalent=true'
+          echo 'PUBLIC_CLIENT_ORIGIN_TOKEN=OVERWRITTEN_BY_FRONT_DOOR'
+          echo 'DIRECT_AZURE_REGISTER=403 origin_guard_denied'
+          echo 'DIRECT_AZURE_WEBSOCKET=403 origin_guard_denied'
+          echo 'DIRECT_AZURE_SPOOFED_HEADERS_AND_TOKEN=403 origin_guard_denied'
+          echo 'DIRECT_AZURE_HEALTH=200 guard_only_no_inner_relay'
+          echo 'DIRECT_PROBE_INNER_RELAY_REACH=0'
+          echo 'AZURE_ORIGIN_BYPASS_DATA_PLANE_GATE=PASS'
+          echo 'PRODUCTION_ORIGIN_GUARD=ENABLED frontdoor_header_overwrite=true'
