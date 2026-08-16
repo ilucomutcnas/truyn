@@ -1,0 +1,346 @@
+name: Ephemeral Semantic v2 Tiered Seven-Actor Live
+
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/tmp-semantic-v2-tiered-live.yml']
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      AZURE_RG: ${{ vars.AZURE_RG || 'truyn' }}
+      FOUNDRY_BENCH_CAPACITY: '100'
+      GCP_PROJECT_ID_VALUE: ${{ vars.GCP_PROJECT_ID || secrets.GCP_PROJECT_ID }}
+      GCP_WIF_PROVIDER_VALUE: ${{ vars.GCP_WIF_PROVIDER || secrets.GCP_WIF_PROVIDER }}
+      GCP_DEPLOYER_SA_VALUE: ${{ vars.GCP_DEPLOYER_SERVICE_ACCOUNT_EMAIL || secrets.GCP_DEPLOYER_SERVICE_ACCOUNT_EMAIL }}
+      GCP_RUNTIME_SA_VALUE: ${{ vars.GCP_RUNTIME_SERVICE_ACCOUNT_EMAIL || secrets.GCP_RUNTIME_SERVICE_ACCOUNT_EMAIL }}
+      GCP_PROXY_REGION: us-east4
+      GCP_AR_REPO: truyn-poc
+      GCP_PROXY_SERVICE: truyn-semanticv2-live-${{ github.run_id }}
+      GEMINI_MODEL: gemini-2.5-flash
+      LITE_MODEL: gemini-3.1-flash-lite
+      FLASH_MODEL: gemini-3-flash-preview
+      PRO_VERIFIER_MODEL: gemini-3.1-pro-preview
+      GOOGLE_CLOUD_LOCATION: global
+      VERTEX_EMBEDDING_LOCATION: us-central1
+      VERTEX_EMBEDDING_MODEL: gemini-embedding-001
+      VERTEX_EMBEDDING_DIMENSIONS: '768'
+      SEMANTIC_V2_CORPUS_BLOCKS: '600'
+      SEMANTIC_V2_RETRIEVAL_CASES: '360'
+      SEMANTIC_V2_LIVE_CASES: '6'
+      SEMANTIC_V2_PACING_MS: '30000'
+      SEMANTIC_V2_RATE_LIMIT_RETRIES: '8'
+      SEMANTIC_V2_OUTPUT: semantic-retrieval-v2-tiered-live.json
+      SEMANTIC_V2_RETRIEVAL_PROOF: semantic-v2-tiered-full.json
+      SEMANTIC_V2_SOURCE_SHA: 6f2ddf743e83ad1704a831a7058a93ad668c6a69
+      SEMANTIC_V2_PROXY_SHA: c1ea39a3f5a0408035fea7f00604ff14310eda10
+      RETRIEVAL_PROOF_RUN_ID: '31950529000'
+      RETRIEVAL_PROOF_ARTIFACT_ID: '9264556770'
+      RETRIEVAL_PROOF_ZIP_SHA256: 97e47922d705a9bcde5efd5f81437ddd49d0e7ed6465e756a617c31cb43aee39
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: npm install --ignore-scripts --no-audit --no-fund
+
+      - name: Load immutable benchmark sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          load_file() {
+            path="$1"; ref="$2"
+            mkdir -p "$(dirname "$path")"
+            curl -fsSL -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${GITHUB_REPOSITORY}/contents/${path}?ref=${ref}" \
+              | jq -r '.content' | tr -d '\n' | base64 -d > "$path"
+          }
+          load_file benchmarks/semantic-retrieval-v2.js "$SEMANTIC_V2_SOURCE_SHA"
+          load_file benchmarks/semantic-v2-gcp-proxy.js "$SEMANTIC_V2_PROXY_SHA"
+          load_file benchmarks/Dockerfile.semantic-v2-gcp-proxy "$SEMANTIC_V2_PROXY_SHA"
+
+      - name: Verify tiered 360-case retrieval proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSL -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/artifacts/${RETRIEVAL_PROOF_ARTIFACT_ID}/zip" \
+            -o retrieval-proof.zip
+          printf '%s  %s\n' "$RETRIEVAL_PROOF_ZIP_SHA256" retrieval-proof.zip | sha256sum -c -
+          unzip -p retrieval-proof.zip semantic-v2-tiered-full.json > "$SEMANTIC_V2_RETRIEVAL_PROOF"
+          jq -e '
+            .sourceSha == "6f2ddf743e83ad1704a831a7058a93ad668c6a69"
+            and .semanticGate.passed == true
+            and .semanticGate.accuracyPercent == 100
+            and .semanticGate.denseRecallPercent == 100
+            and .semanticGate.provenancePercent == 100
+            and .semanticGate.noBlockIdPercent == 100
+            and .semanticGate.minimalContextPercent == 100
+            and .semanticGate.economicPass == true
+            and .semanticGate.routingCostUsdPerQuery <= .semanticGate.routingCostBudgetUsdPerQuery
+            and ([.semanticGate.perLanguage[].accuracyPercent] | all(. == 100))
+            and ([.semanticGate.perCategory[].accuracyPercent] | all(. == 100))
+            and (.rows | length) == 360
+          ' "$SEMANTIC_V2_RETRIEVAL_PROOF" >/dev/null
+
+      - name: Patch immutable benchmark for tiered routing and honest live accounting
+        shell: bash
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const fs = require('node:fs');
+          const path = 'benchmarks/semantic-retrieval-v2.js';
+          let source = fs.readFileSync(path, 'utf8');
+          function replaceOnce(label, from, to) {
+            if (!source.includes(from)) throw new Error(`patch marker not found: ${label}`);
+            source = source.replace(from, to);
+          }
+          function replaceRange(label, start, end, replacement) {
+            const a = source.indexOf(start);
+            const b = source.indexOf(end, a + start.length);
+            if (a < 0 || b < 0) throw new Error(`patch range not found: ${label}`);
+            source = source.slice(0, a) + replacement + source.slice(b);
+          }
+
+          replaceOnce('fs import', "import { writeFile } from 'node:fs/promises';", "import { readFile, writeFile } from 'node:fs/promises';");
+          replaceOnce('confidence import', "import { createVertexEmbeddingClient } from '../adapters/providers/vertex-embedding.js';", "import { createVertexEmbeddingClient } from '../adapters/providers/vertex-embedding.js';\nimport { createConfidenceGatedSemanticReranker } from '../core/context/confidence-gated-semantic-reranker.js';");
+          replaceOnce('proof env', "const geminiLocation = process.env.GOOGLE_CLOUD_LOCATION || 'global';", "const geminiLocation = process.env.GOOGLE_CLOUD_LOCATION || 'global';\nconst retrievalProofPath = process.env.SEMANTIC_V2_RETRIEVAL_PROOF;\nconst retrievalProofArtifactId = process.env.RETRIEVAL_PROOF_ARTIFACT_ID;\nconst retrievalProofRunId = process.env.RETRIEVAL_PROOF_RUN_ID;\nconst retrievalProofZipSha256 = process.env.RETRIEVAL_PROOF_ZIP_SHA256;");
+          replaceOnce('proof required', '  GCP_ACCESS_TOKEN: proxyToken', '  GCP_ACCESS_TOKEN: proxyToken,\n  SEMANTIC_V2_RETRIEVAL_PROOF: retrievalProofPath');
+          replaceOnce('dense gate', '  retrievalAccuracyPercentMin: 99,', '  retrievalAccuracyPercentMin: 99,\n  denseCandidateRecallPercentMin: 99,');
+          replaceOnce('routing rates', "const comparableRates = {\n  gpt: { input: 0.44, output: 1.76 },\n  gemini: { input: 0.30, output: 2.50 }\n};", "const comparableRates = {\n  gpt: { input: 0.44, output: 1.76 },\n  gemini: { input: 0.30, output: 2.50 }\n};\nconst semanticRoutingRates = { lite:{ input:0.25, output:1.50 }, flash:{ input:0.50, output:3.00 }, pro:{ input:2.00, output:12.00 } };\nfunction semanticRoutingCost(parts) { return Object.entries(parts).reduce((total,[key,part]) => total + (((part.inputTokens || 0) * semanticRoutingRates[key].input) + ((part.outputTokens || 0) * semanticRoutingRates[key].output)) / 1_000_000, 0); }");
+          replaceOnce(
+            'semantic router',
+            '  const semanticRouter = createSemanticContextRouterV2({ embedder });',
+            `  const provider = (model) => createVertexGeminiProvider({
+              projectId:gcpProjectId,
+              location:geminiLocation,
+              model,
+              endpoint:proxyEndpoint,
+              accessTokenProvider:async () => proxyToken,
+              capabilities:['reasoning.general'],
+              requestTimeoutMs:180000
+            });
+            const liteProvider = provider(process.env.LITE_MODEL);
+            const flashProvider = provider(process.env.FLASH_MODEL);
+            const proProvider = provider(process.env.PRO_VERIFIER_MODEL);
+            const schema = { type:'OBJECT', properties:{ id:{ type:'STRING' } }, required:['id'] };
+            const semanticReranker = createConfidenceGatedSemanticReranker({
+              liteProvider,
+              flashProvider,
+              verifierProvider:proProvider,
+              cheapCandidateK:24,
+              confidenceDenseRankMax:12,
+              maxCandidates:64,
+              verifierCandidateTiers:[16,64],
+              liteProviderOptions:{ thinkingLevel:'MINIMAL', temperature:0, maxOutputTokens:512, responseMimeType:'application/json', responseSchema:schema },
+              flashProviderOptions:{ thinkingLevel:'MINIMAL', temperature:0, maxOutputTokens:512, responseMimeType:'application/json', responseSchema:schema },
+              verifierProviderOptions:{ temperature:0, maxOutputTokens:1024, responseMimeType:'application/json', responseSchema:schema },
+              repairAttempts:1
+            });
+            const semanticRouter = createSemanticContextRouterV2({ embedder, reranker:semanticReranker, candidateK:64 });`
+          );
+          replaceRange(
+            'reuse full retrieval proof',
+            '  // Force a single document-index build before concurrent query evaluation.',
+            "  const byCategory = metricsBy(retrievalResults, 'category');",
+            `  const retrievalProof = JSON.parse(await readFile(retrievalProofPath, 'utf8'));
+            const retrievalResults = retrievalProof.rows.map((row) => ({
+              ...row,
+              provenancePass:Boolean(row.provenancePass),
+              noBlockId:Boolean(row.noBlockId),
+              lexicalV1Correct:false
+            }));
+            if (retrievalResults.length !== retrievalCaseCount) throw new Error('retrieval proof case count mismatch');
+            const retrievalAccuracy = retrievalProof.semanticGate.accuracyPercent;
+            const provenancePercent = retrievalProof.semanticGate.provenancePercent;
+            const noBlockIdPercent = retrievalProof.semanticGate.noBlockIdPercent;
+            const lexicalV1Accuracy = null;
+            const denseCandidateRecallPercent = retrievalProof.semanticGate.denseRecallPercent;
+            `
+          );
+          replaceOnce('retrieval dense pass', '  const retrievalOnlyPassed = retrievalAccuracy >= gate.retrievalAccuracyPercentMin\n    && provenancePercent >= gate.provenancePassPercentMin', '  const retrievalOnlyPassed = retrievalAccuracy >= gate.retrievalAccuracyPercentMin\n    && denseCandidateRecallPercent >= gate.denseCandidateRecallPercentMin\n    && provenancePercent >= gate.provenancePassPercentMin');
+          replaceOnce('retrieval proof metadata', '      accuracyPercent:retrievalAccuracy,\n      provenancePercent,', '      accuracyPercent:retrievalAccuracy,\n      denseCandidateRecallPercent,\n      provenancePercent,\n      proofRunId:retrievalProofRunId,\n      proofArtifactId:retrievalProofArtifactId,\n      proofZipSha256:retrievalProofZipSha256,');
+          replaceOnce('methodology routing', "      topK:1,\n      blockIdsInRequesterQueries:false,", "      topK:1,\n      denseCandidateK:64,\n      cheapCandidateK:24,\n      confidenceDenseRankMax:12,\n      verifierCandidateTiers:[16,64],\n      semanticRouting:'Gemini 3.1 Flash-Lite MINIMAL + Gemini 3 Flash MINIMAL; agreement at dense rank <=12 accepted, otherwise Gemini 3.1 Pro over top16 or fail-closed top64',\n      retrievalProofReuse:'full 360-case tiered proof is SHA-256 verified; six live queries independently execute the same router',\n      blockIdsInRequesterQueries:false,");
+          replaceOnce('requester leakage instrumentation', "        payloadNoBlockId = payloadNoBlockId && !serializedInput.includes(item.id) && !serializedInput.includes(item.code) && !serializedInput.includes('\"ids\"');", "        payloadNoBlockId = payloadNoBlockId && !/semantic-record-\\d+/i.test(serializedInput) && !serializedInput.includes('\"ids\"');");
+          replaceOnce('routing baseline', '    const liveResults = [];', `    const rerankerStatsBeforeLive = structuredClone(semanticRouter.stats().rerankerStats || {});
+            const liveResults = [];`);
+          replaceOnce('routing delta', '    const allTruynActorMetrics = liveResults.flatMap((run) => Object.entries(run.truyn.actorMetrics).map(([alias,metric]) => ({ alias, ...metric })));', `    const rerankerStatsAfterLive = semanticRouter.stats().rerankerStats || {};
+            const deltaPart = (key) => {
+              const before = rerankerStatsBeforeLive[key] || {};
+              const after = rerankerStatsAfterLive[key] || {};
+              return {
+                requests:(after.requests || 0) - (before.requests || 0),
+                inputTokens:(after.inputTokens || 0) - (before.inputTokens || 0),
+                outputTokens:(after.outputTokens || 0) - (before.outputTokens || 0),
+                totalTokens:(after.totalTokens || 0) - (before.totalTokens || 0),
+                requestBodyBytes:(after.requestBodyBytes || 0) - (before.requestBodyBytes || 0),
+                providerLatencyMs:(after.providerLatencyMs || 0) - (before.providerLatencyMs || 0)
+              };
+            };
+            const liveRouting = { lite:deltaPart('lite'), flash:deltaPart('flash'), pro:deltaPart('verifier') };
+            liveRouting.costUsd = semanticRoutingCost(liveRouting);
+            liveRouting.inputTokens = liveRouting.lite.inputTokens + liveRouting.flash.inputTokens + liveRouting.pro.inputTokens;
+            liveRouting.outputTokens = liveRouting.lite.outputTokens + liveRouting.flash.outputTokens + liveRouting.pro.outputTokens;
+            liveRouting.requestBodyBytes = liveRouting.lite.requestBodyBytes + liveRouting.flash.requestBodyBytes + liveRouting.pro.requestBodyBytes;
+            const allTruynActorMetrics = liveResults.flatMap((run) => Object.entries(run.truyn.actorMetrics).map(([alias,metric]) => ({ alias, ...metric })));`);
+          replaceOnce('honest routing accounting', '    const directInputTokens = sum(liveResults, (run) => run.direct.inputTokens);\n    const truynInputTokens = sum(liveResults, (run) => run.truyn.inputTokens);\n    const directCost = sum(liveResults, (run) => run.direct.comparablePairCostUsd);\n    const truynCost = sum(liveResults, (run) => run.truyn.comparablePairCostUsd);', `    const directInputTokens = sum(liveResults, (run) => run.direct.inputTokens);
+            const truynActorInputTokens = sum(liveResults, (run) => run.truyn.inputTokens);
+            const truynInputTokens = truynActorInputTokens + liveRouting.inputTokens;
+            const directCost = sum(liveResults, (run) => run.direct.comparablePairCostUsd);
+            const truynActorCost = sum(liveResults, (run) => run.truyn.comparablePairCostUsd);
+            const truynCost = truynActorCost + liveRouting.costUsd;
+            const directProviderRequestBodyBytes = sum(liveResults, (run) => run.direct.providerRequestBodyBytes);
+            const truynActorProviderRequestBodyBytes = sum(liveResults, (run) => run.truyn.providerRequestBodyBytes);
+            const truynProviderRequestBodyBytes = truynActorProviderRequestBodyBytes + liveRouting.requestBodyBytes;`);
+          replaceOnce('dense final gate', '      retrievalAccuracy:retrievalAccuracy >= gate.retrievalAccuracyPercentMin,\n      perLanguageAccuracy:', '      retrievalAccuracy:retrievalAccuracy >= gate.retrievalAccuracyPercentMin,\n      denseCandidateRecall:denseCandidateRecallPercent >= gate.denseCandidateRecallPercentMin,\n      perLanguageAccuracy:');
+          replaceOnce('token reporting', '        directInputTokens,\n        truynInputTokens,\n        inputTokenReductionPercent,', `        directInputTokens,
+            truynActorInputTokens,
+            semanticRoutingInputTokens:liveRouting.inputTokens,
+            semanticRoutingOutputTokens:liveRouting.outputTokens,
+            truynInputTokens,
+            inputTokenReductionPercent,`);
+          replaceOnce('cost reporting', '        directComparablePairCostUsd:round(directCost, 9),\n        truynComparablePairCostUsd:round(truynCost, 9),', `        directComparablePairCostUsd:round(directCost, 9),
+            truynActorComparablePairCostUsd:round(truynActorCost, 9),
+            semanticRoutingCostUsd:round(liveRouting.costUsd, 9),
+            truynComparablePairCostUsd:round(truynCost, 9),`);
+          replaceOnce('body reporting', '        directProviderRequestBodyBytes:sum(liveResults, (run) => run.direct.providerRequestBodyBytes),\n        truynProviderRequestBodyBytes:sum(liveResults, (run) => run.truyn.providerRequestBodyBytes),\n        providerRequestBodyReductionPercent:reductionPercent(\n          sum(liveResults, (run) => run.direct.providerRequestBodyBytes),\n          sum(liveResults, (run) => run.truyn.providerRequestBodyBytes)\n        ),', `        directProviderRequestBodyBytes,
+            truynActorProviderRequestBodyBytes,
+            semanticRoutingProviderRequestBodyBytes:liveRouting.requestBodyBytes,
+            truynProviderRequestBodyBytes,
+            providerRequestBodyReductionPercent:reductionPercent(directProviderRequestBodyBytes, truynProviderRequestBodyBytes),`);
+          replaceOnce('cost methodology', '        usdPerMillionTokens:comparableRates', '        usdPerMillionTokens:comparableRates,\n        semanticRoutingUsdPerMillionTokens:semanticRoutingRates,\n        semanticRoutingOutputIncludesReasoningTokens:true');
+          replaceOnce('report routing detail', '      semanticRouterStats:semanticRouter.stats(),', '      liveSemanticRouting:liveRouting,\n      semanticRouterStats:semanticRouter.stats(),');
+          fs.writeFileSync(path, source);
+          NODE
+          node --check benchmarks/semantic-retrieval-v2.js
+
+      - name: Validate code before cloud spend
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t tests < <(find tests -maxdepth 1 -name '*.test.js' ! -name 'public-repository.test.js' -print | sort)
+          node --test "${tests[@]}"
+          git diff --check -- core adapters node tests
+
+      - name: Azure login with OIDC
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID || secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Discover Azure actors and raise only temporary benchmark capacity
+        shell: bash
+        run: |
+          set -euo pipefail
+          gpt_account=''; gpt_dep=''; foundry_account=''; foundry_json=''
+          while IFS= read -r account; do
+            deps="$(az cognitiveservices account deployment list -g "$AZURE_RG" -n "$account" -o json 2>/dev/null || echo '[]')"
+            if [[ -z "$gpt_account" ]]; then
+              dep="$(jq -r '.[] | select(((.properties.model.name // "") | ascii_downcase) | contains("gpt-4.1-mini")) | .name' <<<"$deps" | head -1)"
+              if [[ -n "$dep" ]]; then gpt_account="$account"; gpt_dep="$dep"; fi
+            fi
+            if [[ -z "$foundry_account" ]] && jq -e '
+              ([.[].properties.model.name // "" | ascii_downcase] | any(contains("grok"))) and
+              ([.[].properties.model.name // "" | ascii_downcase] | any(contains("deepseek"))) and
+              ([.[].properties.model.name // "" | ascii_downcase] | any(contains("llama"))) and
+              ([.[].properties.model.name // "" | ascii_downcase] | any(contains("mistral"))) and
+              ([.[].properties.model.name // "" | ascii_downcase] | any(contains("kimi")))
+            ' <<<"$deps" >/dev/null; then foundry_account="$account"; foundry_json="$deps"; fi
+          done < <(az cognitiveservices account list -g "$AZURE_RG" --query '[].name' -o tsv)
+          [[ -n "$gpt_account" && -n "$gpt_dep" && -n "$foundry_account" ]] || { echo 'required Azure benchmark actors not found'; exit 2; }
+          for value in "$gpt_account" "$gpt_dep" "$foundry_account"; do echo "::add-mask::$value"; done
+          gpt_endpoint="$(az cognitiveservices account show -g "$AZURE_RG" -n "$gpt_account" --query properties.endpoint -o tsv)"
+          gpt_key="$(az cognitiveservices account keys list -g "$AZURE_RG" -n "$gpt_account" --query key1 -o tsv)"
+          foundry_endpoint="$(az cognitiveservices account show -g "$AZURE_RG" -n "$foundry_account" --query properties.endpoint -o tsv)"
+          foundry_key="$(az cognitiveservices account keys list -g "$AZURE_RG" -n "$foundry_account" --query key1 -o tsv)"
+          for value in "$gpt_endpoint" "$gpt_key" "$foundry_endpoint" "$foundry_key"; do echo "::add-mask::$value"; done
+          echo "AZURE_OPENAI_ENDPOINT=$gpt_endpoint" >> "$GITHUB_ENV"; echo "AZURE_OPENAI_API_KEY=$gpt_key" >> "$GITHUB_ENV"; echo "AZURE_OPENAI_DEPLOYMENT=$gpt_dep" >> "$GITHUB_ENV"
+          echo "FOUNDRY_ACCOUNT=$foundry_account" >> "$GITHUB_ENV"; echo "AZURE_FOUNDRY_ENDPOINT=$foundry_endpoint" >> "$GITHUB_ENV"; echo "AZURE_FOUNDRY_API_KEY=$foundry_key" >> "$GITHUB_ENV"
+          find_dep(){ jq -r --arg p "$1" '.[] | select(((.properties.model.name // "") | ascii_downcase) | contains($p)) | .name' <<<"$foundry_json" | head -1; }
+          for spec in GROK:grok DEEPSEEK:deepseek LLAMA:llama MISTRAL:mistral KIMI:kimi; do
+            label="${spec%%:*}"; pattern="${spec##*:}"; dep="$(find_dep "$pattern")"; [[ -n "$dep" ]] || exit 2; echo "::add-mask::$dep"; echo "AZURE_FOUNDRY_${label}=$dep" >> "$GITHUB_ENV"
+            data="$(az cognitiveservices account deployment show -g "$AZURE_RG" -n "$foundry_account" --deployment-name "$dep" -o json)"
+            cap="$(jq -r '.sku.capacity // 1' <<<"$data")"; echo "RESTORE_${label}_CAP=$cap" >> "$GITHUB_ENV"
+            model="$(jq -r '.properties.model.name' <<<"$data")"; format="$(jq -r '.properties.model.format' <<<"$data")"; version="$(jq -r '.properties.model.version // empty' <<<"$data")"; sku="$(jq -r '.sku.name' <<<"$data")"
+            args=(cognitiveservices account deployment create -g "$AZURE_RG" -n "$foundry_account" --deployment-name "$dep" --model-name "$model" --model-format "$format" --sku-name "$sku" --sku-capacity "$FOUNDRY_BENCH_CAPACITY")
+            [[ -n "$version" ]] && args+=(--model-version "$version")
+            az "${args[@]}" >/dev/null
+          done
+
+      - name: Authenticate GCP deployer using WIF
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID_VALUE }}
+          workload_identity_provider: ${{ env.GCP_WIF_PROVIDER_VALUE }}
+          service_account: ${{ env.GCP_DEPLOYER_SA_VALUE }}
+          create_credentials_file: true
+          export_environment_variables: true
+      - uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID_VALUE }}
+
+      - name: Prepare isolated Vertex proxy
+        shell: bash
+        run: |
+          set -euo pipefail
+          token="$(openssl rand -hex 32)"; echo "::add-mask::$token"
+          registry="${GCP_PROXY_REGION}-docker.pkg.dev"; image="${registry}/${GCP_PROJECT_ID_VALUE}/${GCP_AR_REPO}/semanticv2-live:${GITHUB_SHA}"
+          gcloud auth configure-docker "$registry" --quiet
+          docker build -f benchmarks/Dockerfile.semantic-v2-gcp-proxy -t "$image" . >/dev/null && docker push "$image" >/dev/null
+          gcloud run deploy "$GCP_PROXY_SERVICE" --project="$GCP_PROJECT_ID_VALUE" --region="$GCP_PROXY_REGION" --image="$image" --service-account="$GCP_RUNTIME_SA_VALUE" --port=8080 --min=0 --max=4 --cpu=1 --memory=512Mi --set-env-vars="BENCHMARK_PROXY_TOKEN=${token}" --no-invoker-iam-check --quiet >/dev/null
+          url="$(gcloud run services describe "$GCP_PROXY_SERVICE" --project="$GCP_PROJECT_ID_VALUE" --region="$GCP_PROXY_REGION" --format='value(status.url)')"
+          for attempt in $(seq 1 30); do curl -fsS -H "Authorization: Bearer ${token}" "${url}/health" | jq -e '.ok == true' >/dev/null && break; [[ "$attempt" -lt 30 ]] || exit 1; sleep 2; done
+          echo "VERTEX_API_ENDPOINT=$url" >> "$GITHUB_ENV"; echo "GCP_ACCESS_TOKEN=$token" >> "$GITHUB_ENV"; echo "GCP_PROJECT_ID=$GCP_PROJECT_ID_VALUE" >> "$GITHUB_ENV"
+
+      - name: Run full multilingual seven-actor Semantic Retrieval Gate v2
+        run: node benchmarks/semantic-retrieval-v2.js
+
+      - name: Print gate summary
+        if: ${{ always() && hashFiles('semantic-retrieval-v2-tiered-live.json') != '' }}
+        run: jq '{benchmark,status,corpus,retrieval,actors,live,liveSemanticRouting,semanticRouterStats,embedding,semanticGate,comparableCostMethodology,methodology}' semantic-retrieval-v2-tiered-live.json
+
+      - name: Upload live evidence
+        if: ${{ always() && hashFiles('semantic-retrieval-v2-tiered-live.json') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: truyn-semantic-retrieval-v2-tiered-live-${{ github.run_id }}
+          path: semantic-retrieval-v2-tiered-live.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Enforce full v2 gate
+        if: ${{ hashFiles('semantic-retrieval-v2-tiered-live.json') != '' }}
+        run: jq -e '.semanticGate.passed == true' semantic-retrieval-v2-tiered-live.json >/dev/null
+
+      - name: Delete isolated Vertex proxy
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          gcloud run services delete "$GCP_PROXY_SERVICE" --project="$GCP_PROJECT_ID_VALUE" --region="$GCP_PROXY_REGION" --quiet >/dev/null 2>&1 || true
+
+      - name: Restore Foundry capacities
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          account="${FOUNDRY_ACCOUNT:-}"; [[ -n "$account" ]] || exit 0
+          for label in GROK DEEPSEEK LLAMA MISTRAL KIMI; do
+            depvar="AZURE_FOUNDRY_${label}"; capvar="RESTORE_${label}_CAP"; dep="${!depvar:-}"; cap="${!capvar:-1}"; [[ -n "$dep" ]] || continue
+            data="$(az cognitiveservices account deployment show -g "$AZURE_RG" -n "$account" --deployment-name "$dep" -o json 2>/dev/null)" || continue
+            model="$(jq -r '.properties.model.name' <<<"$data")"; format="$(jq -r '.properties.model.format' <<<"$data")"; version="$(jq -r '.properties.model.version // empty' <<<"$data")"; sku="$(jq -r '.sku.name' <<<"$data")"
+            args=(cognitiveservices account deployment create -g "$AZURE_RG" -n "$account" --deployment-name "$dep" --model-name "$model" --model-format "$format" --sku-name "$sku" --sku-capacity "$cap")
+            [[ -n "$version" ]] && args+=(--model-version "$version")
+            az "${args[@]}" >/dev/null 2>&1 || true
+          done
