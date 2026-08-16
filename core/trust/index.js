@@ -24,3 +24,14 @@ export function trustabilityLite({ identityVerified = false, successfulTasks = 0
     }
   };
 }
+
+// Node-level execution reputation and claim-level evidence verification are deliberately separate.
+// trustabilityLite() remains a routing/runtime signal. The exports below assess a specific claim.
+export {
+  TRUST_RECEIPT_PROTOCOL,
+  TRUST_RECEIPT_VERSION,
+  assessClaimEvidence,
+  createTrustReceipt,
+  trustReceiptDigest,
+  verifyTrustReceipt
+} from './claim-verification.js';
