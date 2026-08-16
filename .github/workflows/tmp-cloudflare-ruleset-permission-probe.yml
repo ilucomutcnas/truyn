@@ -1,4 +1,4 @@
-name: Temporary Cloudflare Ruleset Permission Probe
+name: Temporary Cloudflare AOP Permission Probe
 
 on:
   push:
@@ -13,30 +13,28 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     env:
-      CF_TOKEN_PRIMARY: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-      CF_TOKEN_LEGACY: ${{ secrets.CLOUDFLARE_API_TOKENS }}
+      CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKENS }}
       CF_ZONE_ID: ${{ secrets.CLOUDFLARE_ZONE_ID || vars.CLOUDFLARE_ZONE_ID }}
     steps:
-      - name: Probe Rulesets read permission without printing credentials
+      - name: Probe AOP read/write permission without changing enablement
         shell: bash
         run: |
           set -euo pipefail
-          [[ -n "${CF_ZONE_ID:-}" ]] || { echo 'CF_RULESETS_PROBE=FAIL zone_missing'; exit 1; }
-          success=0
-          for label in PRIMARY LEGACY; do
-            if [[ "$label" == PRIMARY ]]; then token="${CF_TOKEN_PRIMARY:-}"; else token="${CF_TOKEN_LEGACY:-}"; fi
-            if [[ -z "$token" ]]; then
-              echo "CF_${label}=MISSING"
-              continue
-            fi
-            response="$(curl -sS -H "Authorization: Bearer ${token}" "https://api.cloudflare.com/client/v4/zones/${CF_ZONE_ID}/rulesets")"
-            if jq -e '.success == true' <<<"$response" >/dev/null 2>&1; then
-              echo "CF_${label}=RULESETS_READ_OK"
-              success=1
-            else
-              code="$(jq -r '.errors[0].code // "unknown"' <<<"$response" 2>/dev/null || echo unknown)"
-              echo "CF_${label}=RULESETS_READ_DENIED code=${code}"
-            fi
-          done
-          [[ "$success" == 1 ]] || { echo 'CF_RULESETS_PROBE=FAIL no_authorized_credential'; exit 2; }
-          echo 'CF_RULESETS_PROBE=PASS'
+          [[ -n "${CF_TOKEN:-}" && -n "${CF_ZONE_ID:-}" ]] || { echo 'CF_AOP_PROBE=FAIL missing_binding'; exit 1; }
+          endpoint="https://api.cloudflare.com/client/v4/zones/${CF_ZONE_ID}/origin_tls_client_auth/settings"
+          response="$(curl -sS -H "Authorization: Bearer ${CF_TOKEN}" "$endpoint")"
+          if ! jq -e '.success == true' <<<"$response" >/dev/null 2>&1; then
+            code="$(jq -r '.errors[0].code // "unknown"' <<<"$response" 2>/dev/null || echo unknown)"
+            echo "CF_AOP_READ=DENIED code=${code}"
+            exit 2
+          fi
+          enabled="$(jq -r '.result.enabled // false' <<<"$response")"
+          echo "CF_AOP_READ=OK enabled=${enabled}"
+          write="$(curl -sS -X PUT -H "Authorization: Bearer ${CF_TOKEN}" -H 'Content-Type: application/json' --data "{\"enabled\":${enabled}}" "$endpoint")"
+          if ! jq -e '.success == true' <<<"$write" >/dev/null 2>&1; then
+            code="$(jq -r '.errors[0].code // "unknown"' <<<"$write" 2>/dev/null || echo unknown)"
+            echo "CF_AOP_WRITE=DENIED code=${code}"
+            exit 3
+          fi
+          echo 'CF_AOP_WRITE=OK'
+          echo 'CF_AOP_PROBE=PASS'
