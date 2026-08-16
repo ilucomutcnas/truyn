@@ -18,11 +18,12 @@ export class ReplicatedTransparencyService {
     this.maxMessageBytes = maxMessageBytes;
     this.routingTimeoutMs = routingTimeoutMs;
     this.started = false;
+    this.advertisingEnabled = false;
     this.advertisePromise = null;
     this.churnListenerInstalled = false;
   }
 
-  async start() {
+  async start({ advertise = true } = {}) {
     await this.log.open();
     if (!this.started) {
       await this.node.handle(TRANSPARENCY_REPLICATION_PROTOCOL, async (stream) => {
@@ -57,17 +58,18 @@ export class ReplicatedTransparencyService {
       this.node.addEventListener('peer:disconnect', () => this.#scheduleChurnReannounce());
       this.churnListenerInstalled = true;
     }
-    await this.advertise();
+    if (advertise) await this.advertise();
     return this.log.head();
   }
 
   #scheduleChurnReannounce() {
+    if (!this.advertisingEnabled) return;
     // Provider records in a small DHT may have been stored on the peer that just
     // disappeared. Re-provide after routing topology changes so surviving replicas
     // become discoverable through surviving peers instead of relying on stale state.
     for (const delayMs of [0, 250, 1_000]) {
       const timer = setTimeout(() => {
-        if (this.node.status !== 'started') return;
+        if (this.node.status !== 'started' || !this.advertisingEnabled) return;
         this.advertise().catch(() => {});
       }, delayMs);
       timer.unref?.();
@@ -79,6 +81,7 @@ export class ReplicatedTransparencyService {
     this.advertisePromise = (async () => {
       const cid = await transparencyReplicationCid(this.log.sourceOwnerId);
       await this.node.contentRouting.provide(cid, { signal: AbortSignal.timeout(this.routingTimeoutMs) });
+      this.advertisingEnabled = true;
     })();
     try {
       await this.advertisePromise;
@@ -144,6 +147,18 @@ export class ReplicatedTransparencyService {
       catch (error) { results.push({ ok: false, peerId: peerId.toString(), error: error.code || error.message }); }
     }
     return { peers: peers.length, successful: results.filter((item) => item.ok).length, results, head: this.log.head() };
+  }
+
+  async recoverAndAdvertise({ limit = 16, timeoutMs = 5_000 } = {}) {
+    if (!this.started) await this.start({ advertise: false });
+    const recovered = await this.syncNetwork({ limit, timeoutMs });
+    if (this.log.head().sequence === 0 || recovered.successful === 0) {
+      const error = new Error('transparency_recovery_source_not_found');
+      error.code = 'transparency_recovery_source_not_found';
+      throw error;
+    }
+    await this.advertise();
+    return { ...recovered, head: this.log.head() };
   }
 
   async replicate({ minAcks = 1, limit = 16, timeoutMs = 5_000 } = {}) {
