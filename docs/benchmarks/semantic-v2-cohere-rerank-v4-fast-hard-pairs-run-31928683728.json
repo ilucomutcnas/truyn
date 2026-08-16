@@ -1,0 +1,55 @@
+{
+  "benchmark": "TRUYN Semantic v2 Cohere-rerank-v4.0-fast warmed hard-pair diagnostic",
+  "generatedAt": "2026-08-16T05:19:22.570Z",
+  "sourceSha": "6f2ddf743e83ad1704a831a7058a93ad668c6a69",
+  "githubActionsRunId": 31928683728,
+  "githubActionsArtifactId": 9258643333,
+  "artifactDigest": "sha256:272808e80a27987a2b36781ff70f12262b89e5957b58628b7d7dca1b885753c9",
+  "model": "Cohere-rerank-v4.0-fast",
+  "deployment": "Cohere-rerank-v4.0-fast",
+  "deploymentSku": "GlobalStandard",
+  "deploymentCapacity": 1,
+  "candidateOrdering": "[previousWrong, expectedTarget]",
+  "cases": [
+    {
+      "caseIndex": 5,
+      "expectedId": "semantic-record-185",
+      "previousWrongId": "semantic-record-305",
+      "selectedIndex": 0,
+      "selectedExpected": false,
+      "relevanceScore": 0.8596814,
+      "httpStatus": 200,
+      "latencyMs": 871,
+      "attempts": 1
+    },
+    {
+      "caseIndex": 241,
+      "expectedId": "semantic-record-517",
+      "previousWrongId": "semantic-record-437",
+      "selectedIndex": 0,
+      "selectedExpected": false,
+      "relevanceScore": 0.8306491,
+      "httpStatus": 200,
+      "latencyMs": 459,
+      "attempts": 1
+    },
+    {
+      "caseIndex": 269,
+      "expectedId": "semantic-record-353",
+      "previousWrongId": "semantic-record-553",
+      "selectedIndex": 0,
+      "selectedExpected": false,
+      "relevanceScore": 0.93186045,
+      "httpStatus": 200,
+      "latencyMs": 378,
+      "attempts": 1
+    }
+  ],
+  "passed": false,
+  "conclusion": "Cohere-rerank-v4.0-fast is rejected as the primary Semantic Retrieval Gate v2 reranker because it reproduced all three previously observed eligible near-duplicate errors despite successful HTTP 200 inference. This is a negative benchmark result and must remain in repository history.",
+  "precedingInfrastructureObservation": {
+    "runId": 31928226351,
+    "result": "HTTP 429 RateLimitReached immediately after fresh capacity-1 deployment",
+    "resolution": "A later warmed run with a single documented Cohere v2 rerank endpoint, api-key auth, spacing and Retry-After handling returned HTTP 200 on every request; therefore the earlier 429 is classified as deployment warm-up/rate-limit behavior rather than endpoint or authentication failure."
+  }
+}
