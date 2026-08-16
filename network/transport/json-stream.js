@@ -11,10 +11,13 @@ function chunkBytes(chunk) {
 export async function readJsonStream(stream, { maxBytes = 1_048_576 } = {}) {
   const chunks = [];
   let total = 0;
-  for await (const chunk of stream.source) {
+  for await (const chunk of stream) {
     const bytes = chunkBytes(chunk);
     total += bytes.byteLength;
-    if (total > maxBytes) throw new Error('truyn_stream_message_too_large');
+    if (total > maxBytes) {
+      stream.abort?.(new Error('truyn_stream_message_too_large'));
+      throw new Error('truyn_stream_message_too_large');
+    }
     chunks.push(bytes);
   }
   const merged = new Uint8Array(total);
@@ -27,15 +30,18 @@ export async function readJsonStream(stream, { maxBytes = 1_048_576 } = {}) {
   return JSON.parse(decoder.decode(merged));
 }
 
-export async function writeJsonStream(stream, value) {
+export async function writeJsonStream(stream, value, { timeoutMs = 5_000 } = {}) {
   const bytes = encoder.encode(JSON.stringify(value));
-  await stream.sink((async function * () { yield bytes; })());
+  const accepted = stream.send(bytes);
+  if (!accepted) await stream.onDrain({ signal: AbortSignal.timeout(timeoutMs) });
+  // TRUYN's v2 trust RPCs are one JSON message per direction. Half-close the
+  // local writable side after the message so the remote async iterator gets EOF,
+  // while the readable side remains open for the response.
+  await stream.close({ signal: AbortSignal.timeout(timeoutMs) });
 }
 
 export async function requestJson(node, target, protocol, request, { timeoutMs = 5_000, maxBytes = 1_048_576 } = {}) {
   const stream = await node.dialProtocol(target, protocol, { signal: AbortSignal.timeout(timeoutMs) });
-  await writeJsonStream(stream, request);
-  const response = await readJsonStream(stream, { maxBytes });
-  try { await stream.close?.(); } catch {}
-  return response;
+  await writeJsonStream(stream, request, { timeoutMs });
+  return readJsonStream(stream, { maxBytes });
 }
