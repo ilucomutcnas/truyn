@@ -1,0 +1,85 @@
+name: Ephemeral Semantic v2 Gemini 3.1 Flash-Lite Hard
+
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/tmp-semantic-v2-flashlite-hard.yml']
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  diagnostic:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      GCP_PROJECT_ID_VALUE: ${{ vars.GCP_PROJECT_ID || secrets.GCP_PROJECT_ID }}
+      GCP_WIF_PROVIDER_VALUE: ${{ vars.GCP_WIF_PROVIDER || secrets.GCP_WIF_PROVIDER }}
+      GCP_DEPLOYER_SA_VALUE: ${{ vars.GCP_DEPLOYER_SERVICE_ACCOUNT_EMAIL || secrets.GCP_DEPLOYER_SERVICE_ACCOUNT_EMAIL }}
+      GCP_RUNTIME_SA_VALUE: ${{ vars.GCP_RUNTIME_SERVICE_ACCOUNT_EMAIL || secrets.GCP_RUNTIME_SERVICE_ACCOUNT_EMAIL }}
+      GCP_PROXY_REGION: us-east4
+      GCP_AR_REPO: truyn-poc
+      GCP_PROXY_SERVICE: truyn-semanticv2-flashlite-${{ github.run_id }}
+      SEMANTIC_V2_SOURCE_SHA: 6f2ddf743e83ad1704a831a7058a93ad668c6a69
+      SEMANTIC_V2_PROXY_SHA: c1ea39a3f5a0408035fea7f00604ff14310eda10
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { persist-credentials: false }
+      - uses: actions/setup-node@v4
+        with: { node-version: '24' }
+      - run: npm install --ignore-scripts --no-audit --no-fund
+      - name: Load immutable sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          load_file(){ mkdir -p "$(dirname "$1")"; curl -fsSL -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" "https://api.github.com/repos/${GITHUB_REPOSITORY}/contents/$1?ref=$2" | jq -r '.content' | tr -d '\n' | base64 -d > "$1"; }
+          load_file benchmarks/semantic-retrieval-v2.js "$SEMANTIC_V2_SOURCE_SHA"
+          load_file benchmarks/semantic-v2-gcp-proxy.js "$SEMANTIC_V2_PROXY_SHA"
+          load_file benchmarks/Dockerfile.semantic-v2-gcp-proxy "$SEMANTIC_V2_PROXY_SHA"
+      - uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID_VALUE }}
+          workload_identity_provider: ${{ env.GCP_WIF_PROVIDER_VALUE }}
+          service_account: ${{ env.GCP_DEPLOYER_SA_VALUE }}
+          create_credentials_file: true
+          export_environment_variables: true
+      - uses: google-github-actions/setup-gcloud@v3
+        with: { project_id: '${{ env.GCP_PROJECT_ID_VALUE }}' }
+      - name: Prepare isolated Vertex proxy
+        shell: bash
+        run: |
+          set -euo pipefail
+          token="$(openssl rand -hex 32)"; echo "::add-mask::$token"
+          registry="${GCP_PROXY_REGION}-docker.pkg.dev"; image="${registry}/${GCP_PROJECT_ID_VALUE}/${GCP_AR_REPO}/semanticv2-flashlite:${GITHUB_SHA}"
+          gcloud auth configure-docker "$registry" --quiet
+          docker build -f benchmarks/Dockerfile.semantic-v2-gcp-proxy -t "$image" . >/dev/null && docker push "$image" >/dev/null
+          gcloud run deploy "$GCP_PROXY_SERVICE" --project="$GCP_PROJECT_ID_VALUE" --region="$GCP_PROXY_REGION" --image="$image" --service-account="$GCP_RUNTIME_SA_VALUE" --port=8080 --min=0 --max=1 --cpu=1 --memory=512Mi --set-env-vars="BENCHMARK_PROXY_TOKEN=${token}" --no-invoker-iam-check --quiet >/dev/null
+          url="$(gcloud run services describe "$GCP_PROXY_SERVICE" --project="$GCP_PROJECT_ID_VALUE" --region="$GCP_PROXY_REGION" --format='value(status.url)')"
+          for a in $(seq 1 30); do curl -fsS -H "Authorization: Bearer ${token}" "${url}/health" | jq -e '.ok==true' >/dev/null && break; [[ "$a" -lt 30 ]] || exit 1; sleep 2; done
+          echo "VERTEX_API_ENDPOINT=$url" >> "$GITHUB_ENV"; echo "GCP_ACCESS_TOKEN=$token" >> "$GITHUB_ENV"; echo "GCP_PROJECT_ID=$GCP_PROJECT_ID_VALUE" >> "$GITHUB_ENV"
+      - name: Run Flash-Lite top24 hard diagnostic
+        shell: bash
+        run: |
+          cat > semantic-v2-flashlite-hard.mjs <<'NODE'
+          import fs from 'node:fs';import vm from 'node:vm';import {createVertexGeminiProvider} from './adapters/providers/vertex-gemini.js';import {createVertexEmbeddingClient} from './adapters/providers/vertex-embedding.js';
+          const src=fs.readFileSync('benchmarks/semantic-retrieval-v2.js','utf8'),a=src.indexOf('const domains = ['),b=src.indexOf('const fullContext =');const box={};vm.createContext(box);vm.runInContext('const corpusSize=600,retrievalCaseCount=360;'+src.slice(a,b)+';globalThis.__d={blocks,retrievalCases};',box);const {blocks,retrievalCases}=box.__d,hard=[5,241,269].map(i=>retrievalCases.find(x=>x.caseIndex===i));
+          const token=async()=>process.env.GCP_ACCESS_TOKEN;const model=createVertexGeminiProvider({projectId:process.env.GCP_PROJECT_ID,location:'global',model:'gemini-3.1-flash-lite',endpoint:process.env.VERTEX_API_ENDPOINT,accessTokenProvider:token,capabilities:['reasoning.general'],requestTimeoutMs:180000});const emb=createVertexEmbeddingClient({projectId:process.env.GCP_PROJECT_ID,location:'us-central1',model:'gemini-embedding-001',endpoint:process.env.VERTEX_API_ENDPOINT,accessTokenProvider:token,batchSize:1,outputDimensionality:768,maxRetries:8});
+          const norm=v=>Math.sqrt(v.reduce((s,x)=>s+x*x,0)),cos=(x,y)=>{let d=0;for(let i=0;i<x.length;i++)d+=x[i]*y[i];const z=norm(x)*norm(y);return z?d/z:0;};async function ml(items,n,fn){const out=new Array(items.length);let next=0;async function w(){for(;;){const i=next++;if(i>=items.length)return;out[i]=await fn(items[i],i);}}await Promise.all(Array.from({length:Math.min(n,items.length)},w));return out;}
+          const dv=await ml(blocks,8,async x=>(await emb.embedMany([x.text],{taskType:'RETRIEVAL_DOCUMENT'}))[0]),rows=[];let total={input:0,visibleOutput:0,thoughts:0,total:0,requestBytes:0,latencyMs:0};const instruction='Choose the single passage matching the complete operational meaning of the query. Every material constraint matters: real-world domain, controlled action, and condition/state. A near-duplicate that conflicts on one material constraint is wrong. Ignore ANSWER_CODE as a retrieval signal. Return only one supplied local label.';
+          for(const item of hard){const qv=(await emb.embedMany([item.question],{taskType:'RETRIEVAL_QUERY'}))[0],dense=blocks.map((x,i)=>({id:x.id,text:x.text,score:cos(qv,dv[i])})).sort((x,y)=>y.score-x.score||x.id.localeCompare(y.id)).slice(0,24),payload=dense.map((c,i)=>({id:`c${i.toString(36)}`,text:c.text})),real=new Map(payload.map((p,i)=>[p.id,dense[i].id]));const e=await model.execute({capability:'reasoning.general',input:{task:instruction+' Return JSON only: {"id":"..."}.',context:JSON.stringify({query:item.question,candidates:payload})},policy:{providerOptions:{thinkingLevel:'MINIMAL',temperature:0,maxOutputTokens:512,responseMimeType:'application/json',responseSchema:{type:'OBJECT',properties:{id:{type:'STRING'}},required:['id']}}}});const u=e.metadata?.usage||{},usage={input:u.promptTokenCount||0,visibleOutput:u.candidatesTokenCount||0,thoughts:u.thoughtsTokenCount||0,total:u.totalTokenCount||0,requestBytes:e.metadata?.providerRequestBodyBytes||0,latencyMs:e.metadata?.providerLatencyMs||0};for(const k of Object.keys(total))total[k]+=usage[k];const p=JSON.parse(e.output),selected=real.get(p.id)||null;rows.push({caseIndex:item.caseIndex,expectedId:item.id,denseExpectedRank:dense.findIndex(c=>c.id===item.id)+1,selectedId:selected,correct:selected===item.id,usage,raw:e.output});}
+          const report={benchmark:'TRUYN Semantic v2 Gemini 3.1 Flash-Lite MINIMAL top24 hard diagnostic',generatedAt:new Date().toISOString(),sourceSha:process.env.SEMANTIC_V2_SOURCE_SHA,model:'gemini-3.1-flash-lite',thinkingLevel:'MINIMAL',candidateK:24,rows,total,embedding:emb.stats(),correct:rows.filter(r=>r.correct).length,totalCases:rows.length,passed:rows.every(r=>r.correct)};fs.writeFileSync('semantic-v2-flashlite-hard.json',JSON.stringify(report,null,2));console.log(JSON.stringify(report,null,2));if(!report.passed)process.exitCode=2;
+          NODE
+          node semantic-v2-flashlite-hard.mjs
+      - name: Upload evidence
+        if: ${{ always() && hashFiles('semantic-v2-flashlite-hard.json') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: truyn-semantic-v2-flashlite-hard-${{ github.run_id }}
+          path: semantic-v2-flashlite-hard.json
+          retention-days: 30
+      - name: Delete isolated Vertex proxy
+        if: always()
+        shell: bash
+        run: gcloud run services delete "$GCP_PROXY_SERVICE" --project="$GCP_PROJECT_ID_VALUE" --region="$GCP_PROXY_REGION" --quiet >/dev/null 2>&1 || true
