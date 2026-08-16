@@ -68,6 +68,24 @@ The lifecycle-specific checks appear as tests **119–124** in run `31959144938`
 
 The same CI run also passed the existing Semantic Retrieval Gate router/reranker/provenance tests and the repository security/evidence guards.
 
+## Additional interrupted-preparation recovery proof
+
+Follow-up commit: **`d21d50bae0a4230d6aee13fc60246da91a8094e1`**
+
+GitHub Actions CI run: **`31959266557`**
+
+CI job: **`95194630871`** — **SUCCESS**
+
+A further regression test explicitly simulates a durable root left in `preparing` state by an interrupted process:
+
+1. the persisted root exists but is not `ready`;
+2. a user `retrieve()` attempt fails closed with `semantic_index_not_ready`;
+3. that failed retrieval creates **zero document embeddings**;
+4. explicit `prepareContext(rootCid)` resumes preparation and creates only the missing document vectors;
+5. after another process-style restart, the production index retrieves the ready root from durable state with **zero document re-embedding**.
+
+This follow-up extends the earlier 145/145 proof; it does not replace or rewrite it. The earlier tested commit/run remain the primary full-suite lifecycle evidence, and the interrupted-preparation case is retained as additional crash-recovery evidence.
+
 ## What this proves
 
 ### No request-time corpus build in production mode
