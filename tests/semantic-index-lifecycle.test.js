@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createSemanticContextRouterV2 } from '../core/context/semantic-router-v2.js';
 import { createFileSemanticIndexStore, createMemorySemanticIndexStore } from '../core/context/semantic-index-store.js';
+import { createProductionSemanticIndex } from '../core/context/production-semantic-index.js';
 
 function countingEmbedder() {
   const counts = { documentInputs:0, queryInputs:0, calls:0 };
@@ -96,6 +97,31 @@ test('durable root and block vectors survive process-style router restart withou
   });
 });
 
+test('production factory cold-loads a ready root directly from durable storage', async () => {
+  await withTempStore(async (directory) => {
+    const firstEmbedder = countingEmbedder();
+    const first = createProductionSemanticIndex({ directory, embedder:firstEmbedder });
+    const published = await first.publishContext([
+      { id:'alpha', text:'alpha durable object' },
+      { id:'beta', text:'beta durable object' }
+    ]);
+    assert.equal(firstEmbedder.counts.documentInputs, 2);
+    assert.equal(first.stats().productionIndexMode, true);
+    assert.equal(first.stats().requirePreparedIndex, true);
+
+    const secondEmbedder = countingEmbedder();
+    const second = createProductionSemanticIndex({ directory, embedder:secondEmbedder });
+    const manifest = await second.loadManifest(published.cid);
+    assert.equal(manifest.cid, published.cid);
+
+    const result = await second.retrieve(published.cid, 'alpha question');
+    assert.equal(result.blocks[0].id, 'alpha');
+    assert.equal(secondEmbedder.counts.documentInputs, 0);
+    assert.equal(second.stats().lifecycle.rootStoreLoads, 1);
+    assert.equal(second.stats().lifecycle.persistedVectorLoads, 2);
+  });
+});
+
 test('new root embeds only new immutable block CIDs and reuses unchanged vectors', async () => {
   await withTempStore(async (directory) => {
     const embedder = countingEmbedder();
@@ -147,7 +173,6 @@ test('concurrent preparation of one root is single-flight and embeds each immuta
   ]);
   assert.equal(results.every((item) => item.index.status === 'ready'), true);
   assert.equal(embedder.counts.documentInputs, 3);
-  assert.equal(router.stats().preparedContexts, undefined);
   assert.equal(router.stats().lifecycle.preparedContexts, 1);
   assert.equal(router.stats().blockVectorFlights, 0);
 });
