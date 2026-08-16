@@ -82,7 +82,8 @@ async function runRelay() {
         originGuard = createOriginGuard({
           targetHost: '127.0.0.1',
           targetPort: protectedTargetPort,
-          token: originGuardConfig.token
+          token: originGuardConfig.token,
+          headerName: originGuardConfig.headerName
         });
         await originGuard.listen({ host, port });
       }
