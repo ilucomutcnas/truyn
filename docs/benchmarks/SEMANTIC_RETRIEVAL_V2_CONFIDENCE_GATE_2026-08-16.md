@@ -61,6 +61,49 @@ Current public list-price normalization used by the benchmark:
 
 The accuracy/integrity gate passed completely. The routing cost was slightly above the previously fixed >=90% comparable-cost-savings budget, so this configuration is retained as a successful accuracy proof but **not declared the final economic gate**.
 
+## Rank-15 economic retrieval proof — PASS
+
+GitHub Actions run: `31951123535`
+
+Artifact:
+- ID: `9264730019`
+- name: `truyn-semantic-v2-economic-final-31951123535`
+- SHA-256: `c317ea8630970d6f459904e4164046e36ab15455227d16643affaccb0f079c0e`
+- immutable benchmark source SHA: `6f2ddf743e83ad1704a831a7058a93ad668c6a69`
+
+The only routing-policy change from the rank-12 proof is generic and case-agnostic: accept a passage when the two independent cheap judges agree and the agreed passage is within dense rank <=15; otherwise fail closed to Gemini 3.1 Pro over dense top 64. The rule does not inspect case ID, expected block ID, query language, benchmark category or expected answer.
+
+### Accuracy and integrity
+
+| Metric | Fixed gate | Result |
+|---|---:|---:|
+| Overall retrieval | >=99% | **359/360 = 99.722%** |
+| English | >=99% | **180/180 = 100%** |
+| Turkish | >=99% | **119/120 = 99.167%** |
+| Chinese | >=99% | **60/60 = 100%** |
+| Synonym-only | >=99% | **120/120 = 100%** |
+| Cross-language | >=99% | **119/120 = 99.167%** |
+| Adversarial near-duplicate | >=99% | **120/120 = 100%** |
+| Dense top-64 recall | >=99% | **360/360 = 100%** |
+| Provenance | 100% | **100%** |
+| No requester block-ID leakage | 100% | **100%** |
+| Minimal-context selection | 100% | **100%** |
+| Strong-verifier fallbacks | — | **30/360 = 8.333%** |
+
+The single remaining miss is case 241: a Turkish cross-language query where both cheap judges agree on a near-duplicate at consensus dense rank 14. The expected passage remains present in the dense top 64. This miss is retained explicitly because the fixed subgroup gates still pass and hiding it would weaken the benchmark.
+
+### Routing usage and cost
+
+| Layer | Requests | Input tokens | Visible output | Reasoning/thought tokens | Cost |
+|---|---:|---:|---:|---:|---:|
+| Gemini 3.1 Flash-Lite MINIMAL | 360 | 854,091 | 2,148 | 0 | **$0.216744750** |
+| Gemini 3 Flash MINIMAL | 360 | 854,091 | 2,151 | 0 | **$0.433498500** |
+| Gemini 3.1 Pro fallback | 30 | 184,427 | 357 | 27,530 | **$0.703498000** |
+| **Total semantic routing** | — | — | — | — | **$1.353741250** |
+| **Per query** | — | — | — | — | **$0.003760392** |
+
+This configuration passes the fixed corpus-wide accuracy/integrity gates and brings semantic routing below the previously established economic routing budget. End-to-end token/cost savings are verified separately by the seven-actor live A/B proof and are not inferred from this retrieval-only section.
+
 ## Prior full adaptive run — retained correction history
 
 Run `31946647176`, artifact `9263556614`, SHA-256 `6a87f45c256823734496660e6f9ecaaa43b2a192003dbc51afb4b5d3700d63fe`.
