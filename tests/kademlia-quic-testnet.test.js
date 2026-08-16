@@ -154,13 +154,15 @@ test('real QUIC/Kademlia testnet survives churn with relay-free verifier discove
 
   await stopNode(bootstrap);
   stage('churn:bootstrap-down');
+  await eventually(() => replicaReplication.advertise().then(() => true), { label: 'surviving_replica_reprovide', timeoutMs: 20_000 });
+  stage('churn:surviving-replica-readvertised');
   const observerDirectory = await temp('observer-log');
   const observerLog = await new DurableTransparencyLog({ directory: observerDirectory, sourceOwnerId: root.body.sourceOwnerId }).open();
   const observerReplication = new ReplicatedTransparencyService({ node: requesterPeer, log: observerLog, routingTimeoutMs: 5_000 });
-  await eventually(() => observerReplication.start().then(() => true), { label: 'observer_replication_start', timeoutMs: 20_000 });
+  await observerReplication.start({ advertise: false });
   await eventually(async () => {
-    const synced = await observerReplication.syncNetwork({ timeoutMs: 3_000 });
-    return observerLog.head().headHash === replicaLog.head().headHash && synced.successful >= 1 ? synced : null;
+    const recovered = await observerReplication.recoverAndAdvertise({ timeoutMs: 3_000 });
+    return observerLog.head().headHash === replicaLog.head().headHash && recovered.successful >= 1 ? recovered : null;
   }, { label: 'observer_recovery_after_bootstrap_churn', timeoutMs: 20_000 });
   assert.deepEqual(observerLog.head(), replicaLog.head(), 'new replica must recover durable lifecycle state without the original primary');
   stage('churn:replica-recovered', { sequence: observerLog.head().sequence });
