@@ -1,0 +1,250 @@
+name: Temporary Final Azure Origin Lockdown
+
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/tmp-azure-origin-lockdown-final.yml']
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  prove:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      AZURE_CLIENT_ID_VALUE: ${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID_VALUE: ${{ vars.AZURE_TENANT_ID || secrets.AZURE_TENANT_ID }}
+      AZURE_SUBSCRIPTION_ID_VALUE: ${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}
+      PUBLIC_RELAY_URL: https://relay.truyn.org
+      EXPECTED_FDID_BUILD: fdid-e9254d023fdd
+    steps:
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID_VALUE }}
+          tenant-id: ${{ env.AZURE_TENANT_ID_VALUE }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID_VALUE }}
+
+      - name: Install Container Apps CLI extension
+        shell: bash
+        run: az extension add --name containerapp --upgrade --only-show-errors >/dev/null
+
+      - name: Prove FDID-bound app guard and AzureFrontDoor.Backend network lock
+        shell: bash
+        run: |
+          set -euo pipefail
+          ACA_API='2025-01-01'
+          AFD_API='2025-04-15'
+          SUCCESS=0
+          GUARD_SET=0
+          SECRET_SET=0
+          NETWORK_SET=0
+          APP=''; RG=''; FQDN=''; APP_ID=''; APP_LOCATION=''; PROFILE_ID=''; FRONT_DOOR_ID=''; SECRET_NAME="fd-$(openssl rand -hex 8)"
+          INGRESS_BACKUP_B64=''
+
+          mask(){ [[ -n "${1:-}" ]] && echo "::add-mask::$1"; }
+          mask "$SECRET_NAME"
+
+          public_health(){
+            local attempts="${1:-50}" code
+            for _ in $(seq 1 "$attempts"); do
+              code="$(curl -sS --max-time 10 -D /tmp/public-health.headers -o /tmp/public-health.body -w '%{http_code}' "${PUBLIC_RELAY_URL}/health" || true)"
+              if [[ "$code" == '200' ]] && grep -qi '^cf-ray:' /tmp/public-health.headers; then return 0; fi
+              sleep 3
+            done
+            return 1
+          }
+
+          wait_revision(){
+            local attempts="${1:-100}" live rev p r
+            for _ in $(seq 1 "$attempts"); do
+              live="$(az containerapp show -g "$RG" -n "$APP" -o json 2>/dev/null || echo '{}')"
+              rev="$(jq -r '.properties.latestRevisionName // empty' <<<"$live")"
+              mask "$rev"
+              if [[ -n "$rev" ]]; then
+                rj="$(az containerapp revision show -g "$RG" -n "$APP" --revision "$rev" -o json 2>/dev/null || echo '{}')"
+                p="$(jq -r '.properties.provisioningState // "unknown"' <<<"$rj")"
+                r="$(jq -r '.properties.runningState // "unknown"' <<<"$rj")"
+                if [[ ( "$p" == 'Succeeded' || "$p" == 'Provisioned' ) && "$r" == Running* ]]; then return 0; fi
+                [[ "$p" == 'Failed' || "$r" == 'Failed' ]] && return 1
+              fi
+              sleep 4
+            done
+            return 1
+          }
+
+          restore_ingress(){
+            [[ -n "${INGRESS_BACKUP_B64:-}" && -n "$APP_ID" ]] || return 0
+            local ingress patch
+            ingress="$(printf '%s' "$INGRESS_BACKUP_B64" | base64 -d)"
+            patch="$(jq -nc --argjson ingress "$ingress" '{properties:{configuration:{ingress:$ingress}}}')"
+            az rest --method patch --url "https://management.azure.com${APP_ID}?api-version=${ACA_API}" --headers 'Content-Type=application/json' --body "$patch" >/dev/null 2>&1
+          }
+
+          rollback(){
+            set +e
+            rm -f /tmp/*.body /tmp/*.headers /tmp/*.json /tmp/*.tsv /tmp/*.txt
+            [[ "$SUCCESS" == 1 ]] && { echo 'AZURE_LOCKDOWN_CLEANUP=PASS production_lockdown_retained=true'; return; }
+            echo 'AZURE_LOCKDOWN_ROLLBACK=START'
+            if [[ "$NETWORK_SET" == 1 ]]; then
+              restore_ingress || true
+              public_health 80 || true
+            fi
+            if [[ "$GUARD_SET" == 1 && -n "$APP" ]]; then
+              az containerapp update -g "$RG" -n "$APP" --remove-env-vars TRUYN_ORIGIN_GUARD TRUYN_ORIGIN_GUARD_TOKEN TRUYN_ORIGIN_GUARD_HEADER --only-show-errors >/dev/null 2>&1 || true
+              wait_revision 100 || true
+            fi
+            if [[ "$SECRET_SET" == 1 && -n "$APP" ]]; then
+              az containerapp secret remove -g "$RG" -n "$APP" --secret-names "$SECRET_NAME" --only-show-errors >/dev/null 2>&1 || true
+            fi
+            if public_health 100; then echo 'AZURE_LOCKDOWN_ROLLBACK=PASS public_health=200 cloudflare=true'; else echo 'AZURE_LOCKDOWN_ROLLBACK=FAIL'; fi
+          }
+          trap rollback EXIT
+
+          # Discover the single live relay and require a clean baseline.
+          found=0
+          while IFS=$'\t' read -r name rg fqdn; do
+            [[ -n "$fqdn" ]] || continue
+            app="$(az containerapp show -g "$rg" -n "$name" -o json)"
+            role="$(jq -r '[.properties.template.containers[0].env[]? | select(.name=="TRUYN_ROLE") | .value][0] // empty' <<<"$app")"
+            [[ "$role" == 'relay' || "$name" == *relay* ]] || continue
+            found=1; APP="$name"; RG="$rg"; FQDN="$fqdn"
+            APP_ID="$(jq -r '.id // empty' <<<"$app")"; APP_LOCATION="$(jq -r '.location // empty' <<<"$app")"
+            image="$(jq -r '.properties.template.containers[0].image // empty' <<<"$app")"
+            for v in "$APP" "$RG" "$FQDN" "$APP_ID" "$APP_LOCATION" "$image"; do mask "$v"; done
+            [[ "$image" == *"${EXPECTED_FDID_BUILD}"* ]] || { echo 'AZURE_LOCKDOWN=FAIL fdid_aware_image_not_live'; exit 10; }
+            guard_vars="$(jq '[.properties.template.containers[0].env[]? | select(.name=="TRUYN_ORIGIN_GUARD" or .name=="TRUYN_ORIGIN_GUARD_TOKEN" or .name=="TRUYN_ORIGIN_GUARD_HEADER")] | length' <<<"$app")"
+            current_rules="$(jq '(.properties.configuration.ingress.ipSecurityRestrictions // []) | length' <<<"$app")"
+            [[ "$guard_vars" == 0 && "$current_rules" == 0 ]] || { echo "AZURE_LOCKDOWN=FAIL dirty_baseline guard_vars=${guard_vars} ip_rules=${current_rules}"; exit 11; }
+            ingress="$(jq '.properties.configuration.ingress' <<<"$app")"
+            INGRESS_BACKUP_B64="$(printf '%s' "$ingress" | base64 -w0)"
+            break
+          done < <(az containerapp list --query "[?properties.configuration.ingress.external==\`true\`].[name,resourceGroup,properties.configuration.ingress.fqdn]" -o tsv)
+          [[ "$found" == 1 && -n "$APP_ID" && -n "$APP_LOCATION" ]] || { echo 'AZURE_LOCKDOWN=FAIL relay_not_found'; exit 12; }
+          ORIGIN="https://${FQDN}"; mask "$ORIGIN"
+
+          # Discover the unique Front Door profile actually serving relay.truyn.org.
+          : > /tmp/live-afd.tsv
+          profiles="$(az resource list --resource-type Microsoft.Cdn/profiles -o json)"
+          mapfile -t profile_ids < <(jq -r '.[] | select((.sku.name // "") | test("AzureFrontDoor"; "i")) | .id' <<<"$profiles")
+          for pid in "${profile_ids[@]}"; do
+            mask "$pid"
+            endpoints="$(az rest --method get --url "https://management.azure.com${pid}/afdEndpoints?api-version=${AFD_API}" 2>/dev/null || echo '{}')"
+            while IFS=$'\t' read -r eid host enabled; do
+              [[ "$enabled" == 'Enabled' && -n "$eid" && -n "$host" ]] || continue
+              mask "$eid"; mask "$host"
+              code="$(curl -sS --max-time 15 --connect-to "relay.truyn.org:443:${host}:443" -o /tmp/afd-probe.body -w '%{http_code}' https://relay.truyn.org/health || true)"
+              [[ "$code" == '200' ]] && printf '%s\n' "$pid" >> /tmp/live-afd.tsv
+            done < <(jq -r '.value[]? | [.id, (.properties.hostName // ""), (.properties.enabledState // "")] | @tsv' <<<"$endpoints")
+          done
+          live_profiles="$(sort -u /tmp/live-afd.tsv | sed '/^$/d' | wc -l | tr -d ' ')"
+          [[ "$live_profiles" == 1 ]] || { echo "AZURE_LOCKDOWN=FAIL live_afd_profile_count=${live_profiles}"; exit 13; }
+          PROFILE_ID="$(sort -u /tmp/live-afd.tsv | head -n1)"; mask "$PROFILE_ID"
+          profile_json="$(az resource show --ids "$PROFILE_ID" --api-version "$AFD_API" -o json)"
+          FRONT_DOOR_ID="$(jq -r '.properties.frontDoorId // empty' <<<"$profile_json")"
+          [[ -n "$FRONT_DOOR_ID" ]] || { echo 'AZURE_LOCKDOWN=FAIL frontDoorId_missing'; exit 14; }
+          mask "$FRONT_DOOR_ID"
+          echo 'AZURE_FRONT_DOOR_ID=PASS unique_profile_bound_value=true'
+
+          # Capture public behavior before enabling any guard.
+          public_health 20 || { echo 'AZURE_LOCKDOWN=FAIL baseline_health'; exit 20; }
+          BASE_HEALTH_SHA="$(sha256sum /tmp/public-health.body | awk '{print $1}')"
+          BREG="$(curl -sS --max-time 12 -o /tmp/base-register.body -w '%{http_code}' -X POST -H 'content-type: application/json' --data '{}' "$PUBLIC_RELAY_URL/v1/register" || true)"
+          BERR="$(jq -r '.error // ""' /tmp/base-register.body 2>/dev/null || true)"
+          jq -e 'type=="object"' /tmp/base-register.body >/dev/null || { echo 'AZURE_LOCKDOWN=FAIL baseline_register_json'; exit 21; }
+          BWS="$(curl -sS --http1.1 --max-time 12 -o /tmp/base-ws.body -w '%{http_code}' -H 'Connection: Upgrade' -H 'Upgrade: websocket' -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' "$PUBLIC_RELAY_URL/v1/fast/socket?nodeId=azure-lockdown" || true)"
+          [[ "$BWS" != '000' && ! "$BWS" =~ ^5 ]] || { echo "AZURE_LOCKDOWN=FAIL baseline_ws=${BWS}"; exit 22; }
+          echo "PUBLIC_BASELINE=PASS register_http=${BREG} websocket_http=${BWS}"
+
+          # Layer 1: exact profile binding via the X-Azure-FDID automatically supplied by Front Door.
+          az containerapp secret set -g "$RG" -n "$APP" --secrets "${SECRET_NAME}=${FRONT_DOOR_ID}" --only-show-errors >/dev/null
+          SECRET_SET=1
+          az containerapp update -g "$RG" -n "$APP" --set-env-vars TRUYN_ORIGIN_GUARD=1 TRUYN_ORIGIN_GUARD_HEADER=x-azure-fdid "TRUYN_ORIGIN_GUARD_TOKEN=secretref:${SECRET_NAME}" --only-show-errors >/dev/null
+          GUARD_SET=1
+          wait_revision 100 || { echo 'FDID_APP_GUARD=FAIL revision_not_stable'; exit 30; }
+
+          edge_ok=0; edge_reg='000'; edge_err=''
+          for _ in $(seq 1 80); do
+            edge_reg="$(curl -sS --max-time 10 -D /tmp/edge-register.headers -o /tmp/edge-register.body -w '%{http_code}' -X POST -H 'content-type: application/json' --data '{}' "$PUBLIC_RELAY_URL/v1/register" || true)"
+            edge_err="$(jq -r '.error // ""' /tmp/edge-register.body 2>/dev/null || true)"
+            if [[ "$edge_reg" == "$BREG" && "$edge_err" == "$BERR" ]] && grep -qi '^cf-ray:' /tmp/edge-register.headers; then edge_ok=1; break; fi
+            sleep 4
+          done
+          [[ "$edge_ok" == 1 ]] || { echo "FDID_APP_GUARD=FAIL public_edge=${edge_reg}:${edge_err}"; exit 31; }
+
+          direct_missing="$(curl -sS --max-time 12 -o /tmp/direct-missing.body -w '%{http_code}' -X POST -H 'content-type: application/json' --data '{}' "$ORIGIN/v1/register" || true)"
+          direct_missing_err="$(jq -r '.error // ""' /tmp/direct-missing.body 2>/dev/null || true)"
+          [[ "$direct_missing" == '403' && "$direct_missing_err" == 'origin_guard_denied' ]] || { echo "FDID_APP_GUARD=FAIL direct_missing=${direct_missing}:${direct_missing_err}"; exit 32; }
+
+          direct_fake="$(curl -sS --max-time 12 -o /tmp/direct-fake.body -w '%{http_code}' -X POST -H 'content-type: application/json' -H 'x-azure-fdid: attacker-controlled' --data '{}' "$ORIGIN/v1/register" || true)"
+          direct_fake_err="$(jq -r '.error // ""' /tmp/direct-fake.body 2>/dev/null || true)"
+          [[ "$direct_fake" == '403' && "$direct_fake_err" == 'origin_guard_denied' ]] || { echo "FDID_APP_GUARD=FAIL direct_fake=${direct_fake}:${direct_fake_err}"; exit 33; }
+
+          direct_exact="$(curl -sS --max-time 12 -o /tmp/direct-exact.body -w '%{http_code}' -X POST -H 'content-type: application/json' -H "x-azure-fdid: ${FRONT_DOOR_ID}" --data '{}' "$ORIGIN/v1/register" || true)"
+          direct_exact_err="$(jq -r '.error // ""' /tmp/direct-exact.body 2>/dev/null || true)"
+          [[ "$direct_exact" == "$BREG" && "$direct_exact_err" == "$BERR" ]] || { echo "FDID_APP_GUARD=FAIL exact_profile_proof=${direct_exact}:${direct_exact_err}"; exit 34; }
+
+          direct_ws="$(curl -sS --http1.1 --max-time 12 -o /tmp/direct-ws.body -w '%{http_code}' -H 'Connection: Upgrade' -H 'Upgrade: websocket' -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' "$ORIGIN/v1/fast/socket?nodeId=azure-lockdown" || true)"
+          [[ "$direct_ws" == '403' ]] || { echo "FDID_APP_GUARD=FAIL direct_ws=${direct_ws}"; exit 35; }
+
+          EWS="$(curl -sS --http1.1 --max-time 12 -o /tmp/edge-ws.body -w '%{http_code}' -H 'Connection: Upgrade' -H 'Upgrade: websocket' -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' "$PUBLIC_RELAY_URL/v1/fast/socket?nodeId=azure-lockdown" || true)"
+          [[ "$EWS" == "$BWS" ]] || { echo "FDID_APP_GUARD=FAIL public_ws baseline=${BWS} guarded=${EWS}"; exit 36; }
+          echo 'FDID_APP_GUARD=PASS public_edge_baseline=true direct_missing_fdid=403 direct_fake_fdid=403 direct_ws=403 exact_profile_binding=true'
+
+          # Layer 2: expand the current AzureFrontDoor.Backend service tag into ACA-supported IPv4 CIDRs.
+          service_tags="$(az network list-service-tags --location "$APP_LOCATION" -o json)"
+          mapfile -t afd_ipv4 < <(jq -r '.values[]? | select(.name=="AzureFrontDoor.Backend") | .properties.addressPrefixes[]?' <<<"$service_tags" | grep -E '^[0-9]+(\.[0-9]+){3}/[0-9]+$' | sort -u)
+          cidr_count="${#afd_ipv4[@]}"
+          [[ "$cidr_count" -gt 0 && "$cidr_count" -le 300 ]] || { echo "AFD_BACKEND_NETWORK_LOCK=FAIL invalid_cidr_count=${cidr_count}"; exit 40; }
+          for cidr in "${afd_ipv4[@]}"; do mask "$cidr"; done
+          rules="$(printf '%s\n' "${afd_ipv4[@]}" | jq -Rsc 'split("\n") | map(select(length>0)) | to_entries | map({name:("afd-backend-" + ((.key+1)|tostring)),description:"AzureFrontDoor.Backend service tag",ipAddressRange:.value,action:"Allow"})')"
+          next_ingress="$(printf '%s' "$INGRESS_BACKUP_B64" | base64 -d | jq --argjson rules "$rules" '.ipSecurityRestrictions=$rules')"
+          network_patch="$(jq -nc --argjson ingress "$next_ingress" '{properties:{configuration:{ingress:$ingress}}}')"
+          az rest --method patch --url "https://management.azure.com${APP_ID}?api-version=${ACA_API}" --headers 'Content-Type=application/json' --body "$network_patch" >/dev/null
+          NETWORK_SET=1
+
+          network_ok=0; edge_health='000'; direct_health='000'
+          for _ in $(seq 1 100); do
+            edge_health="$(curl -sS --max-time 10 -D /tmp/locked-edge.headers -o /tmp/locked-edge.body -w '%{http_code}' "$PUBLIC_RELAY_URL/health" || true)"
+            direct_health="$(curl -4 -sS --max-time 10 -o /tmp/locked-direct-health.body -w '%{http_code}' "$ORIGIN/health" || true)"
+            if [[ "$edge_health" == '200' && "$direct_health" == '403' ]] && grep -qi '^cf-ray:' /tmp/locked-edge.headers; then network_ok=1; break; fi
+            sleep 4
+          done
+          [[ "$network_ok" == 1 ]] || { echo "AFD_BACKEND_NETWORK_LOCK=FAIL convergence edge_health=${edge_health} direct_health=${direct_health}"; exit 41; }
+
+          locked_reg="$(curl -4 -sS --max-time 12 -o /tmp/locked-reg.body -w '%{http_code}' -X POST -H 'content-type: application/json' --data '{}' "$ORIGIN/v1/register" || true)"
+          locked_fake="$(curl -4 -sS --max-time 12 -o /tmp/locked-fake.body -w '%{http_code}' -X POST -H 'content-type: application/json' -H 'x-azure-fdid: attacker-controlled' --data '{}' "$ORIGIN/v1/register" || true)"
+          locked_exact="$(curl -4 -sS --max-time 12 -o /tmp/locked-exact.body -w '%{http_code}' -X POST -H 'content-type: application/json' -H "x-azure-fdid: ${FRONT_DOOR_ID}" --data '{}' "$ORIGIN/v1/register" || true)"
+          locked_ws="$(curl -4 -sS --http1.1 --max-time 12 -o /tmp/locked-ws.body -w '%{http_code}' -H 'Connection: Upgrade' -H 'Upgrade: websocket' -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' "$ORIGIN/v1/fast/socket?nodeId=azure-lockdown" || true)"
+          [[ "$locked_reg" == '403' && "$locked_fake" == '403' && "$locked_exact" == '403' && "$locked_ws" == '403' ]] || { echo "AFD_BACKEND_NETWORK_LOCK=FAIL direct_codes register=${locked_reg} fake=${locked_fake} exact=${locked_exact} ws=${locked_ws}"; exit 42; }
+
+          final_reg="$(curl -sS --max-time 12 -D /tmp/final-reg.headers -o /tmp/final-reg.body -w '%{http_code}' -X POST -H 'content-type: application/json' --data '{}' "$PUBLIC_RELAY_URL/v1/register" || true)"
+          final_err="$(jq -r '.error // ""' /tmp/final-reg.body 2>/dev/null || true)"
+          [[ "$final_reg" == "$BREG" && "$final_err" == "$BERR" ]] && grep -qi '^cf-ray:' /tmp/final-reg.headers || { echo "AZURE_LOCKDOWN=FAIL final_public_http=${final_reg}:${final_err}"; exit 43; }
+          final_ws="$(curl -sS --http1.1 --max-time 12 -o /tmp/final-ws.body -w '%{http_code}' -H 'Connection: Upgrade' -H 'Upgrade: websocket' -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' "$PUBLIC_RELAY_URL/v1/fast/socket?nodeId=azure-lockdown" || true)"
+          [[ "$final_ws" == "$BWS" ]] || { echo "AZURE_LOCKDOWN=FAIL final_public_ws baseline=${BWS} final=${final_ws}"; exit 44; }
+
+          # Confirm persisted production state without logging sensitive values or CIDRs.
+          persisted="$(az containerapp show -g "$RG" -n "$APP" -o json)"
+          persisted_rules="$(jq '(.properties.configuration.ingress.ipSecurityRestrictions // []) | length' <<<"$persisted")"
+          persisted_guard="$(jq '[.properties.template.containers[0].env[]? | select(.name=="TRUYN_ORIGIN_GUARD" and .value=="1")] | length' <<<"$persisted")"
+          persisted_header="$(jq '[.properties.template.containers[0].env[]? | select(.name=="TRUYN_ORIGIN_GUARD_HEADER" and .value=="x-azure-fdid")] | length' <<<"$persisted")"
+          [[ "$persisted_rules" == "$cidr_count" && "$persisted_guard" == 1 && "$persisted_header" == 1 ]] || { echo "AZURE_LOCKDOWN=FAIL persisted_state rules=${persisted_rules}/${cidr_count} guard=${persisted_guard} header=${persisted_header}"; exit 45; }
+
+          sleep 12
+          settle_edge="$(curl -sS --max-time 10 -D /tmp/settle.headers -o /tmp/settle.body -w '%{http_code}' "$PUBLIC_RELAY_URL/health" || true)"
+          settle_direct="$(curl -4 -sS --max-time 10 -o /tmp/settle-direct.body -w '%{http_code}' "$ORIGIN/health" || true)"
+          [[ "$settle_edge" == '200' && "$settle_direct" == '403' ]] && grep -qi '^cf-ray:' /tmp/settle.headers || { echo "AZURE_LOCKDOWN=FAIL settle edge=${settle_edge} direct=${settle_direct}"; exit 46; }
+
+          SUCCESS=1
+          echo "AFD_BACKEND_NETWORK_LOCK=PASS service_tag_ipv4_ranges=${cidr_count} public_edge=200 direct_health=403"
+          echo 'DIRECT_AZURE_REGISTER=403 network_denied'
+          echo 'DIRECT_AZURE_WEBSOCKET=403 network_denied'
+          echo 'DIRECT_AZURE_FAKE_FDID=403 network_denied'
+          echo 'DIRECT_AZURE_EXACT_FDID_OUTSIDE_AFD=403 network_denied'
+          echo 'PUBLIC_EDGE_HTTP=PASS baseline_equivalent=true cf_ray=true'
+          echo 'PUBLIC_EDGE_WEBSOCKET=PASS baseline_equivalent=true'
+          echo 'INNER_RELAY_DIRECT_DATA_PLANE_REACH=0'
+          echo 'AZURE_ORIGIN_BYPASS_DATA_PLANE_GATE=PASS'
+          echo 'PRODUCTION_ORIGIN_LOCKDOWN=ENABLED afd_backend_network_only=true fdid_profile_bound=true'
