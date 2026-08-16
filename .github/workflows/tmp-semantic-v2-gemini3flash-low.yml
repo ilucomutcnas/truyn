@@ -91,7 +91,7 @@ jobs:
               provider:rerankerProvider,
               name:'gemini-3-flash-low-semantic-reranker-top24',
               providerOptions:{
-                thinkingLevel:'LOW', temperature:0, maxOutputTokens:128,
+                thinkingLevel:'LOW', temperature:0, maxOutputTokens:512,
                 responseMimeType:'application/json',
                 responseSchema:{ type:'OBJECT', properties:{ id:{type:'STRING'} }, required:['id'] }
               },
@@ -121,7 +121,7 @@ jobs:
             semanticRoutingCostUsdPerQuery:round(routingCostUsd / retrievalResults.length, 9),
             methodology:{`);
           once('methodology', "      topK:1,\n      blockIdsInRequesterQueries:false,",
-            "      topK:1,\n      denseCandidateK:24,\n      semanticRerankerModel:'gemini-3-flash-preview',\n      semanticRerankerThinkingLevel:'LOW',\n      queryProjection:false,\n      blockIdsInRequesterQueries:false,");
+            "      topK:1,\n      denseCandidateK:24,\n      semanticRerankerModel:'gemini-3-flash-preview',\n      semanticRerankerThinkingLevel:'LOW',\n      semanticRerankerMaxOutputTokens:512,\n      queryProjection:false,\n      blockIdsInRequesterQueries:false,");
           once('exit', '  const relay = createRelay({ localDevelopmentMode:true, exposeDiagnostics:true, maxNodes:128, maxOffers:256 });',
             `  const semanticGate = { thresholds:gate, checks:{ retrievalOnlyPassed }, passed:retrievalOnlyPassed };
             await writeFile(outputPath, JSON.stringify({ ...reportBase, status:retrievalOnlyPassed ? 'retrieval_only_pass' : 'failed_retrieval', semanticGate, retrievalResults }, null, 2));
@@ -183,7 +183,7 @@ jobs:
           embed_body='{"instances":[{"task_type":"RETRIEVAL_QUERY","content":"gemini3flash low preflight"}],"parameters":{"autoTruncate":true,"outputDimensionality":768}}'
           curl -fsS -H "Authorization: Bearer ${GCP_ACCESS_TOKEN}" -H 'Content-Type: application/json' -d "$embed_body" "${VERTEX_API_ENDPOINT}${embed_path}" | jq -e '.predictions[0].embeddings.values | length > 0' >/dev/null
           model_path="/v1/projects/${GCP_PROJECT_ID}/locations/global/publishers/google/models/${GEMINI3_FLASH_MODEL}:generateContent"
-          body='{"contents":[{"role":"user","parts":[{"text":"Return JSON only: {\"id\":\"candidate-a\"}."}]}],"generationConfig":{"temperature":0,"thinkingConfig":{"thinkingLevel":"LOW"},"responseMimeType":"application/json","responseSchema":{"type":"OBJECT","properties":{"id":{"type":"STRING"}},"required":["id"]},"maxOutputTokens":128}}'
+          body='{"contents":[{"role":"user","parts":[{"text":"Return JSON only: {\"id\":\"candidate-a\"}."}]}],"generationConfig":{"temperature":0,"thinkingConfig":{"thinkingLevel":"LOW"},"responseMimeType":"application/json","responseSchema":{"type":"OBJECT","properties":{"id":{"type":"STRING"}},"required":["id"]},"maxOutputTokens":512}}'
           curl -fsS -H "Authorization: Bearer ${GCP_ACCESS_TOKEN}" -H 'Content-Type: application/json' -d "$body" "${VERTEX_API_ENDPOINT}${model_path}" | jq -e '.candidates | length > 0' >/dev/null
 
       - name: Run 360-case Gemini 3 Flash LOW retrieval
