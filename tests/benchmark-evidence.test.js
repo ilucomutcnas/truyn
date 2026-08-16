@@ -5,6 +5,10 @@ import path from 'node:path';
 
 const ROOT = path.resolve(new URL('..', import.meta.url).pathname);
 
+// Published benchmark evidence is append-only. Keep every measured report in
+// this explicit regression ledger so a later security/cleanup change cannot
+// silently delete it or replace it with a summary stub. Sensitive values should
+// be redacted in-place with an explanatory note; the evidence file remains.
 const evidenceLedger = [
   {
     path: 'docs/benchmarks/CROSS_CLOUD_AB_2026-08-15.md',
@@ -30,6 +34,31 @@ const evidenceLedger = [
     path: 'docs/benchmarks/SEMANTIC_RETRIEVAL_MULTI_ACTOR_2026-08-15.md',
     minBytes: 5000,
     markers: ['# TRUYN Semantic Retrieval Gate — 7-Actor Production Evidence', '## Evidence', '## Per-actor stability', '## Scaling findings discovered by the run']
+  },
+  {
+    path: 'docs/benchmarks/SEMANTIC_RETRIEVAL_V2_CONFIDENCE_GATE_2026-08-16.md',
+    minBytes: 10000,
+    markers: ['# TRUYN Semantic Retrieval Gate v2', '## Immutable workload', '359/360', '90.188%']
+  },
+  {
+    path: 'docs/benchmarks/SEMANTIC_INDEX_LIFECYCLE_2026-08-16.md',
+    minBytes: 7000,
+    markers: ['# TRUYN Production Semantic Index Lifecycle', 'Status: **PASS**', '## Tested commit']
+  },
+  {
+    path: 'docs/benchmarks/SEMANTIC_SCALE_GATE_V3_2026-08-16.md',
+    minBytes: 9000,
+    markers: ['# TRUYN Semantic Retrieval Scale Gate v3', 'Status: **PASS**', '## Evidence identity']
+  },
+  {
+    path: 'docs/benchmarks/SEMANTIC_CONCURRENT_LOAD_2026-08-16.md',
+    minBytes: 8000,
+    markers: ['# TRUYN Semantic Concurrent Load / Multi-Agent Deduplication', '280', 'duplicate paid', '256/350']
+  },
+  {
+    path: 'docs/benchmarks/DISTRIBUTED_SEMANTIC_RETRIEVAL_2026-08-16.md',
+    minBytes: 10000,
+    markers: ['# TRUYN Distributed Semantic Retrieval Primitive v1', 'Status: **MEASURED PASS**', '## Evidence', '90.025%']
   },
   {
     path: 'docs/benchmarks/MULTIMODAL_PROVIDER_PARITY.md',
