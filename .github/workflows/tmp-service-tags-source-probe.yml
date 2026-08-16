@@ -1,0 +1,73 @@
+name: Temporary Service Tags Source Probe
+
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/tmp-service-tags-source-probe.yml']
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      AZURE_CLIENT_ID_VALUE: ${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID_VALUE: ${{ vars.AZURE_TENANT_ID || secrets.AZURE_TENANT_ID }}
+      AZURE_SUBSCRIPTION_ID_VALUE: ${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}
+    steps:
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID_VALUE }}
+          tenant-id: ${{ env.AZURE_TENANT_ID_VALUE }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID_VALUE }}
+
+      - name: Resolve current AzureFrontDoor.Backend ranges without mutation
+        shell: bash
+        run: |
+          set -euo pipefail
+          state="$(az provider show --namespace Microsoft.Network --query registrationState -o tsv 2>/dev/null || true)"
+          [[ -n "$state" ]] || state=unknown
+          echo "MICROSOFT_NETWORK_PROVIDER_STATE=${state}"
+
+          source=''
+          : > /tmp/service-tags.json
+          for location in eastus2 westcentralus eastus; do
+            url="https://management.azure.com/subscriptions/${AZURE_SUBSCRIPTION_ID_VALUE}/providers/Microsoft.Network/locations/${location}/serviceTags?api-version=2025-05-01"
+            set +e
+            az rest --method get --url "$url" -o json >/tmp/service-tags.try 2>/tmp/service-tags.err
+            rc=$?
+            set -e
+            if [[ "$rc" == 0 ]] && jq -e '.values | type=="array"' /tmp/service-tags.try >/dev/null 2>&1; then
+              cp /tmp/service-tags.try /tmp/service-tags.json
+              source="azure_rest_${location}"
+              break
+            fi
+          done
+
+          if [[ -z "$source" ]]; then
+            echo 'SERVICE_TAG_DISCOVERY_API=UNAVAILABLE falling_back_to_official_weekly_json=true'
+            page="$(curl -fsSL 'https://www.microsoft.com/en-us/download/confirmation.aspx?id=56519' || curl -fsSL 'https://www.microsoft.com/en-us/download/details.aspx?id=56519')"
+            url="$(printf '%s' "$page" | grep -Eo 'https://download\.microsoft\.com/download/[^"&<> ]+/ServiceTags_Public_[0-9]{8}\.json' | sort -u | tail -n1 || true)"
+            if [[ -z "$url" ]]; then
+              url="$(printf '%s' "$page" | grep -Eo 'https:\\?/\\?/download\.microsoft\.com\\?/download\\?/[^"&<> ]+ServiceTags_Public_[0-9]{8}\.json' | head -n1 | sed 's#\\/#/#g' || true)"
+            fi
+            [[ "$url" =~ ^https://download\.microsoft\.com/download/.*/ServiceTags_Public_[0-9]{8}\.json$ ]] || { echo 'SERVICE_TAG_SOURCE=FAIL official_download_url_not_found'; exit 20; }
+            filename="${url##*/}"
+            echo "::add-mask::$url"
+            curl -fsSL "$url" -o /tmp/service-tags.json
+            jq -e '.values | type=="array"' /tmp/service-tags.json >/dev/null || { echo 'SERVICE_TAG_SOURCE=FAIL invalid_official_json'; exit 21; }
+            source="microsoft_weekly_${filename}"
+          else
+            echo 'SERVICE_TAG_DISCOVERY_API=PASS'
+          fi
+
+          mapfile -t ipv4 < <(jq -r '.values[]? | select(.name=="AzureFrontDoor.Backend") | .properties.addressPrefixes[]?' /tmp/service-tags.json | grep -E '^[0-9]+(\.[0-9]+){3}/[0-9]+$' | sort -u)
+          count="${#ipv4[@]}"
+          [[ "$count" -gt 0 && "$count" -le 300 ]] || { echo "SERVICE_TAG_SOURCE=FAIL afd_ipv4_count=${count}"; exit 22; }
+          for cidr in "${ipv4[@]}"; do echo "::add-mask::$cidr"; done
+          change="$(jq -r '.changeNumber // (.values[]? | select(.name=="AzureFrontDoor.Backend") | .properties.changeNumber) // "unknown"' /tmp/service-tags.json | head -n1)"
+          echo "SERVICE_TAG_SOURCE=PASS source=${source} afd_ipv4_count=${count} change_number=${change}"
+          echo 'SERVICE_TAG_PROBE=PASS read_only=true'
