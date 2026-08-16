@@ -96,6 +96,9 @@ export function createProviderSemanticReranker({
     'You are a multilingual semantic retrieval reranker.',
     'The user query and candidate passages may be in different languages.',
     'Rank by complete semantic meaning and operational applicability, not surface word overlap or language match.',
+    'Decompose the query into independent semantic constraints such as subject or domain, requested action or operation, state or condition, scope, and time.',
+    'A candidate must satisfy every material constraint; reject a candidate that matches the subject and state but conflicts with the requested action or operation, or vice versa.',
+    'When near-duplicate candidates differ in exactly one operational dimension, the mismatching dimension is decisive even if every other dimension matches.',
     'Distinctions such as before/after, below/above, internal/public, primary/recovery, provisional/approved, normal/emergency are decisive.',
     'Candidate ids are short request-local labels such as c0 or c7. Return only labels copied exactly from supplied candidate objects; never invent or expand them.'
   ].join(' ');
