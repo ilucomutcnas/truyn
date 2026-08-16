@@ -61,6 +61,11 @@ const evidenceLedger = [
     markers: ['# TRUYN Distributed Semantic Retrieval Primitive v1', 'Status: **MEASURED PASS**', '## Evidence', '90.025%']
   },
   {
+    path: 'docs/benchmarks/CLAIM_TRUSTABILITY_V1_2026-08-16.md',
+    minBytes: 10000,
+    markers: ['# TRUYN Claim-Centric Trustability v1', 'Status: **PASS', '## Primary measured result', 'correlatedEchoFalseVerified']
+  },
+  {
     path: 'docs/benchmarks/MULTIMODAL_PROVIDER_PARITY.md',
     minBytes: 3000,
     markers: ['# TRUYN Multimodal Provider Parity Benchmark', 'Status: **planned methodology', '## Principle']
