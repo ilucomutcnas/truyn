@@ -102,7 +102,130 @@ The single remaining miss is case 241: a Turkish cross-language query where both
 | **Total semantic routing** | — | — | — | — | **$1.353741250** |
 | **Per query** | — | — | — | — | **$0.003760392** |
 
-This configuration passes the fixed corpus-wide accuracy/integrity gates and brings semantic routing below the previously established economic routing budget. End-to-end token/cost savings are verified separately by the seven-actor live A/B proof and are not inferred from this retrieval-only section.
+This configuration passes the fixed corpus-wide accuracy/integrity gates and brings semantic routing below the previously established economic routing budget. It did not yet protect against stochastic false agreement of both cheap judges on the same near-duplicate, which was discovered by the first successful-to-artifact seven-actor live rerun below.
+
+## Production stability + tiered-verifier retrieval proof — FINAL PASS
+
+GitHub Actions run: **`31953911121`**
+
+Artifact:
+- ID: **`9265484817`**
+- name: `truyn-semantic-v2-stability-rerun-31953911121`
+- SHA-256: **`a6b7e7ea79693c5df5c5d7d0783482852660f1bb993f810fd070a55c8a78b64b`**
+- immutable benchmark source SHA: `6f2ddf743e83ad1704a831a7058a93ad668c6a69`
+
+Final generic production policy:
+1. dense `gemini-embedding-001` retrieval produces top 64;
+2. Gemini 3.1 Flash-Lite MINIMAL and Gemini 3 Flash MINIMAL independently judge dense top 24 using request-local aliases only;
+3. agreement is accepted when the agreed passage is within dense rank <=15;
+4. dense-rank-2 agreement receives one stability recheck: Lite runs again with candidate order reversed; the original passage must remain the same;
+5. instability/disagreement/low confidence fails closed to the strong verifier;
+6. the verifier sees the smallest safe dense prefix: top 16 when all observed cheap selections fit there, otherwise top 64;
+7. no rule uses case ID, language, category, expected answer, expected block ID or benchmark-specific allowlist.
+
+### Final 360-case metrics
+
+| Metric | Fixed gate | Final result |
+|---|---:|---:|
+| Overall retrieval | >=99% | **359/360 = 99.722%** |
+| English | >=99% | **180/180 = 100%** |
+| Turkish | >=99% | **119/120 = 99.167%** |
+| Chinese | >=99% | **60/60 = 100%** |
+| Synonym-only | >=99% | **119/120 = 99.167%** |
+| Cross-language | >=99% | **120/120 = 100%** |
+| Adversarial near-duplicate | >=99% | **120/120 = 100%** |
+| Dense top-64 recall | >=99% | **360/360 = 100%** |
+| Provenance | 100% | **100%** |
+| No requester block-ID leakage | 100% | **100%** |
+| Minimal context | 100% | **100%** |
+| Semantic routing cost budget | <=$0.00395/query | **$0.003610524/query** |
+
+Routing behavior:
+- cheap accepted: **323/360**;
+- strong-verifier fallbacks: **37/360**;
+- verifier top-16: **24**;
+- verifier top-64: **13**;
+- stability rechecks: **38**;
+- instability detected and failed closed: **2**;
+- provider-facing semantic judge calls with leaked TRUYN routing IDs: **0**.
+
+Routing usage/cost:
+- Lite: 398 requests, 998,728 input tokens, cost **$0.253381000**;
+- Flash: 360 requests, 904,431 input tokens, cost **$0.458641500**;
+- Pro verifier: 37 requests, 124,773 input tokens plus reasoning/output, cost **$0.587766000**;
+- total: **$1.299788500 / 360 = $0.003610524/query**.
+
+The one retained miss is case 159, Turkish synonym-only: expected dense rank 10, selected dense rank 11. It remains explicit in the raw artifact; every fixed overall/subgroup gate still passes.
+
+## Seven-actor end-to-end v2 proof — FINAL PASS
+
+GitHub Actions run: **`31954310373`**
+
+Artifact:
+- ID: **`9265641338`**
+- name: `truyn-semantic-retrieval-v2-economic-live-31954310373`
+- SHA-256: **`1ade84d25a27c9a1f553fdb97daa5533572f08cab1b7e6d2b3dfe2b3d5e3c3cd`**
+- tested workflow commit: `d24e78691f0d8566a497d9611ef09ef3175e494e`
+
+Actors: GPT, Gemini, Grok, DeepSeek, Llama, Mistral and Kimi, each running as a distinct TRUYN actor identity. Six representative multilingual/adversarial requests produced **42/42 successful TRUYN actor stages**.
+
+### End-to-end fixed gates
+
+| Metric | Fixed gate | Final result |
+|---|---:|---:|
+| 360-case retrieval | >=99% | **99.722%** |
+| Dense candidate recall | >=99% | **100%** |
+| Per-language retrieval | >=99% | **PASS** |
+| Per-category retrieval | >=99% | **PASS** |
+| Live TRUYN answer accuracy | >=99% | **100% (6/6 chains, 42/42 actor outputs)** |
+| Live provenance | 100% | **100%** |
+| No requester block-ID leakage | 100% | **100%** |
+| Minimal-context selection | 100% | **100%** |
+| Actor-stage success | >=99% | **100% (42/42)** |
+| Input-token reduction | >=90% | **98.102%** |
+| Comparable GPT+Gemini cost reduction | >=90% | **90.188%** |
+| Provider request-body reduction | — | **97.828%** |
+
+### Honest end-to-end accounting
+
+Semantic-routing overhead is included in the TRUYN arm rather than excluded:
+
+- direct full-context input: **2,422,770 tokens**;
+- TRUYN actor input: **8,956 tokens**;
+- semantic routing input: **37,023 tokens**;
+- total TRUYN input: **45,979 tokens**;
+- **input-token reduction: 98.102%**.
+
+Comparable GPT+Gemini reference-rate cost:
+- direct full-context arm: **$0.248747000**;
+- TRUYN actor inference: **$0.001220880**;
+- semantic routing: **$0.023185500**;
+- total TRUYN arm: **$0.024406380**;
+- **cost reduction: 90.188%**.
+
+Provider request bodies:
+- direct: **9,792,454 bytes**;
+- TRUYN actor bodies: **41,986 bytes**;
+- semantic routing bodies: **170,663 bytes**;
+- total TRUYN: **212,649 bytes**;
+- **reduction: 97.828%**.
+
+Mean wall-clock per six-case comparison:
+- direct full-context: **35.979 s**;
+- TRUYN: **17.833 s**.
+
+The live semantic router executed 15 judge calls: 8 Lite, 6 Flash, 1 Pro verifier. It performed two rank-2 stability rechecks; one exposed instability and was correctly failed closed to a **top-16 Pro verifier**. This is the live protection that eliminated the stochastic near-duplicate failure observed in run `31952273683`.
+
+For transparency, the direct full-context control was itself frequently confused by the 600-block corpus: only 17/42 individual actor outputs matched the expected answer and only 1/6 final direct chains ended on the expected code, whereas the TRUYN minimal-context arm was 42/42 and 6/6. This quality difference is reported rather than hidden; the published token/cost reductions still compare the measured direct full-context resource use against the fully loaded TRUYN arm including routing overhead.
+
+All cleanup steps passed: the isolated GCP proxy/repository were deleted and temporary Azure Foundry benchmark capacity was restored after the run. The privileged workflow was removed from `main` immediately after launch.
+
+## Implementation corrections discovered by the full benchmark
+
+1. **Cold semantic-index build:** run `31951589009` failed with `result_wait_timeout` because `gemini-embedding-001` single-input embedding requests were built sequentially inside the first live request. `adapters/providers/vertex-embedding.js` now executes independent batches with bounded concurrency while preserving result order and retry semantics; regression coverage was added.
+2. **Stochastic cheap-judge false agreement:** run `31952273683` reached a full artifact but only 5/6 TRUYN live chains were correct because both cheap judges simultaneously selected the same adversarial near-duplicate at dense rank 2. The production stability recheck was added specifically as a generic order-invariance test, not a case-specific rule.
+3. **Verifier economics:** full top-64 Pro fallback was accurate but too expensive near the 90% economic boundary. Tiered `[16,64]` fallback reduced verifier context while remaining fail-closed.
+4. **Benchmark instrumentation:** provenance is identity/integrity of the selected immutable record and CID chain; semantic correctness is measured separately as retrieval/answer accuracy. No-block-ID checks target requester-provided routing IDs/`ids[]`, not legitimate answer codes generated by prior actors.
 
 ## Prior full adaptive run — retained correction history
 
@@ -119,6 +242,8 @@ That cheaper configuration produced 357/360 = 99.167% overall at $0.002526202/qu
 - Flash-Lite hard diagnostic run `31946536169`: 2/3; useful cheap independent judge, not sufficient alone.
 - GPT-mini judge run `31947035480`: inference was not executed because the benchmark deployer correctly lacked Azure data-plane `responses/write`; IAM was not broadened.
 - dense uncertainty run `31947155118`: used only deterministic dense-rank/margin signals to choose a generic confidence boundary; no case IDs/categories/languages are used by production routing.
+- live run `31951589009`: infrastructure failure before a valid end-to-end result because cold sequential semantic indexing exceeded the result wait; cleanup succeeded.
+- live run `31952273683`: valid full artifact, 5/6 TRUYN live chains because of stochastic rank-2 false agreement; artifact `9265103930`, SHA-256 `af55669e53282a4578bf180fb3e30d9a1c4e322e9593f6764926f286f2e9c3f6`. Token and cost gates passed, answer/provenance/minimal-context gate did not. This result is retained as the reason for the stability hardening.
 
 ## Evidence policy
 
