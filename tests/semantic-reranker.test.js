@@ -34,6 +34,30 @@ test('provider semantic reranker hides real candidate ids behind compact local a
   assert.equal(reranker.stats().providerCandidateAliases, true);
 });
 
+test('provider semantic reranker requires every material semantic constraint and makes a near-duplicate mismatch decisive', async () => {
+  const provider = {
+    async execute(request) {
+      assert.match(request.input.task, /independent semantic constraints/i);
+      assert.match(request.input.task, /must satisfy every material constraint/i);
+      assert.match(request.input.task, /conflicts with the requested action or operation/i);
+      assert.match(request.input.task, /near-duplicate candidates differ in exactly one operational dimension/i);
+      return {
+        output:'{"id":"c1"}',
+        metadata:{ usage:{ promptTokenCount:18, candidatesTokenCount:3, totalTokenCount:21 } }
+      };
+    }
+  };
+  const reranker = createProviderSemanticReranker({ provider });
+  const result = await reranker.rerank(
+    'For ship route control under saturation, which rule applies when operators must confirm permission validity?',
+    [
+      { id:'wrong-operation', text:'Ship route control under saturation. Operators must direct an urgent delivery.' },
+      { id:'correct-operation', text:'Ship route control under saturation. Operators must confirm permission validity.' }
+    ]
+  );
+  assert.equal(result.id, 'correct-operation');
+});
+
 test('provider semantic reranker repairs placeholder or invented aliases and counts both calls', async () => {
   let calls = 0;
   const provider = {
