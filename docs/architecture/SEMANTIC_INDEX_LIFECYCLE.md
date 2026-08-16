@@ -90,9 +90,19 @@ In production mode, `retrieve(rootCid, question)` requires a `ready` root. It lo
 
 Query embeddings remain request-specific and are allowed. Query/projection/result caches are process-local accelerators; durable correctness does not depend on them.
 
+An identical `root CID + query + retrieval configuration` reuses the process-local retrieval-result cache. The repeated request therefore does not repeat query embedding or reranking while that cache entry remains valid.
+
 ### 4. New root / incremental update
 
 A context delta creates a new immutable root CID.
+
+The production factory exposes:
+
+```text
+publishDelta(parentRootCid, ops, metadata)
+```
+
+It requires the parent root to be `ready`, applies the canonical context delta, publishes the resulting child root, and prepares only block vectors that are not already present in the immutable vector store.
 
 For example:
 
@@ -101,9 +111,9 @@ root A = [block 1, block 2]
 root B = [block 1, block 2, block 3]
 ```
 
-After root A is ready, preparing root B reuses the vectors for block 1 and block 2 and embeds only block 3.
+After root A is ready, publishing root B reuses the vectors for block 1 and block 2 and embeds only block 3.
 
-The old root remains valid and independently addressable.
+The old root remains valid and independently addressable. The child root stores the parent root CID as lineage metadata; it does not mutate or invalidate the parent.
 
 This is TRUYN's incremental semantic-index rule: **root evolution does not imply re-embedding unchanged immutable content**.
 
@@ -159,7 +169,7 @@ This distinction prevents a single cold user request from unexpectedly generatin
 - atomic temporary-file + rename writes;
 - separate root and immutable-vector records.
 
-`createProductionSemanticIndex()` composes this durable store with the Semantic Retrieval Gate v2 router in strict prepared-index mode.
+`createProductionSemanticIndex()` composes this durable store with the Semantic Retrieval Gate v2 router in strict prepared-index mode and exposes `publishContext`, `publishDelta`, `prepareContext`, `warmContext`, `invalidateContext`, `loadManifest` and `retrieve`.
 
 ### Multi-replica storage
 
@@ -219,9 +229,12 @@ The regression suite verifies that:
 1. production retrieval of an unprepared root fails closed and causes **zero document embeddings**;
 2. explicit preparation makes the root ready;
 3. a process-style restart reloads a durable root and vectors with **zero document re-embedding**;
-4. adding one new immutable block to an existing root embeds **only that one new block**;
-5. concurrent preparation of one root embeds each missing immutable block once within the process;
-6. root invalidation preserves reusable immutable block vectors;
-7. retrieval after preparation does not increase the document-embedding count.
+4. `publishDelta()` creates a new root and adding one new immutable block embeds **only that one new block**;
+5. the parent root remains independently retrievable after publishing its child root;
+6. identical repeated retrieval reuses the result cache and causes **zero additional query embeddings**;
+7. concurrent preparation of one root embeds each missing immutable block once within the process;
+8. root invalidation preserves reusable immutable block vectors;
+9. an interrupted `preparing` root cannot trigger request-time indexing and can be resumed explicitly;
+10. retrieval after preparation does not increase the document-embedding count.
 
 These are lifecycle/infrastructure guarantees. Semantic accuracy, provenance, no-block-ID leakage and end-to-end token/cost economics remain measured separately by the Semantic Retrieval Gate v2 benchmark evidence.
