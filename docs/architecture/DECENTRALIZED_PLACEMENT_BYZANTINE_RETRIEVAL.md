@@ -1,6 +1,8 @@
 # TRUYN Decentralized Placement Discovery and Byzantine Read Quorum
 
-Status: **implemented network primitive; deterministic/local-network proof pending benchmark evidence**
+Status: **implemented and measured deterministic/network-functional PASS**
+
+Measured evidence: [`TRUST_NETWORK_V2_2026-08-16.md`](../benchmarks/TRUST_NETWORK_V2_2026-08-16.md) — 1,000/1,000 resistance cases plus functional proof across independent HTTP directory nodes and a 2-of-3 immutable-CID read quorum with one malicious highest-trust replica.
 
 This document extends the distributed semantic retrieval architecture beyond relay-owned placement discovery.
 
