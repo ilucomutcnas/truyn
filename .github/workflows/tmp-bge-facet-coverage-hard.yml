@@ -1,0 +1,132 @@
+name: Ephemeral BGE Facet Coverage Hard Pairs
+
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/tmp-bge-facet-coverage-hard.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  diagnostic:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      BGE_MODEL: BAAI/bge-reranker-v2-m3
+      BGE_REVISION: c0abf900d43de6a2652b9acd221bb1b45ab65d6e
+      SEMANTIC_V2_SOURCE_SHA: 6f2ddf743e83ad1704a831a7058a93ad668c6a69
+      GH_TOKEN: ${{ github.token }}
+      TOKENIZERS_PARALLELISM: 'false'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Load immutable corpus and extract three eligible hard pairs
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSL -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/contents/benchmarks/semantic-retrieval-v2.js?ref=${SEMANTIC_V2_SOURCE_SHA}" \
+            | jq -r '.content' | tr -d '\n' | base64 -d > /tmp/semantic-retrieval-v2.js
+          node <<'NODE'
+          const fs=require('node:fs'),vm=require('node:vm');
+          const src=fs.readFileSync('/tmp/semantic-retrieval-v2.js','utf8'),a=src.indexOf('const domains = ['),b=src.indexOf('const fullContext =');
+          if(a<0||b<0)throw new Error('corpus markers');
+          const ctx={};vm.createContext(ctx);vm.runInContext('const corpusSize=600,retrievalCaseCount=360;'+src.slice(a,b)+';globalThis.__data={records,retrievalCases};',ctx);
+          const {records,retrievalCases}=ctx.__data;
+          const facets={
+            5:{domain:'ship route control',action:'operators must confirm permission validity',condition:'utilization has crossed the protective limit and saturation controls are engaged'},
+            241:{domain:'greenhouse gas record management',action:'recover the malfunctioning system',condition:'the main facility is offline at the remote continuity center'},
+            269:{domain:'store stock control',action:'preserve audit proof',condition:'outward-facing launch after users can already see it'}
+          };
+          const specs=[{caseIndex:5,wrongId:'semantic-record-305'},{caseIndex:241,wrongId:'semantic-record-437'},{caseIndex:269,wrongId:'semantic-record-553'}];
+          const cases=specs.map(spec=>{const item=retrievalCases.find(x=>x.caseIndex===spec.caseIndex),target=records.find(r=>r.id===item.id),wrong=records.find(r=>r.id===spec.wrongId);return {caseIndex:item.caseIndex,queryLanguage:item.queryLanguage,category:item.category,facets:facets[item.caseIndex],targetText:target.text,wrongText:wrong.text};});
+          fs.writeFileSync('/tmp/bge-facet-hard-input.json',JSON.stringify({sourceSha:process.env.SEMANTIC_V2_SOURCE_SHA,cases},null,2));
+          NODE
+
+      - name: Install CPU-only pinned runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check --no-cache-dir 'torch==2.8.0' --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install --disable-pip-version-check --no-cache-dir 'transformers==4.55.2' 'safetensors==0.6.2'
+
+      - name: Score aligned constraints independently and aggregate locally
+        shell: bash
+        run: |
+          cat > /tmp/bge_facet_hard.py <<'PY'
+          import json, os, time, math, platform
+          import torch
+          from transformers import AutoTokenizer, AutoModelForSequenceClassification
+
+          with open('/tmp/bge-facet-hard-input.json','r',encoding='utf-8') as f:
+              data=json.load(f)
+          model_name=os.environ['BGE_MODEL']; revision=os.environ['BGE_REVISION']
+          load_start=time.perf_counter()
+          tok=AutoTokenizer.from_pretrained(model_name,revision=revision)
+          model=AutoModelForSequenceClassification.from_pretrained(model_name,revision=revision,use_safetensors=True)
+          model.eval(); load_ms=(time.perf_counter()-load_start)*1000
+
+          def sigmoid(x): return 1.0/(1.0+math.exp(-max(-30.0,min(30.0,x))))
+          rows=[]; scoring_ms=0.0
+          with torch.no_grad():
+              for item in data['cases']:
+                  facet_rows={}
+                  for facet_name in ('domain','action','condition'):
+                      query=item['facets'][facet_name]
+                      pairs=[[query,item['wrongText']],[query,item['targetText']]]
+                      started=time.perf_counter()
+                      batch=tok(pairs,padding=True,truncation=True,max_length=512,return_tensors='pt')
+                      logits=model(**batch,return_dict=True).logits.view(-1).float().cpu().tolist()
+                      elapsed=(time.perf_counter()-started)*1000; scoring_ms+=elapsed
+                      wrong_raw,target_raw=float(logits[0]),float(logits[1])
+                      wrong_prob,target_prob=sigmoid(wrong_raw),sigmoid(target_raw)
+                      facet_rows[facet_name]={
+                          'targetRaw':target_raw,'wrongRaw':wrong_raw,'marginRaw':target_raw-wrong_raw,
+                          'targetSigmoid':target_prob,'wrongSigmoid':wrong_prob,'targetWins':target_raw>wrong_raw,
+                          'latencyMs':round(elapsed,3)
+                      }
+                  target_probs=[facet_rows[k]['targetSigmoid'] for k in ('domain','action','condition')]
+                  wrong_probs=[facet_rows[k]['wrongSigmoid'] for k in ('domain','action','condition')]
+                  # Generic conjunction-oriented aggregations. No case-specific weights.
+                  aggregations={
+                      'minCoverage':(min(target_probs),min(wrong_probs)),
+                      'geometricMean':(math.prod(target_probs)**(1/3),math.prod(wrong_probs)**(1/3)),
+                      'arithmeticMean':(sum(target_probs)/3,sum(wrong_probs)/3),
+                      'facetWins':(sum(facet_rows[k]['targetWins'] for k in facet_rows),sum(not facet_rows[k]['targetWins'] for k in facet_rows))
+                  }
+                  decisions={name:{'targetScore':vals[0],'wrongScore':vals[1],'selectedExpected':vals[0]>vals[1]} for name,vals in aggregations.items()}
+                  rows.append({'caseIndex':item['caseIndex'],'queryLanguage':item['queryLanguage'],'category':item['category'],'facets':item['facets'],'facetScores':facet_rows,'aggregations':decisions})
+
+          strategies=('minCoverage','geometricMean','arithmeticMean','facetWins')
+          summary={s:{'correct':sum(r['aggregations'][s]['selectedExpected'] for r in rows),'total':len(rows)} for s in strategies}
+          for s in strategies: summary[s]['passed']=summary[s]['correct']==summary[s]['total']
+          report={
+              'benchmark':'TRUYN Semantic v2 BGE aligned-facet coverage hard-pair diagnostic',
+              'generatedAt':__import__('datetime').datetime.now(__import__('datetime').timezone.utc).isoformat(),
+              'sourceSha':data['sourceSha'],'model':model_name,'modelRevision':revision,'license':'Apache-2.0',
+              'runtime':{'python':platform.python_version(),'torch':torch.__version__,'device':'cpu','modelLoadMs':round(load_ms,3),'totalScoringMs':round(scoring_ms,3)},
+              'modelVisibleInput':'one semantic facet + one passage text at a time; no TRUYN block ids or answer codes are supplied separately',
+              'aggregationPolicy':'case-independent conjunction-oriented aggregation over domain/action/condition scores',
+              'cases':rows,'summary':summary,'anyStrategyPassed':any(v['passed'] for v in summary.values())
+          }
+          with open('bge-facet-coverage-hard.json','w',encoding='utf-8') as f: json.dump(report,f,ensure_ascii=False,indent=2)
+          print(json.dumps({'runtime':report['runtime'],'summary':summary,'anyStrategyPassed':report['anyStrategyPassed']},ensure_ascii=False,indent=2))
+          if not report['anyStrategyPassed']: raise SystemExit(2)
+          PY
+          python /tmp/bge_facet_hard.py
+
+      - name: Upload diagnostic evidence
+        if: ${{ always() && hashFiles('bge-facet-coverage-hard.json') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: truyn-bge-facet-coverage-hard-${{ github.run_id }}
+          path: bge-facet-coverage-hard.json
+          if-no-files-found: error
+          retention-days: 30
