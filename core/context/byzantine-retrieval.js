@@ -68,10 +68,12 @@ export function selectTrustedReplicaSet(holders, {
       if (selected.length >= replicaReads) break;
     }
   }
-  for (const holder of ranked) {
-    if (selected.includes(holder)) continue;
-    selected.push(holder);
-    if (selected.length >= replicaReads) break;
+  if (selected.length < replicaReads) {
+    for (const holder of ranked) {
+      if (selected.includes(holder)) continue;
+      selected.push(holder);
+      if (selected.length >= replicaReads) break;
+    }
   }
 
   if (selected.length < quorum) {
