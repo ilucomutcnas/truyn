@@ -66,3 +66,13 @@ export async function connectQuicPeers(node, peers) {
   }
   return connected;
 }
+
+export async function refreshKademliaRoutingTable(node, { timeoutMs = 10_000 } = {}) {
+  if (!node?.services?.dht?.refreshRoutingTable) throw new Error('truyn_kademlia_refresh_unavailable');
+  await node.services.dht.refreshRoutingTable({ signal: AbortSignal.timeout(timeoutMs) });
+  return {
+    mode: node.services.dht.getMode?.() || null,
+    routingTableSize: node.services.dht.routingTable?.size ?? null,
+    connectedPeers: node.getPeers().length
+  };
+}
