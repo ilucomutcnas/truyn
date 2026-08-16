@@ -8,7 +8,7 @@ import { createAttestation, createClaim } from '../core/claims/index.js';
 import { createDelegationCertificate, createSourceOwnerCertificate } from '../core/trust/source-owner-pki.js';
 import { DurableTransparencyLog } from '../core/trust/transparency-log.js';
 import { createTrustReceiptV2, verifyTrustReceiptV2 } from '../core/trust/receipt-v2.js';
-import { createQuicKademliaNode, connectQuicPeers, firstQuicAddress, TRUYN_KAD_PROTOCOL } from '../network/transport/quic-kademlia.js';
+import { createQuicKademliaNode, connectQuicPeers, firstQuicAddress, refreshKademliaRoutingTable, TRUYN_KAD_PROTOCOL } from '../network/transport/quic-kademlia.js';
 import { DecentralizedVerifierDiscovery, discoverVerifiers } from '../network/discovery/verifier-dht.js';
 import { ReplicatedTransparencyService } from '../network/replication/transparency-replication.js';
 
@@ -40,7 +40,7 @@ function makeAttestation(identity, claim, id) {
   });
 }
 
-test('real QUIC/Kademlia testnet survives churn with relay-free verifier discovery and replicated revocation state', { timeout: 90_000 }, async (t) => {
+test('real QUIC/Kademlia testnet survives churn with relay-free verifier discovery and replicated revocation state', { timeout: 120_000 }, async (t) => {
   const directories = [];
   const liveNodes = new Set();
   t.after(async () => {
@@ -154,6 +154,25 @@ test('real QUIC/Kademlia testnet survives churn with relay-free verifier discove
 
   await stopNode(bootstrap);
   stage('churn:bootstrap-down');
+
+  const survivorPeerIds = new Set(replicaPeer.getPeers().map((peerId) => peerId.toString()));
+  assert.ok(survivorPeerIds.has(requesterPeer.peerId.toString()), 'replica/requester QUIC connection must survive bootstrap loss');
+  assert.ok(survivorPeerIds.has(verifierPeer.peerId.toString()), 'replica/verifier QUIC connection must survive bootstrap loss');
+
+  const refreshed = await eventually(async () => {
+    const states = await Promise.all([
+      refreshKademliaRoutingTable(replicaPeer, { timeoutMs: 8_000 }),
+      refreshKademliaRoutingTable(requesterPeer, { timeoutMs: 8_000 }),
+      refreshKademliaRoutingTable(verifierPeer, { timeoutMs: 8_000 })
+    ]);
+    return states.every((state) => state.routingTableSize > 0) ? states : null;
+  }, { label: 'surviving_kad_refresh', timeoutMs: 30_000 });
+  stage('churn:kad-refreshed', {
+    replicaRoutingSize: refreshed[0].routingTableSize,
+    requesterRoutingSize: refreshed[1].routingTableSize,
+    verifierRoutingSize: refreshed[2].routingTableSize
+  });
+
   await eventually(() => replicaReplication.advertise().then(() => true), { label: 'surviving_replica_reprovide', timeoutMs: 20_000 });
   stage('churn:surviving-replica-readvertised');
   const observerDirectory = await temp('observer-log');
@@ -178,6 +197,7 @@ test('real QUIC/Kademlia testnet survives churn with relay-free verifier discove
     }
     return null;
   }, { label: 'verifier_rejoin_kad_visibility' });
+  await eventually(() => refreshKademliaRoutingTable(verifierPeer2, { timeoutMs: 8_000 }).then((state) => state.routingTableSize > 0 ? state : null), { label: 'verifier_rejoin_kad_refresh', timeoutMs: 20_000 });
   const verifierDiscovery2 = new DecentralizedVerifierDiscovery({ node: verifierPeer2, identity: verifier, domain: 'testnet.news', ownerCertificate: root, delegation, routingTimeoutMs: 5_000 });
   await eventually(() => verifierDiscovery2.publish().then(() => true), { label: 'verifier_republish_after_churn', timeoutMs: 20_000 });
   const foundAfterChurn = await eventually(async () => {
@@ -196,6 +216,7 @@ test('real QUIC/Kademlia testnet survives churn with relay-free verifier discove
     }
     return null;
   }, { label: 'primary_restart_kad_visibility' });
+  await eventually(() => refreshKademliaRoutingTable(primaryPeer2, { timeoutMs: 8_000 }).then((state) => state.routingTableSize > 0 ? state : null), { label: 'primary_restart_kad_refresh', timeoutMs: 20_000 });
   const reopenedPrimaryLog = await new DurableTransparencyLog({ directory: primaryDirectory, sourceOwnerId: root.body.sourceOwnerId }).open();
   assert.deepEqual(reopenedPrimaryLog.head(), replicaLog.head(), 'restart must retain the pre-churn durable head');
   const primaryReplication2 = new ReplicatedTransparencyService({ node: primaryPeer2, log: reopenedPrimaryLog, routingTimeoutMs: 5_000 });
