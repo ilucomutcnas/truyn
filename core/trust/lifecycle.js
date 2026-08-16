@@ -12,7 +12,7 @@ export const VERIFY_PROTOCOL = 'truyn-verify-v1';
 export const DISPUTE_PROTOCOL = 'truyn-dispute-v1';
 
 const digest = (value) => `sha256:${createHash('sha256').update(canonicalize(value)).digest('hex')}`;
-const sourceCommitment = (sourceId) => digest({ sourceId: String(sourceId).normalize('NFKC').trim() });
+export const sourceLineageCommitment = (sourceId) => digest({ sourceId: String(sourceId).normalize('NFKC').trim() });
 
 function requireIdentity(identity, label) {
   if (!identity?.nodeId || !identity?.publicKeyPem || !identity?.privateKeyPem) throw new Error(`${label} identity is required`);
@@ -26,19 +26,20 @@ function iso(value, label) {
   return date.toISOString();
 }
 
-function normalizeList(value, max = 64) {
+function list(value, max = 64) {
   if (!Array.isArray(value)) return [];
   return [...new Set(value.filter((item) => typeof item === 'string').map((item) => item.trim()).filter(Boolean))].sort().slice(0, max);
 }
 
-function signedObject({ prefix, body, identity, atField, atValue }) {
+function signObject({ prefix, protocol, identity, body, atField, atValue }) {
   const signer = requireIdentity(identity, prefix);
-  const objectId = `truyn:${prefix}:${digest({ body, signerNodeId: signer.nodeId }).slice('sha256:'.length)}`;
-  const signed = { objectId, body, signerNodeId: signer.nodeId, [atField]: iso(atValue, atField) };
+  const normalized = { protocol, version: TRUST_LIFECYCLE_VERSION, ...body };
+  const objectId = `truyn:${prefix}:${digest({ body: normalized, signerNodeId: signer.nodeId }).slice('sha256:'.length)}`;
+  const signed = { objectId, body: normalized, signerNodeId: signer.nodeId, [atField]: iso(atValue, atField) };
   return { ...signed, publicKey: signer.publicKeyPem, signature: signValue(signed, signer.privateKeyPem) };
 }
 
-function verifySignedObject(object, { prefix, protocol, atField }) {
+function verifyObject(object, { prefix, protocol, atField }) {
   try {
     if (!object?.objectId || !object?.body || !object?.signerNodeId || !object?.[atField] || !object?.publicKey || !object?.signature) {
       return { ok: false, reason: `${prefix}_missing_required_field` };
@@ -72,12 +73,12 @@ export function createLineageCertificate({
   const body = {
     protocol: LINEAGE_CERT_PROTOCOL,
     version: TRUST_LIFECYCLE_VERSION,
-    sourceCommitment: sourceCommitment(sourceId),
+    sourceCommitment: sourceLineageCommitment(sourceId),
     ownerNodeId: owner.nodeId,
-    originCommitments: normalizeList(lineage.originIds).map(sourceCommitment),
-    publisherCommitments: normalizeList(lineage.publisherIds).map(sourceCommitment),
-    generatorCommitments: normalizeList(lineage.generatorIds).map(sourceCommitment),
-    parentCertificateIds: normalizeList(parentCertificateIds)
+    originCommitments: list(lineage.originIds).map(sourceLineageCommitment),
+    publisherCommitments: list(lineage.publisherIds).map(sourceLineageCommitment),
+    generatorCommitments: list(lineage.generatorIds).map(sourceLineageCommitment),
+    parentCertificateIds: list(parentCertificateIds)
   };
   const certificateId = `truyn:lineage:${digest(body).slice('sha256:'.length)}`;
   const signed = { certificateId, body, issuedAt: issued, expiresAt: expires };
@@ -109,37 +110,38 @@ export function verifyLineageCertificate(certificate, { now = Date.now(), allowE
 export function createTrustRevocation({ identity, targetType, targetId, reasonDigest = null, revokedAt = new Date().toISOString() } = {}) {
   if (!['claim', 'attestation', 'lineage-certificate', 'verification'].includes(targetType)) throw new Error('trust revocation targetType is invalid');
   if (typeof targetId !== 'string' || !targetId.trim()) throw new Error('trust revocation targetId is required');
-  const body = {
+  return signObject({
+    prefix: 'trust-revoke',
     protocol: TRUST_REVOCATION_PROTOCOL,
-    version: TRUST_LIFECYCLE_VERSION,
-    targetType,
-    targetId: targetId.trim(),
-    reasonDigest: typeof reasonDigest === 'string' && reasonDigest.trim() ? reasonDigest.trim() : null
-  };
-  return signedObject({ prefix: 'trust-revoke', body, identity, atField: 'revokedAt', atValue: revokedAt });
+    identity,
+    body: { targetType, targetId: targetId.trim(), reasonDigest: typeof reasonDigest === 'string' && reasonDigest.trim() ? reasonDigest.trim() : null },
+    atField: 'revokedAt',
+    atValue: revokedAt
+  });
 }
 
 export function verifyTrustRevocation(revocation) {
-  return verifySignedObject(revocation, { prefix: 'trust-revoke', protocol: TRUST_REVOCATION_PROTOCOL, atField: 'revokedAt' });
+  return verifyObject(revocation, { prefix: 'trust-revoke', protocol: TRUST_REVOCATION_PROTOCOL, atField: 'revokedAt' });
 }
 
 export function createChallenge({ identity, claim, methods = ['independent-review'], reason = 'active-verification', deadlineAt = null, createdAt = new Date().toISOString() } = {}) {
-  const claimVerification = verifyClaim(claim);
-  if (!claimVerification.ok) throw new Error(`cannot challenge invalid claim: ${claimVerification.reason}`);
-  const body = {
-    protocol: CHALLENGE_PROTOCOL,
-    version: TRUST_LIFECYCLE_VERSION,
-    claimId: claim.claimId,
-    domain: claim.body.domain,
-    methods: normalizeList(methods, 16),
-    reason: String(reason || 'active-verification').normalize('NFKC').trim().slice(0, 512),
-    deadlineAt: deadlineAt == null ? null : iso(deadlineAt, 'deadlineAt')
-  };
-  return signedObject({ prefix: 'challenge', body, identity, atField: 'createdAt', atValue: createdAt });
+  const verification = verifyClaim(claim);
+  if (!verification.ok) throw new Error(`cannot challenge invalid claim: ${verification.reason}`);
+  return signObject({
+    prefix: 'challenge', protocol: CHALLENGE_PROTOCOL, identity,
+    body: {
+      claimId: claim.claimId,
+      domain: claim.body.domain,
+      methods: list(methods, 16),
+      reason: String(reason || 'active-verification').normalize('NFKC').trim().slice(0, 512),
+      deadlineAt: deadlineAt == null ? null : iso(deadlineAt, 'deadlineAt')
+    },
+    atField: 'createdAt', atValue: createdAt
+  });
 }
 
 export function verifyChallenge(challenge, expectedClaimId = null) {
-  const verification = verifySignedObject(challenge, { prefix: 'challenge', protocol: CHALLENGE_PROTOCOL, atField: 'createdAt' });
+  const verification = verifyObject(challenge, { prefix: 'challenge', protocol: CHALLENGE_PROTOCOL, atField: 'createdAt' });
   if (!verification.ok) return verification;
   if (expectedClaimId && challenge.body.claimId !== expectedClaimId) return { ok: false, reason: 'challenge_claim_mismatch' };
   return verification;
@@ -150,83 +152,75 @@ export function createVerification({ identity, challenge, attestation, createdAt
   if (!challengeVerification.ok) throw new Error(`cannot verify invalid challenge: ${challengeVerification.reason}`);
   const attestationVerification = verifyAttestation(attestation, challenge.body.claimId);
   if (!attestationVerification.ok) throw new Error(`cannot use invalid attestation: ${attestationVerification.reason}`);
-  const body = {
-    protocol: VERIFY_PROTOCOL,
-    version: TRUST_LIFECYCLE_VERSION,
-    challengeId: challenge.objectId,
-    claimId: challenge.body.claimId,
-    attestationId: attestation.attestationId,
-    verdict: attestation.body.verdict
-  };
-  return signedObject({ prefix: 'verify', body, identity, atField: 'createdAt', atValue: createdAt });
+  if (identity?.nodeId !== attestation.attesterNodeId) throw new Error('verification signer must be the attestation signer');
+  return signObject({
+    prefix: 'verify', protocol: VERIFY_PROTOCOL, identity,
+    body: { challengeId: challenge.objectId, claimId: challenge.body.claimId, attestationId: attestation.attestationId, verdict: attestation.body.verdict },
+    atField: 'createdAt', atValue: createdAt
+  });
 }
 
 export function verifyVerification(verification, expectedChallengeId = null) {
-  const result = verifySignedObject(verification, { prefix: 'verify', protocol: VERIFY_PROTOCOL, atField: 'createdAt' });
+  const result = verifyObject(verification, { prefix: 'verify', protocol: VERIFY_PROTOCOL, atField: 'createdAt' });
   if (!result.ok) return result;
   if (expectedChallengeId && verification.body.challengeId !== expectedChallengeId) return { ok: false, reason: 'verification_challenge_mismatch' };
   return result;
 }
 
 export function createDispute({ identity, claim, targetAttestationIds = [], groundsDigest, evidenceCommitments = [], createdAt = new Date().toISOString() } = {}) {
-  const claimVerification = verifyClaim(claim);
-  if (!claimVerification.ok) throw new Error(`cannot dispute invalid claim: ${claimVerification.reason}`);
+  const verification = verifyClaim(claim);
+  if (!verification.ok) throw new Error(`cannot dispute invalid claim: ${verification.reason}`);
   if (typeof groundsDigest !== 'string' || !groundsDigest.trim()) throw new Error('dispute groundsDigest is required');
-  const body = {
-    protocol: DISPUTE_PROTOCOL,
-    version: TRUST_LIFECYCLE_VERSION,
-    claimId: claim.claimId,
-    targetAttestationIds: normalizeList(targetAttestationIds),
-    groundsDigest: groundsDigest.trim(),
-    evidenceCommitments: normalizeList(evidenceCommitments)
-  };
-  return signedObject({ prefix: 'dispute', body, identity, atField: 'createdAt', atValue: createdAt });
+  return signObject({
+    prefix: 'dispute', protocol: DISPUTE_PROTOCOL, identity,
+    body: { claimId: claim.claimId, targetAttestationIds: list(targetAttestationIds), groundsDigest: groundsDigest.trim(), evidenceCommitments: list(evidenceCommitments) },
+    atField: 'createdAt', atValue: createdAt
+  });
 }
 
 export function verifyDispute(dispute, expectedClaimId = null) {
-  const verification = verifySignedObject(dispute, { prefix: 'dispute', protocol: DISPUTE_PROTOCOL, atField: 'createdAt' });
+  const verification = verifyObject(dispute, { prefix: 'dispute', protocol: DISPUTE_PROTOCOL, atField: 'createdAt' });
   if (!verification.ok) return verification;
   if (expectedClaimId && dispute.body.claimId !== expectedClaimId) return { ok: false, reason: 'dispute_claim_mismatch' };
   return verification;
 }
 
-function isRevoked(targetType, targetId, revocations) {
-  for (const revocation of revocations || []) {
-    const verification = verifyTrustRevocation(revocation);
-    if (!verification.ok) continue;
-    if (revocation.body.targetType === targetType && revocation.body.targetId === targetId) return true;
-  }
-  return false;
+function validRevocations(revocations) {
+  return (revocations || []).filter((item) => verifyTrustRevocation(item).ok);
 }
 
-function certifiedLineage(attestation, certificates, revocations, now) {
-  const certBySourceCommitment = new Map();
+function revokedByIssuer(targetType, targetId, issuerNodeId, revocations) {
+  return validRevocations(revocations).some((item) => item.body.targetType === targetType && item.body.targetId === targetId && item.signerNodeId === issuerNodeId);
+}
+
+function certificateIndex(certificates, revocations, now) {
+  const map = new Map();
   for (const certificate of certificates || []) {
-    const verification = verifyLineageCertificate(certificate, { now });
-    if (!verification.ok || isRevoked('lineage-certificate', certificate.certificateId, revocations)) continue;
-    certBySourceCommitment.set(certificate.body.sourceCommitment, certificate);
+    if (!verifyLineageCertificate(certificate, { now }).ok) continue;
+    if (revokedByIssuer('lineage-certificate', certificate.certificateId, certificate.body.ownerNodeId, revocations)) continue;
+    map.set(certificate.body.sourceCommitment, certificate);
   }
-  const originIds = [];
-  const publisherIds = [];
-  const generatorIds = [];
-  let certifiedEvidence = 0;
-  for (const evidence of attestation.body.evidence || []) {
-    const certificate = certBySourceCommitment.get(sourceCommitment(evidence.sourceId));
-    if (!certificate) continue;
-    certifiedEvidence += 1;
-    originIds.push(...certificate.body.originCommitments);
-    publisherIds.push(...certificate.body.publisherCommitments);
-    generatorIds.push(...certificate.body.generatorCommitments);
-  }
-  return {
-    certifiedEvidence,
-    lineage: {
-      originIds: normalizeList(originIds),
-      publisherIds: normalizeList(publisherIds),
-      generatorIds: normalizeList(generatorIds),
-      parentAttestationIds: normalizeList(attestation.body.lineage?.parentAttestationIds)
-    }
+  return map;
+}
+
+function declaredLineageIsCertified(attestation, certs) {
+  const sourceCerts = (attestation.body.evidence || []).map((evidence) => certs.get(sourceLineageCommitment(evidence.sourceId))).filter(Boolean);
+  if (sourceCerts.length === 0) return false;
+  const certified = {
+    originIds: new Set(sourceCerts.flatMap((cert) => cert.body.originCommitments)),
+    publisherIds: new Set(sourceCerts.flatMap((cert) => cert.body.publisherCommitments)),
+    generatorIds: new Set(sourceCerts.flatMap((cert) => cert.body.generatorCommitments))
   };
+  const declared = attestation.body.lineage || {};
+  const dimensions = ['originIds', 'publisherIds', 'generatorIds'];
+  let declaredCount = 0;
+  for (const dimension of dimensions) {
+    for (const id of list(declared[dimension])) {
+      declaredCount += 1;
+      if (!certified[dimension].has(sourceLineageCommitment(id))) return false;
+    }
+  }
+  return declaredCount > 0;
 }
 
 export function assessActiveTrust({
@@ -235,76 +229,64 @@ export function assessActiveTrust({
   lineageCertificates = [],
   revocations = [],
   disputes = [],
+  authorizedDisputerNodeIds = [],
   retrievalProvenance = null,
   policy = {},
   now = Date.now(),
-  maxAttestationAgeMs = 24 * 60 * 60_000
+  maxAttestationAgeMs = 24 * 60 * 60_000,
+  maxFutureSkewMs = 5 * 60_000
 } = {}) {
   const claimVerification = verifyClaim(claim);
   if (!claimVerification.ok) throw new Error(`invalid claim: ${claimVerification.reason}`);
-  if (isRevoked('claim', claim.claimId, revocations)) {
+  if (revokedByIssuer('claim', claim.claimId, claim.issuedBy, revocations)) {
     return {
-      protocol: 'truyn-active-trust-assessment-v1',
-      version: 1,
-      claimId: claim.claimId,
-      lifecycleStatus: 'revoked',
-      activeAttestations: 0,
-      staleAttestations: 0,
-      revokedAttestations: attestations.length,
+      protocol: 'truyn-active-trust-assessment-v1', version: 1, claimId: claim.claimId,
+      lifecycleStatus: 'revoked', activeAttestations: 0, staleAttestations: 0,
+      revokedAttestations: attestations.length, uncertifiedAttestations: 0, activeDisputes: 0,
       truthAssessment: { status: 'revoked', reason: 'claim_revoked', calibratedTruthProbability: null }
     };
   }
 
+  const certs = certificateIndex(lineageCertificates, revocations, now);
   const active = [];
   let staleAttestations = 0;
   let revokedAttestations = 0;
   let uncertifiedAttestations = 0;
   for (const attestation of attestations) {
-    const verification = verifyAttestation(attestation, claim.claimId);
-    if (!verification.ok) continue;
-    if (isRevoked('attestation', attestation.attestationId, revocations)) {
+    if (!verifyAttestation(attestation, claim.claimId).ok) continue;
+    if (revokedByIssuer('attestation', attestation.attestationId, attestation.attesterNodeId, revocations)) {
       revokedAttestations += 1;
       continue;
     }
     const created = new Date(attestation.createdAt).getTime();
-    if (!Number.isFinite(created) || now - created > maxAttestationAgeMs) {
+    if (!Number.isFinite(created) || now - created > maxAttestationAgeMs || created - now > maxFutureSkewMs) {
       staleAttestations += 1;
       continue;
     }
-    const certified = certifiedLineage(attestation, lineageCertificates, revocations, now);
-    if (certified.certifiedEvidence === 0) {
+    if (!declaredLineageIsCertified(attestation, certs)) {
       uncertifiedAttestations += 1;
       continue;
     }
-    active.push({
-      ...structuredClone(attestation),
-      body: { ...structuredClone(attestation.body), lineage: certified.lineage }
-    });
+    active.push(attestation);
   }
 
   const base = assessClaimEvidence({ claim, attestations: active, retrievalProvenance, policy });
-  const validDisputes = (disputes || []).filter((dispute) => verifyDispute(dispute, claim.claimId).ok);
+  const authorized = new Set(authorizedDisputerNodeIds || []);
+  const validDisputes = (disputes || []).filter((dispute) => verifyDispute(dispute, claim.claimId).ok && authorized.has(dispute.signerNodeId));
   let lifecycleStatus = base.truthAssessment.status;
   let truthAssessment = base.truthAssessment;
   if (validDisputes.length > 0 && lifecycleStatus !== 'retrieval_unverified') {
     lifecycleStatus = 'disputed';
-    truthAssessment = { ...truthAssessment, status: 'disputed', reason: 'active_dispute_present' };
-  } else if (active.length === 0 && (staleAttestations > 0 || uncertifiedAttestations > 0)) {
+    truthAssessment = { ...truthAssessment, status: 'disputed', reason: 'active_authorized_dispute_present' };
+  } else if (active.length === 0 && (staleAttestations > 0 || uncertifiedAttestations > 0 || revokedAttestations > 0)) {
     lifecycleStatus = 'stale_or_uncertified';
     truthAssessment = { ...truthAssessment, status: 'stale_or_uncertified', reason: 'no_fresh_certified_attestations' };
   }
   return {
-    protocol: 'truyn-active-trust-assessment-v1',
-    version: 1,
-    claimId: claim.claimId,
-    lifecycleStatus,
-    retrievalIntegrity: base.retrievalIntegrity,
-    truthAssessment,
-    activeAttestations: active.length,
-    staleAttestations,
-    revokedAttestations,
-    uncertifiedAttestations,
-    activeDisputes: validDisputes.length,
+    protocol: 'truyn-active-trust-assessment-v1', version: 1, claimId: claim.claimId,
+    lifecycleStatus, retrievalIntegrity: base.retrievalIntegrity, truthAssessment,
+    activeAttestations: active.length, staleAttestations, revokedAttestations,
+    uncertifiedAttestations, activeDisputes: validDisputes.length,
     provenanceGraphDigest: base.provenanceGraphDigest
   };
 }
