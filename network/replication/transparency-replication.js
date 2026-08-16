@@ -11,11 +11,12 @@ export async function transparencyReplicationCid(sourceOwnerId) {
 }
 
 export class ReplicatedTransparencyService {
-  constructor({ node, log, maxMessageBytes = 4_194_304 } = {}) {
+  constructor({ node, log, maxMessageBytes = 4_194_304, routingTimeoutMs = 5_000 } = {}) {
     if (!node || !log) throw new Error('replicated transparency node and log are required');
     this.node = node;
     this.log = log;
     this.maxMessageBytes = maxMessageBytes;
+    this.routingTimeoutMs = routingTimeoutMs;
     this.started = false;
   }
 
@@ -55,7 +56,7 @@ export class ReplicatedTransparencyService {
   }
 
   async advertise() {
-    await this.node.contentRouting.provide(await transparencyReplicationCid(this.log.sourceOwnerId));
+    await this.node.contentRouting.provide(await transparencyReplicationCid(this.log.sourceOwnerId), { signal: AbortSignal.timeout(this.routingTimeoutMs) });
   }
 
   async #headFor(peerId, timeoutMs) {

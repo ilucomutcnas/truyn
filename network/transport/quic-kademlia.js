@@ -33,9 +33,9 @@ export async function createQuicKademliaNode({
     const target = typeof address === 'string' ? multiaddr(address) : address;
     await node.dial(target, { signal: AbortSignal.timeout(5_000) });
   }
-  if (bootstrap.length > 0 && typeof node.services?.dht?.bootstrap === 'function') {
-    try { await node.services.dht.bootstrap(); } catch {}
-  }
+  // Direct QUIC bootstrap peers are only routing-table seeds. Do not await the DHT's
+  // full bootstrap walk here: it is background maintenance and can outlive a test
+  // operation. Every user-visible DHT operation below is independently time-bounded.
   return node;
 }
 

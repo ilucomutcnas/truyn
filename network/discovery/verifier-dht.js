@@ -88,7 +88,7 @@ export function verifySignedVerifierRecord(record, { expectedDomain = null, expe
 }
 
 export class DecentralizedVerifierDiscovery {
-  constructor({ node, identity, domain, ownerCertificate, delegation, methods = ['independent-review'], recordTtlMs = 10 * 60_000 } = {}) {
+  constructor({ node, identity, domain, ownerCertificate, delegation, methods = ['independent-review'], recordTtlMs = 10 * 60_000, routingTimeoutMs = 5_000 } = {}) {
     if (!node) throw new Error('libp2p node is required');
     this.node = node;
     this.identity = identity;
@@ -97,6 +97,7 @@ export class DecentralizedVerifierDiscovery {
     this.delegation = delegation;
     this.methods = methods;
     this.recordTtlMs = recordTtlMs;
+    this.routingTimeoutMs = routingTimeoutMs;
     this.record = null;
     this.started = false;
   }
@@ -123,7 +124,7 @@ export class DecentralizedVerifierDiscovery {
       delegation: this.delegation,
       expiresAt: new Date(Date.now() + this.recordTtlMs).toISOString()
     });
-    await this.node.contentRouting.provide(await verifierDiscoveryCid(this.domain));
+    await this.node.contentRouting.provide(await verifierDiscoveryCid(this.domain), { signal: AbortSignal.timeout(this.routingTimeoutMs) });
     return structuredClone(this.record);
   }
 }
