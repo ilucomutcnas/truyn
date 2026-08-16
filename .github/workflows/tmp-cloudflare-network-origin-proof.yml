@@ -1,0 +1,221 @@
+name: Temporary Cloudflare Network Origin Proof
+
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/tmp-cloudflare-network-origin-proof.yml']
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  prove:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      AZURE_CLIENT_ID_VALUE: ${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID_VALUE: ${{ vars.AZURE_TENANT_ID || secrets.AZURE_TENANT_ID }}
+      AZURE_SUBSCRIPTION_ID_VALUE: ${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}
+      GCP_PROJECT_ID_VALUE: ${{ vars.GCP_PROJECT_ID || secrets.GCP_PROJECT_ID }}
+      GCP_WIF_PROVIDER_VALUE: ${{ vars.GCP_WIF_PROVIDER || secrets.GCP_WIF_PROVIDER }}
+      GCP_DEPLOYER_SA_VALUE: ${{ vars.GCP_DEPLOYER_SERVICE_ACCOUNT_EMAIL || secrets.GCP_DEPLOYER_SERVICE_ACCOUNT_EMAIL }}
+      GCP_REGION_VALUE: ${{ vars.GCP_REGION || 'us-east4' }}
+      CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKENS }}
+      CF_ZONE_ID: ${{ secrets.CLOUDFLARE_ZONE_ID || vars.CLOUDFLARE_ZONE_ID }}
+      PUBLIC_RELAY_URL: https://relay.truyn.org
+    steps:
+      - name: Authenticate Azure with main-only OIDC
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID_VALUE }}
+          tenant-id: ${{ env.AZURE_TENANT_ID_VALUE }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID_VALUE }}
+
+      - name: Discover Azure relay and stable environment IPv4
+        shell: bash
+        run: |
+          set -euo pipefail
+          found=0
+          while IFS=$'\t' read -r name rg fqdn; do
+            [[ -n "$fqdn" ]] || continue
+            app="$(az containerapp show -g "$rg" -n "$name" -o json)"
+            role="$(jq -r '[.properties.template.containers[0].env[]? | select(.name=="TRUYN_ROLE") | .value][0] // empty' <<<"$app")"
+            if [[ "$role" != 'relay' && "$name" != *relay* ]]; then continue; fi
+            env_id="$(jq -r '.properties.environmentId // empty' <<<"$app")"
+            app_id="$(jq -r '.id // empty' <<<"$app")"
+            [[ -n "$env_id" && -n "$app_id" ]] || { echo 'AZURE_DISCOVERY=FAIL ids_missing'; exit 20; }
+            static_ip="$(az resource show --ids "$env_id" --api-version 2025-01-01 --query properties.staticIp -o tsv)"
+            [[ "$static_ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || { echo 'AZURE_DISCOVERY=FAIL static_ipv4_missing'; exit 21; }
+            found=1
+            for secret_value in "$name" "$rg" "$fqdn" "$env_id" "$app_id" "$static_ip"; do echo "::add-mask::$secret_value"; done
+            printf 'AZURE_RELAY_APP=%s\nAZURE_RELAY_RG=%s\nAZURE_RELAY_FQDN=%s\nAZURE_RELAY_ID=%s\nAZURE_ENV_IPV4=%s\n' "$name" "$rg" "$fqdn" "$app_id" "$static_ip" >> "$GITHUB_ENV"
+            break
+          done < <(az containerapp list --query "[?properties.configuration.ingress.external==\`true\`].[name,resourceGroup,properties.configuration.ingress.fqdn]" -o tsv)
+          [[ "$found" == 1 ]] || { echo 'AZURE_DISCOVERY=FAIL relay_not_found'; exit 22; }
+          echo 'AZURE_DISCOVERY=PASS static_ipv4=true'
+
+      - name: Pin Cloudflare proxied relay DNS to Azure IPv4 with rollback backup
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ -n "${CF_TOKEN:-}" && -n "${CF_ZONE_ID:-}" ]] || { echo 'CF_DNS_PIN=FAIL missing_binding'; exit 30; }
+          base="https://api.cloudflare.com/client/v4/zones/${CF_ZONE_ID}/dns_records"
+          current="$(curl -sS -G -H "Authorization: Bearer ${CF_TOKEN}" --data-urlencode 'name=relay.truyn.org' "$base")"
+          jq -e '.success == true and (.result | length) == 1' <<<"$current" >/dev/null || { echo 'CF_DNS_PIN=FAIL lookup'; exit 31; }
+          id="$(jq -r '.result[0].id' <<<"$current")"
+          echo "::add-mask::$id"
+          printf '%s' "$current" | jq '.result[0] | {type,name,content,ttl,proxied}' > /tmp/cf-dns-backup.json
+          backup_compact="$(base64 -w0 /tmp/cf-dns-backup.json)"
+          echo "CF_DNS_BACKUP_B64=$backup_compact" >> "$GITHUB_ENV"
+          body="$(jq -nc --arg ip "$AZURE_ENV_IPV4" '{type:"A",name:"relay.truyn.org",content:$ip,ttl:1,proxied:true}')"
+          changed="$(curl -sS -X PUT -H "Authorization: Bearer ${CF_TOKEN}" -H 'Content-Type: application/json' --data "$body" "${base}/${id}")"
+          if ! jq -e '.success == true and .result.type == "A" and .result.proxied == true' <<<"$changed" >/dev/null; then
+            echo 'CF_DNS_PIN=FAIL update'
+            exit 32
+          fi
+          ok=0
+          for attempt in $(seq 1 30); do
+            code="$(curl -sS --max-time 10 -D /tmp/edge-pre.headers -o /tmp/edge-pre.body -w '%{http_code}' "${PUBLIC_RELAY_URL}/health" || true)"
+            if [[ "$code" == '200' ]] && grep -qi '^cf-ray:' /tmp/edge-pre.headers; then ok=1; break; fi
+            sleep 2
+          done
+          if [[ "$ok" != 1 ]]; then
+            backup="$(base64 -d <<<"$CF_DNS_BACKUP_B64")"
+            curl -sS -X PUT -H "Authorization: Bearer ${CF_TOKEN}" -H 'Content-Type: application/json' --data "$backup" "${base}/${id}" >/dev/null || true
+            echo 'CF_DNS_PIN=FAIL public_path_failed_rolled_back'
+            exit 33
+          fi
+          echo 'CF_DNS_PIN=PASS proxied_A_ipv4=true cloudflare_path=true'
+
+      - name: Apply Cloudflare-only Azure ingress and prove both paths
+        id: azure_proof
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          current_app="$(az containerapp show -g "$AZURE_RELAY_RG" -n "$AZURE_RELAY_APP" -o json)"
+          ingress="$(jq '.properties.configuration.ingress' <<<"$current_app")"
+          existing="$(jq '((.ipSecurityRestrictions // []) | length)' <<<"$ingress")"
+          [[ "$existing" == 0 ]] || { echo "AZURE_NETWORK_PROOF=FAIL unexpected_existing_rules=${existing}"; exit 40; }
+          printf '%s' "$ingress" | base64 -w0 > /tmp/ingress-backup.b64
+          echo "AZURE_INGRESS_BACKUP_B64=$(cat /tmp/ingress-backup.b64)" >> "$GITHUB_ENV"
+
+          ranges="$(curl -fsS https://www.cloudflare.com/ips-v4 | sed '/^[[:space:]]*$/d')"
+          count="$(wc -l <<<"$ranges" | tr -d ' ')"
+          [[ "$count" -ge 10 ]] || { echo 'AZURE_NETWORK_PROOF=FAIL cloudflare_ranges_missing'; exit 41; }
+          rules="$(awk '{printf "%s%s", sep, $0; sep="\n"}' <<<"$ranges" | jq -Rsc 'split("\n") | map(select(length>0)) | to_entries | map({name:("cloudflare-" + ((.key+1)|tostring)),description:"Cloudflare network proof",ipAddressRange:.value,action:"Allow"})')"
+          next_ingress="$(jq --argjson rules "$rules" '.ipSecurityRestrictions=$rules' <<<"$ingress")"
+          patch="$(jq -nc --argjson ingress "$next_ingress" '{properties:{configuration:{ingress:$ingress}}}')"
+          az rest --method patch --url "https://management.azure.com${AZURE_RELAY_ID}?api-version=2025-01-01" --headers 'Content-Type=application/json' --body "$patch" >/dev/null
+
+          origin="https://${AZURE_RELAY_FQDN}"
+          echo "::add-mask::$origin"
+          pass=0
+          edge_code='000'; direct_health='000'; direct_register='000'; direct_ws='000'; spoofed='000'
+          for attempt in $(seq 1 60); do
+            edge_code="$(curl -sS --max-time 8 -D /tmp/edge.headers -o /tmp/edge.body -w '%{http_code}' "${PUBLIC_RELAY_URL}/health" || true)"
+            direct_health="$(curl -4 -sS --max-time 8 -o /tmp/direct-health.body -w '%{http_code}' "${origin}/health" || true)"
+            if [[ "$edge_code" == '200' && "$direct_health" == '403' ]] && grep -qi '^cf-ray:' /tmp/edge.headers; then pass=1; break; fi
+            sleep 3
+          done
+          if [[ "$pass" != 1 ]]; then
+            echo "AZURE_NETWORK_PROOF=FAIL convergence edge=${edge_code} direct=${direct_health}"
+            exit 42
+          fi
+
+          direct_register="$(curl -4 -sS --max-time 10 -o /tmp/direct-register.body -w '%{http_code}' -X POST -H 'content-type: application/json' --data '{}' "${origin}/v1/register" || true)"
+          direct_ws="$(curl -4 -sS --http1.1 --max-time 10 -o /dev/null -w '%{http_code}' -H 'Connection: Upgrade' -H 'Upgrade: websocket' -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dHJ1eW4tb3JpZ2luLXByb29m' "${origin}/v1/fast/socket" || true)"
+          spoofed="$(curl -4 -sS --max-time 10 -o /dev/null -w '%{http_code}' -H 'X-Forwarded-For: 104.16.0.1' -H 'CF-Connecting-IP: 104.16.0.1' "${origin}/health" || true)"
+          [[ "$direct_register" == '403' ]] || { echo "AZURE_NETWORK_PROOF=FAIL register=${direct_register}"; exit 43; }
+          [[ "$direct_ws" == '403' ]] || { echo "AZURE_NETWORK_PROOF=FAIL websocket=${direct_ws}"; exit 44; }
+          [[ "$spoofed" == '403' ]] || { echo "AZURE_NETWORK_PROOF=FAIL spoofed=${spoofed}"; exit 45; }
+
+          edge_register="$(curl -sS --max-time 10 -D /tmp/edge-register.headers -o /tmp/edge-register.body -w '%{http_code}' -X POST -H 'content-type: application/json' --data '{}' "${PUBLIC_RELAY_URL}/v1/register" || true)"
+          grep -qi '^cf-ray:' /tmp/edge-register.headers || { echo 'AZURE_NETWORK_PROOF=FAIL edge_cf_ray_missing'; exit 46; }
+          [[ "$edge_register" != '403' && "$edge_register" != '000' ]] || { echo "AZURE_NETWORK_PROOF=FAIL edge_register=${edge_register}"; exit 47; }
+          jq -e 'type == "object"' /tmp/edge-register.body >/dev/null 2>&1 || { echo 'AZURE_NETWORK_PROOF=FAIL edge_not_relay_json'; exit 48; }
+
+          echo 'AZURE_DIRECT_HEALTH=403 platform_ingress_denied'
+          echo 'AZURE_DIRECT_REGISTER=403 platform_ingress_denied'
+          echo 'AZURE_DIRECT_WEBSOCKET=403 platform_ingress_denied'
+          echo 'AZURE_DIRECT_SPOOFED_CLOUDFLARE_HEADERS=403'
+          echo 'AZURE_CLOUDFLARE_EDGE_HEALTH=200 cf_ray=true'
+          echo 'AZURE_CLOUDFLARE_EDGE_REACHES_INNER_RELAY=true'
+          echo 'AZURE_NETWORK_PROOF=PASS zero_direct_inner_relay_access'
+
+      - name: Authenticate Google Cloud with WIF
+        id: gcp_auth
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID_VALUE }}
+          workload_identity_provider: ${{ env.GCP_WIF_PROVIDER_VALUE }}
+          service_account: ${{ env.GCP_DEPLOYER_SA_VALUE }}
+          create_credentials_file: true
+          export_environment_variables: true
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID_VALUE }}
+
+      - name: Prove GCP direct origin has zero relay execution path
+        id: gcp_proof
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          services="$(gcloud run services list --project="$GCP_PROJECT_ID_VALUE" --region="$GCP_REGION_VALUE" --format=json)"
+          relay_count=0; provider_checked=0
+          mapfile -t names < <(jq -r '.[].metadata.name' <<<"$services")
+          for name in "${names[@]}"; do
+            desc="$(gcloud run services describe "$name" --project="$GCP_PROJECT_ID_VALUE" --region="$GCP_REGION_VALUE" --format=json)"
+            url="$(jq -r '.status.url // empty' <<<"$desc")"
+            [[ -n "$url" ]] || continue
+            echo "::add-mask::$url"
+            role="$(jq -r '[.spec.template.spec.containers[0].env[]? | select(.name=="TRUYN_ROLE") | .value][0] // empty' <<<"$desc")"
+            provider="$(jq -r '[.spec.template.spec.containers[0].env[]? | select(.name=="TRUYN_PROVIDER") | .value][0] // empty' <<<"$desc")"
+            if [[ "$role" == 'relay' ]]; then
+              relay_count=$((relay_count+1))
+              code="$(curl -sS --max-time 10 -o /tmp/gcp-relay.body -w '%{http_code}' -X POST -H 'content-type: application/json' --data '{}' "${url}/v1/register" || true)"
+              [[ ! "$code" =~ ^2 ]] || { echo "GCP_NETWORK_PROOF=FAIL relay_http=${code}"; exit 51; }
+            elif [[ "$role" == 'provider' || -n "$provider" ]]; then
+              provider_checked=1
+              code="$(curl -sS --max-time 10 -o /tmp/gcp-provider.body -w '%{http_code}' -X POST -H 'content-type: application/json' --data '{}' "${url}/v1/register" || true)"
+              [[ ! "$code" =~ ^2 ]] || { echo 'GCP_NETWORK_PROOF=FAIL provider_exposes_relay_registration'; exit 52; }
+            fi
+          done
+          [[ "$relay_count" -gt 0 || "$provider_checked" == 1 ]] || { echo 'GCP_NETWORK_PROOF=FAIL no_truyn_runtime'; exit 53; }
+          echo "GCP_RELAY_ORIGIN_COUNT=${relay_count}"
+          echo 'GCP_DIRECT_RELAY_API=DENIED_OR_ABSENT'
+          echo 'GCP_NETWORK_PROOF=PASS zero_direct_relay_execution_path'
+
+      - name: Roll back Azure/DNS on failed proof
+        if: always() && steps.azure_proof.outcome != 'success'
+        shell: bash
+        run: |
+          set +e
+          if [[ -n "${AZURE_INGRESS_BACKUP_B64:-}" ]]; then
+            ingress="$(base64 -d <<<"$AZURE_INGRESS_BACKUP_B64")"
+            patch="$(jq -nc --argjson ingress "$ingress" '{properties:{configuration:{ingress:$ingress}}}')"
+            az rest --method patch --url "https://management.azure.com${AZURE_RELAY_ID}?api-version=2025-01-01" --headers 'Content-Type=application/json' --body "$patch" >/dev/null
+          fi
+          if [[ -n "${CF_DNS_BACKUP_B64:-}" ]]; then
+            base="https://api.cloudflare.com/client/v4/zones/${CF_ZONE_ID}/dns_records"
+            response="$(curl -sS -G -H "Authorization: Bearer ${CF_TOKEN}" --data-urlencode 'name=relay.truyn.org' "$base")"
+            id="$(jq -r '.result[0].id // empty' <<<"$response")"
+            backup="$(base64 -d <<<"$CF_DNS_BACKUP_B64")"
+            [[ -n "$id" ]] && curl -sS -X PUT -H "Authorization: Bearer ${CF_TOKEN}" -H 'Content-Type: application/json' --data "$backup" "${base}/${id}" >/dev/null
+          fi
+          echo 'FAILED_PROOF_ROLLBACK=ATTEMPTED'
+
+      - name: Final invariant
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ '${{ steps.azure_proof.outcome }}' == 'success' ]] || { echo 'LIVE_NETWORK_ORIGIN_PROOF=FAIL azure'; exit 60; }
+          [[ '${{ steps.gcp_auth.outcome }}' == 'success' ]] || { echo 'LIVE_NETWORK_ORIGIN_PROOF=FAIL gcp_auth'; exit 61; }
+          [[ '${{ steps.gcp_proof.outcome }}' == 'success' ]] || { echo 'LIVE_NETWORK_ORIGIN_PROOF=FAIL gcp'; exit 62; }
+          echo 'LIVE_NETWORK_ORIGIN_PROOF=PASS'
+          echo 'DIRECT_AZURE_ORIGIN_WITHOUT_CLOUDFLARE_NETWORK=ZERO_INNER_RELAY_ACCESS'
+          echo 'DIRECT_GCP_ORIGIN=ZERO_RELAY_EXECUTION_PATH'
