@@ -1,0 +1,24 @@
+{
+  "benchmark": "TRUYN Semantic v2 Cohere-rerank-v4.0-pro capacity-1 order-invariance diagnostic",
+  "generatedAt": "2026-08-16T05:22:55.943Z",
+  "sourceSha": "6f2ddf743e83ad1704a831a7058a93ad668c6a69",
+  "githubActionsRunId": 31928786924,
+  "model": "Cohere-rerank-v4.0-pro",
+  "deployment": "Cohere-rerank-v4.0-pro",
+  "deploymentSku": "GlobalStandard",
+  "deploymentCapacity": 1,
+  "result": "infrastructure_invalid",
+  "semanticInferenceCompleted": false,
+  "httpFailure": {
+    "status": 429,
+    "code": "RateLimitReached",
+    "message": "Requests to Cohere-rerank-v4.0-pro exceeded the deployment rate limit after warm-up and retry/backoff."
+  },
+  "catalogObservation": {
+    "sku": "GlobalStandard",
+    "catalogDefaultCapacity": 500,
+    "catalogMaximumCapacity": 1000000,
+    "usageName": "AIServices.GlobalStandard.Cohere-Rerank-V4-Pro"
+  },
+  "conclusion": "This run is preserved as negative infrastructure evidence but MUST NOT be interpreted as a semantic accuracy result. Capacity=1 was below the Azure catalog default capacity of 500. The deployment was removed in the workflow cleanup."
+}
