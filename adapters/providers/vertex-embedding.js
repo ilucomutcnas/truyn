@@ -25,6 +25,7 @@ export function createVertexEmbeddingClient({
   endpoint = process.env.VERTEX_API_ENDPOINT || 'https://aiplatform.googleapis.com',
   accessTokenProvider = googleMetadataAccessToken,
   batchSize = Number(process.env.VERTEX_EMBEDDING_BATCH_SIZE || 5),
+  batchConcurrency = Number(process.env.VERTEX_EMBEDDING_CONCURRENCY || 8),
   outputDimensionality = process.env.VERTEX_EMBEDDING_DIMENSIONS ? Number(process.env.VERTEX_EMBEDDING_DIMENSIONS) : null,
   maxRetries = Number(process.env.VERTEX_EMBEDDING_RETRIES || 6),
   fetchImpl = fetch
@@ -33,6 +34,7 @@ export function createVertexEmbeddingClient({
   if (!location) throw new Error('Vertex embedding location is required');
   if (!model) throw new Error('Vertex embedding model is required');
   if (!Number.isInteger(batchSize) || batchSize < 1 || batchSize > 5) throw new Error('Vertex embedding batchSize must be 1..5');
+  if (!Number.isInteger(batchConcurrency) || batchConcurrency < 1 || batchConcurrency > 16) throw new Error('Vertex embedding batchConcurrency must be 1..16');
   if (outputDimensionality != null && (!Number.isInteger(outputDimensionality) || outputDimensionality < 1)) {
     throw new Error('Vertex embedding outputDimensionality must be a positive integer');
   }
@@ -93,14 +95,24 @@ export function createVertexEmbeddingClient({
     if (!Array.isArray(texts) || texts.length === 0 || texts.some((text) => typeof text !== 'string' || !text.trim())) {
       throw new Error('Vertex embedding texts must be a non-empty array of strings');
     }
-    const vectors = [];
+    const batches = [];
     for (let offset = 0; offset < texts.length; offset += effectiveBatchSize) {
-      const batch = texts.slice(offset, offset + effectiveBatchSize);
-      const predictions = await predict(batch.map((content) => ({ task_type: taskType, content })));
-      vectors.push(...predictions);
-      metrics.inputs += batch.length;
+      batches.push({ offset, texts:texts.slice(offset, offset + effectiveBatchSize) });
     }
-    return vectors;
+    const batchResults = new Array(batches.length);
+    let next = 0;
+    async function worker() {
+      for (;;) {
+        const index = next++;
+        if (index >= batches.length) return;
+        const batch = batches[index];
+        const predictions = await predict(batch.texts.map((content) => ({ task_type: taskType, content })));
+        batchResults[index] = predictions;
+        metrics.inputs += batch.texts.length;
+      }
+    }
+    await Promise.all(Array.from({ length:Math.min(batchConcurrency, batches.length) }, () => worker()));
+    return batchResults.flat();
   }
 
   return {
@@ -108,6 +120,6 @@ export function createVertexEmbeddingClient({
     model,
     location,
     embedMany,
-    stats: () => ({ ...metrics, model, location, effectiveBatchSize })
+    stats: () => ({ ...metrics, model, location, effectiveBatchSize, batchConcurrency })
   };
 }
