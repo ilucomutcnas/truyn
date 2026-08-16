@@ -22,10 +22,8 @@ jobs:
       GCP_DEPLOYER_SA_VALUE: ${{ vars.GCP_DEPLOYER_SERVICE_ACCOUNT_EMAIL || secrets.GCP_DEPLOYER_SERVICE_ACCOUNT_EMAIL }}
       GCP_REGION_VALUE: ${{ vars.GCP_REGION || 'us-east4' }}
       CLOUDFLARE_API_TOKEN_VALUE: ${{ secrets.CLOUDFLARE_API_TOKEN || secrets.CLOUDFLARE_API_TOKENS }}
-      CLOUDFLARE_ACCOUNT_ID_VALUE: ${{ secrets.CLOUDFLARE_ACCOUNT_ID || vars.CLOUDFLARE_ACCOUNT_ID }}
       CLOUDFLARE_ZONE_ID_VALUE: ${{ secrets.CLOUDFLARE_ZONE_ID || vars.CLOUDFLARE_ZONE_ID }}
       PUBLIC_RELAY_URL: https://relay.truyn.org
-      EDGE_WORKER_NAME: truyn-origin-edge
     steps:
       - uses: actions/checkout@v4
         with:
@@ -64,82 +62,64 @@ jobs:
           [[ "$found" == "1" ]] || { echo 'ORIGIN_DISCOVERY=FAIL'; exit 20; }
           echo 'ORIGIN_DISCOVERY=PASS'
 
-      - name: Configure Cloudflare edge before locking origin
+      - name: Configure Cloudflare edge proof transform
+        id: cf_edge
+        continue-on-error: true
         shell: bash
         run: |
           set -euo pipefail
-          [[ -n "${CLOUDFLARE_API_TOKEN_VALUE:-}" && -n "${CLOUDFLARE_ACCOUNT_ID_VALUE:-}" && -n "${CLOUDFLARE_ZONE_ID_VALUE:-}" ]] || { echo 'CLOUDFLARE_EDGE=FAIL missing_bindings'; exit 30; }
+          [[ -n "${CLOUDFLARE_API_TOKEN_VALUE:-}" && -n "${CLOUDFLARE_ZONE_ID_VALUE:-}" ]] || { echo 'CLOUDFLARE_TRANSFORM=FAIL missing_bindings'; exit 30; }
           guard_token="$(openssl rand -hex 32)"
           echo "::add-mask::$guard_token"
           echo "TRUYN_LIVE_ORIGIN_TOKEN=$guard_token" >> "$GITHUB_ENV"
 
-          cat > worker.mjs <<'JS'
-          export default {
-            async fetch(request, env) {
-              if (!env.TRUYN_ORIGIN_URL || !env.TRUYN_ORIGIN_GUARD_TOKEN) {
-                return new Response(JSON.stringify({ok:false,error:'edge_not_configured'}), {status:503,headers:{'content-type':'application/json'}});
-              }
-              const incoming = new URL(request.url);
-              const origin = new URL(env.TRUYN_ORIGIN_URL);
-              if (origin.protocol !== 'https:' || incoming.hostname === origin.hostname) {
-                return new Response(JSON.stringify({ok:false,error:'edge_origin_invalid'}), {status:503,headers:{'content-type':'application/json'}});
-              }
-              const target = new URL(origin.origin);
-              target.pathname = incoming.pathname;
-              target.search = incoming.search;
-              const headers = new Headers(request.headers);
-              headers.delete('x-truyn-origin-token');
-              headers.set('x-truyn-origin-token', env.TRUYN_ORIGIN_GUARD_TOKEN);
-              const init = {method:request.method,headers,redirect:'manual'};
-              if (request.method !== 'GET' && request.method !== 'HEAD') init.body = request.body;
-              try {
-                const response = await fetch(target, init);
-                if (response.status >= 300 && response.status < 400) {
-                  return new Response(JSON.stringify({ok:false,error:'origin_redirect_denied'}), {status:502,headers:{'content-type':'application/json'}});
-                }
-                return response;
-              } catch {
-                return new Response(JSON.stringify({ok:false,error:'origin_unavailable'}), {status:502,headers:{'content-type':'application/json'}});
-              }
-            }
-          };
-          JS
-          cat > wrangler.toml <<EOF
-          name = "$EDGE_WORKER_NAME"
-          main = "worker.mjs"
-          compatibility_date = "2026-08-16"
-          account_id = "$CLOUDFLARE_ACCOUNT_ID_VALUE"
-          workers_dev = false
-          EOF
+          base="https://api.cloudflare.com/client/v4/zones/${CLOUDFLARE_ZONE_ID_VALUE}"
+          auth=(-H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN_VALUE}" -H 'Content-Type: application/json')
+          errors_only() { jq -c '[.errors[]? | {code,message}]' 2>/dev/null || true; }
 
-          CLOUDFLARE_API_TOKEN="$CLOUDFLARE_API_TOKEN_VALUE" npx --yes wrangler@4 deploy --config wrangler.toml >/dev/null
-          printf '%s' "$AZURE_RELAY_ORIGIN" | CLOUDFLARE_API_TOKEN="$CLOUDFLARE_API_TOKEN_VALUE" npx --yes wrangler@4 secret put TRUYN_ORIGIN_URL --name "$EDGE_WORKER_NAME" >/dev/null
-          printf '%s' "$guard_token" | CLOUDFLARE_API_TOKEN="$CLOUDFLARE_API_TOKEN_VALUE" npx --yes wrangler@4 secret put TRUYN_ORIGIN_GUARD_TOKEN --name "$EDGE_WORKER_NAME" >/dev/null
-
-          routes="$(curl -fsS -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN_VALUE}" "https://api.cloudflare.com/client/v4/zones/${CLOUDFLARE_ZONE_ID_VALUE}/workers/routes")"
-          existing_id="$(jq -r '.result[]? | select(.pattern=="relay.truyn.org/*") | .id' <<<"$routes" | head -1)"
-          existing_script="$(jq -r '.result[]? | select(.pattern=="relay.truyn.org/*") | .script // empty' <<<"$routes" | head -1)"
-          if [[ -n "$existing_id" && -n "$existing_script" && "$existing_script" != "$EDGE_WORKER_NAME" ]]; then
-            echo 'CLOUDFLARE_EDGE=FAIL route_owned_by_other_worker'
+          list="$(curl -sS "${auth[@]}" "${base}/rulesets")"
+          if ! jq -e '.success == true' <<<"$list" >/dev/null; then
+            echo "CLOUDFLARE_TRANSFORM=FAIL list_rulesets $(errors_only <<<"$list")"
             exit 31
           fi
-          if [[ -n "$existing_id" ]]; then
-            response="$(curl -fsS -X PUT -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN_VALUE}" -H 'Content-Type: application/json' --data "{\"pattern\":\"relay.truyn.org/*\",\"script\":\"${EDGE_WORKER_NAME}\"}" "https://api.cloudflare.com/client/v4/zones/${CLOUDFLARE_ZONE_ID_VALUE}/workers/routes/${existing_id}")"
-          else
-            response="$(curl -fsS -X POST -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN_VALUE}" -H 'Content-Type: application/json' --data "{\"pattern\":\"relay.truyn.org/*\",\"script\":\"${EDGE_WORKER_NAME}\"}" "https://api.cloudflare.com/client/v4/zones/${CLOUDFLARE_ZONE_ID_VALUE}/workers/routes")"
-          fi
-          jq -e '.success == true' <<<"$response" >/dev/null
+          ruleset_id="$(jq -r '.result[]? | select(.kind=="zone" and .phase=="http_request_late_transform") | .id' <<<"$list" | head -1)"
 
-          ok=0
-          for attempt in $(seq 1 20); do
-            code="$(curl -sS --max-time 10 -o edge-pre.json -w '%{http_code}' "${PUBLIC_RELAY_URL}/health" || true)"
-            if [[ "$code" == '200' ]]; then ok=1; break; fi
-            sleep 3
-          done
-          [[ "$ok" == '1' ]] || { echo 'CLOUDFLARE_EDGE=FAIL public_health_unreachable'; exit 32; }
-          echo 'CLOUDFLARE_EDGE=PASS'
+          rule="$(jq -nc --arg value "$guard_token" '{ref:"truyn_origin_guard_header",description:"TRUYN edge-to-origin proof",expression:"(http.host eq \"relay.truyn.org\")",action:"rewrite",action_parameters:{headers:{"x-truyn-origin-token":{operation:"set",value:$value}}}}')"
+
+          if [[ -z "$ruleset_id" ]]; then
+            create_body="$(jq -nc --argjson rule "$rule" '{name:"TRUYN late request transforms",description:"TRUYN edge security transforms",kind:"zone",phase:"http_request_late_transform",rules:[$rule]}')"
+            created="$(curl -sS -X POST "${auth[@]}" --data "$create_body" "${base}/rulesets")"
+            if ! jq -e '.success == true' <<<"$created" >/dev/null; then
+              echo "CLOUDFLARE_TRANSFORM=FAIL create_ruleset $(errors_only <<<"$created")"
+              exit 32
+            fi
+            ruleset_id="$(jq -r '.result.id' <<<"$created")"
+          else
+            details="$(curl -sS "${auth[@]}" "${base}/rulesets/${ruleset_id}")"
+            if ! jq -e '.success == true' <<<"$details" >/dev/null; then
+              echo "CLOUDFLARE_TRANSFORM=FAIL read_ruleset $(errors_only <<<"$details")"
+              exit 33
+            fi
+            rule_id="$(jq -r '.result.rules[]? | select(.ref=="truyn_origin_guard_header") | .id' <<<"$details" | head -1)"
+            if [[ -n "$rule_id" ]]; then
+              changed="$(curl -sS -X PATCH "${auth[@]}" --data "$rule" "${base}/rulesets/${ruleset_id}/rules/${rule_id}")"
+            else
+              changed="$(curl -sS -X POST "${auth[@]}" --data "$rule" "${base}/rulesets/${ruleset_id}/rules")"
+            fi
+            if ! jq -e '.success == true' <<<"$changed" >/dev/null; then
+              echo "CLOUDFLARE_TRANSFORM=FAIL write_rule $(errors_only <<<"$changed")"
+              exit 34
+            fi
+          fi
+
+          code="$(curl -sS --max-time 15 -o edge-pre.json -w '%{http_code}' "${PUBLIC_RELAY_URL}/health" || true)"
+          [[ "$code" == '200' ]] || { echo "CLOUDFLARE_TRANSFORM=FAIL public_health=${code}"; exit 35; }
+          echo 'CLOUDFLARE_TRANSFORM=PASS'
 
       - name: Enable Azure origin guard on live relay
+        id: azure_guard
+        if: ${{ steps.cf_edge.outcome == 'success' }}
+        continue-on-error: true
         shell: bash
         run: |
           set -euo pipefail
@@ -151,6 +131,7 @@ jobs:
 
       - name: Live Azure direct-origin proof
         id: azure_proof
+        if: ${{ steps.cf_edge.outcome == 'success' && steps.azure_guard.outcome == 'success' }}
         continue-on-error: true
         shell: bash
         run: |
@@ -163,10 +144,8 @@ jobs:
             if [[ "$direct_code" == '403' && "$direct_error" == 'origin_guard_denied' ]]; then break; fi
             sleep 3
           done
-          if [[ "$direct_code" != '403' || "$direct_error" != 'origin_guard_denied' ]]; then
-            echo "AZURE_ORIGIN_PROOF=FAIL runtime_guard_not_enforcing http=${direct_code}"
-            exit 41
-          fi
+          [[ "$direct_code" == '403' && "$direct_error" == 'origin_guard_denied' ]] || { echo "AZURE_ORIGIN_PROOF=FAIL runtime_guard_not_enforcing http=${direct_code}"; exit 41; }
+
           ws_code="$(curl -sS --http1.1 --max-time 10 -o /dev/null -w '%{http_code}' -H 'Connection: Upgrade' -H 'Upgrade: websocket' -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dHJ1eW4tb3JpZ2luLXByb29m' "${AZURE_RELAY_ORIGIN}/v1/fast/socket" || true)"
           [[ "$ws_code" == '403' ]] || { echo "AZURE_ORIGIN_PROOF=FAIL websocket=${ws_code}"; exit 42; }
 
@@ -179,6 +158,8 @@ jobs:
           echo 'AZURE_ORIGIN_PROOF=PASS'
 
       - name: Authenticate Google Cloud with WIF
+        id: gcp_auth
+        continue-on-error: true
         uses: google-github-actions/auth@v3
         with:
           project_id: ${{ env.GCP_PROJECT_ID_VALUE }}
@@ -187,12 +168,15 @@ jobs:
           create_credentials_file: true
           export_environment_variables: true
 
-      - uses: google-github-actions/setup-gcloud@v3
+      - name: Set up gcloud
+        if: ${{ steps.gcp_auth.outcome == 'success' }}
+        uses: google-github-actions/setup-gcloud@v3
         with:
           project_id: ${{ env.GCP_PROJECT_ID_VALUE }}
 
       - name: Live GCP direct-origin proof
         id: gcp_proof
+        if: ${{ steps.gcp_auth.outcome == 'success' }}
         continue-on-error: true
         shell: bash
         run: |
@@ -230,10 +214,14 @@ jobs:
           fi
 
       - name: Final live invariant
+        if: ${{ always() }}
         shell: bash
         run: |
           set -euo pipefail
-          [[ '${{ steps.azure_proof.outcome }}' == 'success' ]] || { echo 'LIVE_ORIGIN_SECURITY_PROOF=FAIL azure'; exit 61; }
-          [[ '${{ steps.gcp_proof.outcome }}' == 'success' ]] || { echo 'LIVE_ORIGIN_SECURITY_PROOF=FAIL gcp'; exit 62; }
+          [[ '${{ steps.cf_edge.outcome }}' == 'success' ]] || { echo 'LIVE_ORIGIN_SECURITY_PROOF=FAIL cloudflare'; exit 60; }
+          [[ '${{ steps.azure_guard.outcome }}' == 'success' ]] || { echo 'LIVE_ORIGIN_SECURITY_PROOF=FAIL azure_guard'; exit 61; }
+          [[ '${{ steps.azure_proof.outcome }}' == 'success' ]] || { echo 'LIVE_ORIGIN_SECURITY_PROOF=FAIL azure'; exit 62; }
+          [[ '${{ steps.gcp_auth.outcome }}' == 'success' ]] || { echo 'LIVE_ORIGIN_SECURITY_PROOF=FAIL gcp_auth'; exit 63; }
+          [[ '${{ steps.gcp_proof.outcome }}' == 'success' ]] || { echo 'LIVE_ORIGIN_SECURITY_PROOF=FAIL gcp'; exit 64; }
           echo 'LIVE_ORIGIN_SECURITY_PROOF=PASS'
           echo 'DIRECT_ORIGIN_WITHOUT_EDGE_PROOF=ZERO_INNER_RELAY_ACCESS'
