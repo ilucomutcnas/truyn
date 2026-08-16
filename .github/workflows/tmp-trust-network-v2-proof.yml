@@ -1,0 +1,39 @@
+name: Trust Network v2 Proof
+
+on:
+  push:
+    branches: [trust-network-v2-20260816]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  proof:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install dependencies
+        run: npm install --ignore-scripts --no-audit --no-fund
+      - name: Run Trust Network v2 resistance benchmark
+        env:
+          TRUST_NETWORK_CASES_PER_SCENARIO: '100'
+          TRUST_NETWORK_OUTPUT: trust-network-v2.json
+        run: node benchmarks/trust-network-v2.js
+      - name: Hash evidence
+        run: sha256sum trust-network-v2.json | tee trust-network-v2.sha256
+      - name: Upload evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: truyn-trust-network-v2-${{ github.run_id }}
+          path: |
+            trust-network-v2.json
+            trust-network-v2.sha256
+          if-no-files-found: error
+          retention-days: 30
