@@ -1,4 +1,4 @@
-name: Temporary Live Azure Origin Security Proof
+name: Temporary Relay Recovery
 
 on:
   push:
@@ -10,15 +10,13 @@ permissions:
   id-token: write
 
 jobs:
-  prove:
+  recover:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 10
     env:
       AZURE_CLIENT_ID_VALUE: ${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }}
       AZURE_TENANT_ID_VALUE: ${{ vars.AZURE_TENANT_ID || secrets.AZURE_TENANT_ID }}
       AZURE_SUBSCRIPTION_ID_VALUE: ${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}
-      CLOUDFLARE_API_TOKEN_VALUE: ${{ secrets.CLOUDFLARE_API_TOKENS }}
-      CLOUDFLARE_ZONE_ID_VALUE: ${{ secrets.CLOUDFLARE_ZONE_ID || vars.CLOUDFLARE_ZONE_ID }}
       PUBLIC_RELAY_URL: https://relay.truyn.org
     steps:
       - name: Authenticate Azure with main-only OIDC
@@ -28,107 +26,42 @@ jobs:
           tenant-id: ${{ env.AZURE_TENANT_ID_VALUE }}
           subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID_VALUE }}
 
-      - name: Discover relay origin without logging topology
+      - name: Discover relay and remove failed IP restriction experiment
         shell: bash
         run: |
           set -euo pipefail
-          mapfile -t rows < <(az containerapp list --query "[?properties.configuration.ingress.external==\`true\`].[name,resourceGroup,properties.configuration.ingress.fqdn]" -o tsv)
           found=0
-          for row in "${rows[@]}"; do
-            name="$(awk '{print $1}' <<<"$row")"
-            rg="$(awk '{print $2}' <<<"$row")"
-            fqdn="$(awk '{print $3}' <<<"$row")"
+          while IFS=$'\t' read -r name rg fqdn; do
             [[ -n "$fqdn" ]] || continue
             role="$(az containerapp show -g "$rg" -n "$name" --query 'properties.template.containers[0].env[?name==`TRUYN_ROLE`].value | [0]' -o tsv)"
             if [[ "$role" != 'relay' && "$name" != *relay* ]]; then continue; fi
             found=1
-            origin="https://${fqdn}"
             echo "::add-mask::$name"
             echo "::add-mask::$rg"
             echo "::add-mask::$fqdn"
-            echo "::add-mask::$origin"
-            printf 'AZURE_RELAY_APP=%s\nAZURE_RELAY_RG=%s\nAZURE_RELAY_ORIGIN=%s\n' "$name" "$rg" "$origin" >> "$GITHUB_ENV"
+            rules="$(az containerapp ingress access-restriction list -g "$rg" -n "$name" -o json)"
+            mapfile -t remove_names < <(jq -r '.[] | .name // empty | select(startswith("cloudflare-") or . == "truyn-bootstrap-all")' <<<"$rules")
+            for rule in "${remove_names[@]}"; do
+              az containerapp ingress access-restriction remove -g "$rg" -n "$name" --rule-name "$rule" -o none || true
+            done
+            remaining="$(az containerapp ingress access-restriction list -g "$rg" -n "$name" -o json)"
+            experiment_left="$(jq '[.[] | (.name // "") | select(startswith("cloudflare-") or . == "truyn-bootstrap-all")] | length' <<<"$remaining")"
+            [[ "$experiment_left" == 0 ]] || { echo 'AZURE_RECOVERY=FAIL experiment_rules_remain'; exit 21; }
             break
-          done
-          [[ "$found" == 1 ]] || { echo 'AZURE_ORIGIN_DISCOVERY=FAIL'; exit 20; }
-          echo 'AZURE_ORIGIN_DISCOVERY=PASS'
+          done < <(az containerapp list --query "[?properties.configuration.ingress.external==\`true\`].[name,resourceGroup,properties.configuration.ingress.fqdn]" -o tsv)
+          [[ "$found" == 1 ]] || { echo 'AZURE_RECOVERY=FAIL relay_not_found'; exit 20; }
+          echo 'AZURE_RECOVERY=PASS failed_ip_allowlist_removed'
 
-      - name: Require Cloudflare DNS proxy and live CF path
+      - name: Verify public relay is healthy through Cloudflare
         shell: bash
         run: |
           set -euo pipefail
-          base="https://api.cloudflare.com/client/v4/zones/${CLOUDFLARE_ZONE_ID_VALUE}/dns_records"
-          response="$(curl -sS -G -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN_VALUE}" --data-urlencode 'name=relay.truyn.org' "$base")"
-          jq -e '.success == true and (.result | length) == 1 and .result[0].proxied == true' <<<"$response" >/dev/null || { echo 'CLOUDFLARE_PATH=FAIL dns_not_proxied'; exit 21; }
-          code="$(curl -sS --max-time 15 -D edge.headers -o edge-health.json -w '%{http_code}' "${PUBLIC_RELAY_URL}/health" || true)"
-          [[ "$code" == '200' ]] || { echo "CLOUDFLARE_PATH=FAIL health=${code}"; exit 22; }
-          grep -qi '^cf-ray:' edge.headers || { echo 'CLOUDFLARE_PATH=FAIL cf_ray_missing'; exit 23; }
-          echo 'CLOUDFLARE_PATH=PASS proxied=true cf_ray=true'
-
-      - name: Configure Azure allow-only Cloudflare IPv4 using GA CLI
-        shell: bash
-        run: |
-          set -euo pipefail
-          current="$(az containerapp ingress access-restriction list -g "$AZURE_RELAY_RG" -n "$AZURE_RELAY_APP" -o json)"
-          unrelated="$(jq '[.[] | select(((.name // "") | startswith("cloudflare-")) | not) | select((.name // "") != "truyn-bootstrap-all")] | length' <<<"$current")"
-          [[ "$unrelated" == 0 ]] || { echo 'AZURE_ALLOWLIST=FAIL unrelated_existing_rules'; exit 30; }
-
-          az containerapp ingress access-restriction set -g "$AZURE_RELAY_RG" -n "$AZURE_RELAY_APP" \
-            --rule-name truyn-bootstrap-all --ip-address 0.0.0.0/0 --description 'TRUYN safe allowlist bootstrap' --action Allow -o none
-
-          ranges="$(curl -fsS https://www.cloudflare.com/ips-v4 | sed '/^[[:space:]]*$/d')"
-          count="$(wc -l <<<"$ranges" | tr -d ' ')"
-          [[ "$count" == 15 ]] || { echo "AZURE_ALLOWLIST=FAIL unexpected_cf_range_count=${count}"; exit 31; }
-          index=0
-          while IFS= read -r cidr; do
-            index=$((index+1))
-            rule="$(printf 'cloudflare-%02d' "$index")"
-            az containerapp ingress access-restriction set -g "$AZURE_RELAY_RG" -n "$AZURE_RELAY_APP" \
-              --rule-name "$rule" --ip-address "$cidr" --description 'Cloudflare origin network' --action Allow -o none
-          done <<<"$ranges"
-
-          az containerapp ingress access-restriction remove -g "$AZURE_RELAY_RG" -n "$AZURE_RELAY_APP" --rule-name truyn-bootstrap-all -o none
-
-          stored="$(az containerapp ingress access-restriction list -g "$AZURE_RELAY_RG" -n "$AZURE_RELAY_APP" -o json)"
-          stored_count="$(jq 'length' <<<"$stored")"
-          all_allow="$(jq '[.[] | (.action == "Allow") and ((.name // "") | startswith("cloudflare-"))] | all' <<<"$stored")"
-          [[ "$stored_count" == 15 && "$all_allow" == true ]] || { echo "AZURE_ALLOWLIST=FAIL stored_count=${stored_count}"; exit 32; }
-
-          edge_ok=0
-          for attempt in $(seq 1 20); do
-            code="$(curl -sS --max-time 10 -D edge-after.headers -o edge-after.json -w '%{http_code}' "${PUBLIC_RELAY_URL}/health" || true)"
-            if [[ "$code" == '200' ]] && grep -qi '^cf-ray:' edge-after.headers; then edge_ok=1; break; fi
-            sleep 3
+          ok=0
+          last='000'
+          for attempt in $(seq 1 30); do
+            last="$(curl -sS --max-time 10 -D edge.headers -o edge.body -w '%{http_code}' "${PUBLIC_RELAY_URL}/health" || true)"
+            if [[ "$last" == '200' ]] && grep -qi '^cf-ray:' edge.headers; then ok=1; break; fi
+            sleep 2
           done
-          [[ "$edge_ok" == 1 ]] || { echo 'AZURE_ALLOWLIST=FAIL cloudflare_path_blocked'; exit 33; }
-          echo 'AZURE_ALLOWLIST=PASS mode=allow-only cloudflare_ranges=15'
-
-      - name: Live direct-origin denial proof
-        shell: bash
-        run: |
-          set -euo pipefail
-          direct_health='000'
-          for attempt in $(seq 1 20); do
-            direct_health="$(curl -4 -sS --max-time 10 -o direct-health.body -w '%{http_code}' "${AZURE_RELAY_ORIGIN}/health" || true)"
-            [[ "$direct_health" == '403' ]] && break
-            sleep 3
-          done
-          direct_register="$(curl -4 -sS --max-time 10 -o direct-register.body -w '%{http_code}' -X POST -H 'content-type: application/json' --data '{}' "${AZURE_RELAY_ORIGIN}/v1/register" || true)"
-          direct_ws="$(curl -4 -sS --http1.1 --max-time 10 -o /dev/null -w '%{http_code}' -H 'Connection: Upgrade' -H 'Upgrade: websocket' -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dHJ1eW4tb3JpZ2luLXByb29m' "${AZURE_RELAY_ORIGIN}/v1/fast/socket" || true)"
-          spoofed="$(curl -4 -sS --max-time 10 -o /dev/null -w '%{http_code}' -H 'X-Forwarded-For: 104.16.0.1' -H 'CF-Connecting-IP: 104.16.0.1' "${AZURE_RELAY_ORIGIN}/health" || true)"
-          [[ "$direct_health" == '403' ]] || { echo "AZURE_DIRECT_ORIGIN_PROOF=FAIL health=${direct_health}"; exit 40; }
-          [[ "$direct_register" == '403' ]] || { echo "AZURE_DIRECT_ORIGIN_PROOF=FAIL register=${direct_register}"; exit 41; }
-          [[ "$direct_ws" == '403' ]] || { echo "AZURE_DIRECT_ORIGIN_PROOF=FAIL websocket=${direct_ws}"; exit 42; }
-          [[ "$spoofed" == '403' ]] || { echo "AZURE_DIRECT_ORIGIN_PROOF=FAIL spoofed_headers=${spoofed}"; exit 43; }
-
-          edge_code="$(curl -sS --max-time 15 -D edge-register.headers -o edge-register.json -w '%{http_code}' -X POST -H 'content-type: application/json' --data '{}' "${PUBLIC_RELAY_URL}/v1/register" || true)"
-          grep -qi '^cf-ray:' edge-register.headers || { echo 'AZURE_DIRECT_ORIGIN_PROOF=FAIL edge_cf_ray_missing'; exit 44; }
-          jq -e 'type == "object" and has("error")' edge-register.json >/dev/null 2>&1 || { echo "AZURE_DIRECT_ORIGIN_PROOF=FAIL edge_not_relay_json http=${edge_code}"; exit 45; }
-
-          echo 'AZURE_DIRECT_HEALTH=403 platform_ingress_denied'
-          echo 'AZURE_DIRECT_REGISTER=403 platform_ingress_denied'
-          echo 'AZURE_DIRECT_WEBSOCKET=403 platform_ingress_denied'
-          echo 'AZURE_DIRECT_SPOOFED_CLOUDFLARE_HEADERS=403'
-          echo 'AZURE_EDGE_REACHES_INNER_RELAY=true'
-          echo 'AZURE_DIRECT_ORIGIN_PROOF=PASS zero_inner_relay_access'
-          echo 'LIVE_AZURE_ORIGIN_SECURITY_PROOF=PASS'
+          [[ "$ok" == 1 ]] || { echo "RELAY_RECOVERY=FAIL public_health=${last}"; exit 30; }
+          echo 'RELAY_RECOVERY=PASS public_health=200 cloudflare_path=true'
