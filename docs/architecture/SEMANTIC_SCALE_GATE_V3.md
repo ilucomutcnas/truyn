@@ -1,6 +1,8 @@
 # Semantic Retrieval Scale Gate v3
 
-Status: **implemented benchmark architecture; measured evidence is recorded separately after each immutable run**.
+Status: **implemented and measured PASS through 100,000 immutable blocks**.
+
+Permanent measured evidence: [`../benchmarks/SEMANTIC_SCALE_GATE_V3_2026-08-16.md`](../benchmarks/SEMANTIC_SCALE_GATE_V3_2026-08-16.md).
 
 Scale Gate v3 extends the Semantic Retrieval Gate without changing the requester contract:
 
@@ -40,6 +42,8 @@ The v3 benchmark ladder is:
 ```
 
 The same question + root CID contract is used at every level.
+
+The measured run passed every fixed gate at every corpus size. At 100,000 blocks the measured workload produced 100% retrieval/provenance/no-block-ID/minimal-context and 99.997% normalized token/marginal-cost saving. Cold and warm latency plus the 100/1,000-node exercises are preserved in the permanent evidence report.
 
 The scale harness uses deterministic heterogeneous synthetic records with three query classes retained from Semantic v2 methodology:
 
@@ -159,6 +163,17 @@ failures == 0
 provenance verified for every retrieval
 selected record correct for every retrieval
 ```
+
+The measured run completed both exercises with **zero failures**. Their elapsed time also exposed a next-stage optimization target: process-shared verification of an already verified immutable 100k root instead of repeating full manifest verification for every new node identity.
+
+## Current 100k scale boundary
+
+Scale Gate v3 passes its declared hard gates, but the evidence deliberately records two material engineering costs at 100k:
+
+- warm retrieval p50 about **561 ms**, p99 about **798 ms**;
+- warm process heap used about **1.85 GB**.
+
+These are not retroactively converted into hidden failure gates. They define the next optimization work: bounded top-K candidate selection, compact in-memory representation, process-shared immutable-root verification, and then a shared multi-replica index store.
 
 ## Evidence policy
 
