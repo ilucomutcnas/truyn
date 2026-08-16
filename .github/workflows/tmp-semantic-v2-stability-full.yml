@@ -1,0 +1,208 @@
+name: Ephemeral Semantic v2 Stability Full 360
+
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/tmp-semantic-v2-stability-full.yml']
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      GCP_PROJECT_ID_VALUE: ${{ vars.GCP_PROJECT_ID || secrets.GCP_PROJECT_ID }}
+      GCP_WIF_PROVIDER_VALUE: ${{ vars.GCP_WIF_PROVIDER || secrets.GCP_WIF_PROVIDER }}
+      GCP_DEPLOYER_SA_VALUE: ${{ vars.GCP_DEPLOYER_SERVICE_ACCOUNT_EMAIL || secrets.GCP_DEPLOYER_SERVICE_ACCOUNT_EMAIL }}
+      GCP_RUNTIME_SA_VALUE: ${{ vars.GCP_RUNTIME_SERVICE_ACCOUNT_EMAIL || secrets.GCP_RUNTIME_SERVICE_ACCOUNT_EMAIL }}
+      GCP_PROXY_REGION: us-east4
+      GCP_AR_REPO: truyn-poc
+      GCP_PROXY_SERVICE: truyn-semanticv2-stability-${{ github.run_id }}
+      SEMANTIC_V2_SOURCE_SHA: 6f2ddf743e83ad1704a831a7058a93ad668c6a69
+      SEMANTIC_V2_PROXY_SHA: c1ea39a3f5a0408035fea7f00604ff14310eda10
+      ROUTING_COST_BUDGET_USD_PER_QUERY: '0.00395'
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with: { persist-credentials: false }
+      - uses: actions/setup-node@v4
+        with: { node-version: '24' }
+      - run: npm install --ignore-scripts --no-audit --no-fund
+
+      - name: Validate stability implementation before cloud spend
+        run: |
+          node --test tests/confidence-gated-semantic-reranker*.test.js
+          git diff --check -- core/context tests
+
+      - name: Load immutable corpus and proxy sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          load_file(){ mkdir -p "$(dirname "$1")"; curl -fsSL -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" "https://api.github.com/repos/${GITHUB_REPOSITORY}/contents/$1?ref=$2" | jq -r '.content' | tr -d '\n' | base64 -d > "$3"; }
+          load_file benchmarks/semantic-retrieval-v2.js "$SEMANTIC_V2_SOURCE_SHA" /tmp/semantic-retrieval-v2.js
+          load_file benchmarks/semantic-v2-gcp-proxy.js "$SEMANTIC_V2_PROXY_SHA" benchmarks/semantic-v2-gcp-proxy.js
+          load_file benchmarks/Dockerfile.semantic-v2-gcp-proxy "$SEMANTIC_V2_PROXY_SHA" benchmarks/Dockerfile.semantic-v2-gcp-proxy
+
+      - uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID_VALUE }}
+          workload_identity_provider: ${{ env.GCP_WIF_PROVIDER_VALUE }}
+          service_account: ${{ env.GCP_DEPLOYER_SA_VALUE }}
+          create_credentials_file: true
+          export_environment_variables: true
+      - uses: google-github-actions/setup-gcloud@v3
+        with: { project_id: '${{ env.GCP_PROJECT_ID_VALUE }}' }
+
+      - name: Prepare isolated runtime-identity Vertex proxy
+        shell: bash
+        run: |
+          set -euo pipefail
+          token="$(openssl rand -hex 32)"; echo "::add-mask::$token"
+          registry="${GCP_PROXY_REGION}-docker.pkg.dev"; image="${registry}/${GCP_PROJECT_ID_VALUE}/${GCP_AR_REPO}/semanticv2-stability:${GITHUB_SHA}"
+          gcloud auth configure-docker "$registry" --quiet
+          docker build -f benchmarks/Dockerfile.semantic-v2-gcp-proxy -t "$image" . >/dev/null && docker push "$image" >/dev/null
+          gcloud run deploy "$GCP_PROXY_SERVICE" --project="$GCP_PROJECT_ID_VALUE" --region="$GCP_PROXY_REGION" --image="$image" --service-account="$GCP_RUNTIME_SA_VALUE" --port=8080 --min=0 --max=2 --cpu=1 --memory=512Mi --set-env-vars="BENCHMARK_PROXY_TOKEN=${token}" --no-invoker-iam-check --quiet >/dev/null
+          url="$(gcloud run services describe "$GCP_PROXY_SERVICE" --project="$GCP_PROJECT_ID_VALUE" --region="$GCP_PROXY_REGION" --format='value(status.url)')"
+          for a in $(seq 1 30); do curl -fsS -H "Authorization: Bearer ${token}" "${url}/health" | jq -e '.ok==true' >/dev/null && break; [[ "$a" -lt 30 ]] || exit 1; sleep 2; done
+          echo "VERTEX_API_ENDPOINT=$url" >> "$GITHUB_ENV"; echo "GCP_ACCESS_TOKEN=$token" >> "$GITHUB_ENV"; echo "GCP_PROJECT_ID=$GCP_PROJECT_ID_VALUE" >> "$GITHUB_ENV"
+
+      - name: Run all 360 immutable retrieval cases with stability guard
+        shell: bash
+        run: |
+          cat > /tmp/stability-full.mjs <<'NODE'
+          import fs from 'node:fs';
+          import vm from 'node:vm';
+          import { createVertexGeminiProvider } from './adapters/providers/vertex-gemini.js';
+          import { createVertexEmbeddingClient } from './adapters/providers/vertex-embedding.js';
+          import { createConfidenceGatedSemanticReranker } from './core/context/confidence-gated-semantic-reranker.js';
+
+          const source = fs.readFileSync('/tmp/semantic-retrieval-v2.js','utf8');
+          const a = source.indexOf('const domains = [');
+          const b = source.indexOf('const fullContext =');
+          if (a < 0 || b < 0) throw new Error('immutable corpus markers missing');
+          const box = {}; vm.createContext(box);
+          vm.runInContext('const corpusSize=600,retrievalCaseCount=360;'+source.slice(a,b)+';globalThis.__d={records,blocks,retrievalCases};',box);
+          const { records, blocks, retrievalCases } = box.__d;
+          const projectId = process.env.GCP_PROJECT_ID;
+          const endpoint = process.env.VERTEX_API_ENDPOINT;
+          const accessTokenProvider = async () => process.env.GCP_ACCESS_TOKEN;
+          const makeProvider = (model) => createVertexGeminiProvider({ projectId, location:'global', model, endpoint, accessTokenProvider, capabilities:['reasoning.general'], requestTimeoutMs:180000 });
+          const privacy = { providerCalls:0, leakedCalls:0 };
+          const guard = (provider) => ({
+            async execute(request) {
+              privacy.providerCalls += 1;
+              const visible = JSON.stringify(request.input || {});
+              if (/semantic-record-\d+/i.test(visible)) { privacy.leakedCalls += 1; throw new Error('TRUYN block id leaked to semantic judge'); }
+              return provider.execute(request);
+            }
+          });
+          const schema = { type:'OBJECT', properties:{ id:{ type:'STRING' } }, required:['id'] };
+          const reranker = createConfidenceGatedSemanticReranker({
+            liteProvider:guard(makeProvider('gemini-3.1-flash-lite')),
+            flashProvider:guard(makeProvider('gemini-3-flash-preview')),
+            verifierProvider:guard(makeProvider('gemini-3.1-pro-preview')),
+            cheapCandidateK:24,
+            confidenceDenseRankMax:12,
+            maxCandidates:64,
+            verifierCandidateTiers:[16,64],
+            stabilityRecheckDenseRanks:[2],
+            liteProviderOptions:{ thinkingLevel:'MINIMAL', temperature:0, maxOutputTokens:512, responseMimeType:'application/json', responseSchema:schema },
+            flashProviderOptions:{ thinkingLevel:'MINIMAL', temperature:0, maxOutputTokens:512, responseMimeType:'application/json', responseSchema:schema },
+            verifierProviderOptions:{ temperature:0, maxOutputTokens:1024, responseMimeType:'application/json', responseSchema:schema },
+            repairAttempts:1
+          });
+          const embedding = createVertexEmbeddingClient({ projectId, location:'us-central1', model:'gemini-embedding-001', endpoint, accessTokenProvider, batchSize:1, outputDimensionality:768, maxRetries:10 });
+          const norm = (v) => Math.sqrt(v.reduce((s,x)=>s+x*x,0));
+          const cosine = (x,y) => { let d=0; for(let i=0;i<x.length;i++) d+=x[i]*y[i]; const z=norm(x)*norm(y); return z ? d/z : 0; };
+          async function mapLimit(items, limit, fn) { const out=new Array(items.length); let next=0; async function worker(){ for(;;){ const i=next++; if(i>=items.length)return; out[i]=await fn(items[i],i); } } await Promise.all(Array.from({length:Math.min(limit,items.length)},worker)); return out; }
+          const documentVectors = await mapLimit(blocks,8,async block => (await embedding.embedMany([block.text],{taskType:'RETRIEVAL_DOCUMENT'}))[0]);
+          const queryVectors = await mapLimit(retrievalCases,8,async item => (await embedding.embedMany([item.question],{taskType:'RETRIEVAL_QUERY'}))[0]);
+          let completed=0;
+          const rows = await mapLimit(retrievalCases,4,async (item,qi) => {
+            const dense64 = blocks.map((block,i)=>({ id:block.id, text:block.text, score:cosine(queryVectors[qi],documentVectors[i]) }))
+              .sort((x,y)=>y.score-x.score || x.id.localeCompare(y.id)).slice(0,64);
+            const expectedDenseRank = dense64.findIndex(x=>x.id===item.id)+1;
+            const result = await reranker.rerank(item.question,dense64);
+            const selected = records.find(record=>record.id===result.id);
+            completed++; if (completed%20===0) process.stderr.write(`processed ${completed}/360\n`);
+            return {
+              caseIndex:item.caseIndex,
+              expectedId:item.id,
+              selectedId:result.id,
+              correct:result.id===item.id,
+              category:item.category,
+              queryLanguage:item.queryLanguage,
+              blockLanguage:item.blockLanguage,
+              denseRecall:expectedDenseRank>0,
+              expectedDenseRank:expectedDenseRank||null,
+              selectedDenseRank:dense64.findIndex(x=>x.id===result.id)+1,
+              provenancePass:Boolean(selected)&&result.id===item.id,
+              noBlockIdPass:privacy.leakedCalls===0,
+              minimalContextPass:Boolean(selected),
+              routeMode:result.metadata.routeMode,
+              agreedDenseRank:result.metadata.agreedDenseRank,
+              stabilityChecked:result.metadata.stabilityChecked,
+              stabilityPassed:result.metadata.stabilityPassed,
+              stabilityLiteDenseRank:result.metadata.stabilityLiteDenseRank,
+              stabilityFlashDenseRank:result.metadata.stabilityFlashDenseRank,
+              verifierCandidateK:result.metadata.verifierCandidateK||null
+            };
+          });
+          const metric = (field) => Object.fromEntries([...new Set(rows.map(r=>r[field]))].sort().map(value=>{ const subset=rows.filter(r=>r[field]===value); const correct=subset.filter(r=>r.correct).length; return [value,{correct,total:subset.length,accuracyPercent:Number((100*correct/subset.length).toFixed(3))}]; }));
+          const stats = reranker.stats();
+          const rates = { lite:{input:.25,output:1.5}, flash:{input:.5,output:3}, pro:{input:2,output:12} };
+          const costPart = (s,r) => ((s.inputTokens||0)*r.input + (s.outputTokens||0)*r.output)/1e6;
+          const costs = { lite:costPart(stats.lite,rates.lite), flash:costPart(stats.flash,rates.flash), pro:costPart(stats.verifier,rates.pro) };
+          const routingCost = costs.lite+costs.flash+costs.pro;
+          const budget = Number(process.env.ROUTING_COST_BUDGET_USD_PER_QUERY);
+          const correct = rows.filter(r=>r.correct).length;
+          const denseRecall = rows.filter(r=>r.denseRecall).length;
+          const perLanguage = metric('queryLanguage');
+          const perCategory = metric('category');
+          const provenance = rows.filter(r=>r.provenancePass).length;
+          const noBlockId = privacy.leakedCalls===0 ? rows.length : 0;
+          const minimal = rows.filter(r=>r.minimalContextPass).length;
+          const gate = {
+            accuracyPercent:Number((100*correct/rows.length).toFixed(3)),
+            denseRecallPercent:Number((100*denseRecall/rows.length).toFixed(3)),
+            perLanguage,
+            perCategory,
+            provenancePercent:Number((100*provenance/rows.length).toFixed(3)),
+            noBlockIdPercent:Number((100*noBlockId/rows.length).toFixed(3)),
+            minimalContextPercent:Number((100*minimal/rows.length).toFixed(3)),
+            routingCostBudgetUsdPerQuery:budget,
+            routingCostUsdPerQuery:Number((routingCost/rows.length).toFixed(9)),
+            accuracyPass:correct/rows.length>=.99 && Object.values(perLanguage).every(x=>x.accuracyPercent>=99) && Object.values(perCategory).every(x=>x.accuracyPercent>=99),
+            integrityPass:provenance===rows.length && noBlockId===rows.length && minimal===rows.length && denseRecall===rows.length,
+            economicPass:routingCost/rows.length<=budget
+          };
+          gate.passed=gate.accuracyPass&&gate.integrityPass&&gate.economicPass;
+          const report = {
+            benchmark:'TRUYN Semantic Retrieval Gate v2 stability-hardened full 360 proof', generatedAt:new Date().toISOString(), sourceSha:process.env.SEMANTIC_V2_SOURCE_SHA,
+            methodology:{ denseCandidateK:64, cheapCandidateK:24, confidenceDenseRankMax:12, verifierCandidateTiers:[16,64], stabilityRecheckDenseRanks:[2], stabilityRecheck:'repeat both cheap judges with reversed candidate order; accept only same original passage, otherwise fail closed to verifier', privacy:'provider-bound payload is rejected if a semantic-record block id is present' },
+            privacy, embedding:embedding.stats(), rerankerStats:stats, ratesUsdPerMillionTokens:rates,
+            costsUsd:{ lite:Number(costs.lite.toFixed(9)), flash:Number(costs.flash.toFixed(9)), pro:Number(costs.pro.toFixed(9)), total:Number(routingCost.toFixed(9)) },
+            semanticGate:gate, rows
+          };
+          fs.writeFileSync('semantic-v2-stability-full.json',JSON.stringify(report,null,2));
+          console.log(JSON.stringify({semanticGate:gate,privacy,rerankerStats:stats,costsUsd:report.costsUsd},null,2));
+          if(!gate.passed) process.exitCode=2;
+          NODE
+          node /tmp/stability-full.mjs
+
+      - name: Upload full raw evidence
+        if: ${{ always() && hashFiles('semantic-v2-stability-full.json') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: truyn-semantic-v2-stability-full-${{ github.run_id }}
+          path: semantic-v2-stability-full.json
+          retention-days: 30
+
+      - name: Delete isolated Vertex proxy
+        if: always()
+        shell: bash
+        run: gcloud run services delete "$GCP_PROXY_SERVICE" --project="$GCP_PROJECT_ID_VALUE" --region="$GCP_PROXY_REGION" --quiet >/dev/null 2>&1 || true
