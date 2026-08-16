@@ -23,7 +23,7 @@ export class ReplicatedTransparencyService {
   async start() {
     await this.log.open();
     if (!this.started) {
-      await this.node.handle(TRANSPARENCY_REPLICATION_PROTOCOL, async ({ stream }) => {
+      await this.node.handle(TRANSPARENCY_REPLICATION_PROTOCOL, async (stream) => {
         const request = await readJsonStream(stream, { maxBytes: this.maxMessageBytes });
         try {
           if (request?.logId !== this.log.logId) {
