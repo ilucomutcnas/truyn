@@ -1,0 +1,42 @@
+name: Temporary Cloudflare Ruleset Permission Probe
+
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/tmp-cloudflare-ruleset-permission-probe.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      CF_TOKEN_PRIMARY: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CF_TOKEN_LEGACY: ${{ secrets.CLOUDFLARE_API_TOKENS }}
+      CF_ZONE_ID: ${{ secrets.CLOUDFLARE_ZONE_ID || vars.CLOUDFLARE_ZONE_ID }}
+    steps:
+      - name: Probe Rulesets read permission without printing credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ -n "${CF_ZONE_ID:-}" ]] || { echo 'CF_RULESETS_PROBE=FAIL zone_missing'; exit 1; }
+          success=0
+          for label in PRIMARY LEGACY; do
+            if [[ "$label" == PRIMARY ]]; then token="${CF_TOKEN_PRIMARY:-}"; else token="${CF_TOKEN_LEGACY:-}"; fi
+            if [[ -z "$token" ]]; then
+              echo "CF_${label}=MISSING"
+              continue
+            fi
+            response="$(curl -sS -H "Authorization: Bearer ${token}" "https://api.cloudflare.com/client/v4/zones/${CF_ZONE_ID}/rulesets")"
+            if jq -e '.success == true' <<<"$response" >/dev/null 2>&1; then
+              echo "CF_${label}=RULESETS_READ_OK"
+              success=1
+            else
+              code="$(jq -r '.errors[0].code // "unknown"' <<<"$response" 2>/dev/null || echo unknown)"
+              echo "CF_${label}=RULESETS_READ_DENIED code=${code}"
+            fi
+          done
+          [[ "$success" == 1 ]] || { echo 'CF_RULESETS_PROBE=FAIL no_authorized_credential'; exit 2; }
+          echo 'CF_RULESETS_PROBE=PASS'
