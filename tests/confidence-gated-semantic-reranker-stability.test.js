@@ -23,13 +23,13 @@ function sequenceProvider(aliases, seen = []) {
 
 const candidates = Array.from({ length:4 }, (_, index) => ({ id:`real-${index}`, text:`passage ${index}` }));
 
-test('rank-2 cheap agreement is accepted only when reversed-order recheck resolves to the same original passage', async () => {
+test('rank-2 cheap agreement is accepted when Lite reversed-order recheck resolves to the same original passage', async () => {
   const liteSeen = [];
   const flashSeen = [];
   const verifierSeen = [];
   const reranker = createConfidenceGatedSemanticReranker({
     liteProvider:sequenceProvider(['c1','c2'], liteSeen),
-    flashProvider:sequenceProvider(['c1','c2'], flashSeen),
+    flashProvider:sequenceProvider(['c1'], flashSeen),
     verifierProvider:sequenceProvider(['c0'], verifierSeen),
     cheapCandidateK:4,
     confidenceDenseRankMax:3,
@@ -44,17 +44,18 @@ test('rank-2 cheap agreement is accepted only when reversed-order recheck resolv
   assert.equal(result.metadata.stabilityChecked, true);
   assert.equal(result.metadata.stabilityPassed, true);
   assert.deepEqual(liteSeen[1], ['passage 3','passage 2','passage 1','passage 0']);
-  assert.deepEqual(flashSeen[1], ['passage 3','passage 2','passage 1','passage 0']);
+  assert.equal(flashSeen.length, 1);
   assert.equal(verifierSeen.length, 0);
   assert.equal(reranker.stats().stabilityRechecks, 1);
   assert.equal(reranker.stats().stabilityFailures, 0);
+  assert.equal(reranker.stats().stabilityRecheckJudge, 'lite');
 });
 
-test('unstable rank-2 cheap agreement fails closed to verifier', async () => {
+test('unstable Lite rank-2 recheck fails closed to verifier', async () => {
   const verifierSeen = [];
   const reranker = createConfidenceGatedSemanticReranker({
-    liteProvider:sequenceProvider(['c1','c2']),
-    flashProvider:sequenceProvider(['c1','c3']),
+    liteProvider:sequenceProvider(['c1','c3']),
+    flashProvider:sequenceProvider(['c1']),
     verifierProvider:sequenceProvider(['c1'], verifierSeen),
     cheapCandidateK:4,
     confidenceDenseRankMax:3,
