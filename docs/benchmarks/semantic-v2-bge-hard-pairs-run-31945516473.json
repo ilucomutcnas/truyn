@@ -1,0 +1,23 @@
+{
+  "benchmark": "TRUYN Semantic v2 local BGE hard-pair diagnostic",
+  "generatedAt": "2026-08-16T11:53:31Z",
+  "sourceSha": "6f2ddf743e83ad1704a831a7058a93ad668c6a69",
+  "githubActionsRunId": 31945516473,
+  "githubActionsArtifactId": 9263173862,
+  "artifactDigest": "sha256:cf9306cf79ac72c20dbd00d50f64e66a6242d38dda248a537c80c40e8cab6560",
+  "model": "BAAI/bge-reranker-v2-m3",
+  "methodology": "Three previously eligible near-duplicate failures; target and prior wrong passage are scored in both candidate orders to exclude position bias. No cloud inference is used by the reranker.",
+  "rows": [
+    {"caseIndex":5,"order":"wrong-target","expectedId":"semantic-record-185","wrongId":"semantic-record-305","scores":[1.1428834199905396,0.7004956007003784],"expectedIndex":1,"selectedIndex":0,"selectedExpected":false},
+    {"caseIndex":5,"order":"target-wrong","expectedId":"semantic-record-185","wrongId":"semantic-record-305","scores":[0.7004956603050232,1.1428834199905396],"expectedIndex":0,"selectedIndex":1,"selectedExpected":false},
+    {"caseIndex":241,"order":"wrong-target","expectedId":"semantic-record-517","wrongId":"semantic-record-437","scores":[2.367926597595215,0.6426598429679871],"expectedIndex":1,"selectedIndex":0,"selectedExpected":false},
+    {"caseIndex":241,"order":"target-wrong","expectedId":"semantic-record-517","wrongId":"semantic-record-437","scores":[0.6426598429679871,2.367926597595215],"expectedIndex":0,"selectedIndex":1,"selectedExpected":false},
+    {"caseIndex":269,"order":"wrong-target","expectedId":"semantic-record-353","wrongId":"semantic-record-553","scores":[1.7303045988082886,-2.5186378955841064],"expectedIndex":1,"selectedIndex":0,"selectedExpected":false},
+    {"caseIndex":269,"order":"target-wrong","expectedId":"semantic-record-353","wrongId":"semantic-record-553","scores":[-2.5186378955841064,1.7303048372268677],"expectedIndex":0,"selectedIndex":1,"selectedExpected":false}
+  ],
+  "correct": 0,
+  "total": 6,
+  "passed": false,
+  "elapsedSeconds": 6.305,
+  "conclusion": "This generic local cross-encoder does not resolve TRUYN Semantic v2's adversarial near-duplicate ambiguity and is rejected for the production retrieval gate. Evidence is retained append-only."
+}
