@@ -17,6 +17,8 @@ tests/benchmark-evidence.test.js @ilucomutcnas
 tests/security-boundary.test.js @ilucomutcnas
 tests/provider-access.test.js @ilucomutcnas
 tests/runtime-security.test.js @ilucomutcnas
+tests/provider-ownership.test.js @ilucomutcnas
+tests/provider-routing.test.js @ilucomutcnas
 
 docs/benchmarks/ @ilucomutcnas
 

@@ -1,10 +1,10 @@
 # TRUYN Authorization Model
 
-**Status:** approved target architecture; the first fail-closed provider-execution gate is implemented, while tenant/billing/quota/discovery policy remains incremental work.
+**Status:** fail-closed provider-host and node-level relay authorization implemented; authoritative tenant/billing policy core implemented on this branch; full tenant-aware relay wiring, billing attribution and quota enforcement remain incremental work.
 
-## Implemented minimum security gate
+## Existing execution boundary
 
-The current provider runtime implements an identity-bound pre-inference gate:
+The provider runtime enforces authorization before inference:
 
 ```text
 verified NEED
@@ -13,107 +13,158 @@ requester identity (`from`)
     ↓
 provider access policy
     ↓
-ALLOW → materialize context → provider execution
-DENY  → RESULT / PROVIDER_ACCESS_DENIED
-          provider execution count = 0
+ALLOW → provider execution
+DENY  → PROVIDER_ACCESS_DENIED
+          adapter execution count = 0
 ```
 
-Provider runtimes launched through `runtime/service.js` default to `owner-only`. With no explicit requester allowlist they fail closed. A public runtime therefore requires an explicit `TRUYN_PROVIDER_ACCESS_MODE=public` opt-in.
+Provider runtimes launched through `runtime/service.js` default to `owner-only`. An empty requester allowlist denies execution. Public execution requires both public mode and the separate public-provider opt-in.
 
-The gate is covered by negative tests that assert an unauthorized requester is rejected before the adapter's `execute()` method is called.
+The reference relay also applies its current node/provider policy to discovery and dispatch, so an unauthorized requester cannot create a provider event merely by knowing a capability/provider identity.
 
-This first implementation does **not** yet claim the complete tenant, billing-owner, quota, private-discovery or marketplace-grant system described below.
+## Authoritative tenant policy core
+
+This branch adds a stronger server-authoritative layer for the future multi-tenant network:
+
+```text
+authenticated requester identity
+        ↓
+authoritative requester tenant
+        ↓
+signed provider identity
+        ↓
+trusted provider policy / derived self-BYOK policy
+        ↓
+capability + authorization filter
+```
+
+`core/security/provider-ownership.js` resolves provider ownership/tenant/billing policy. `network/relay/provider-routing.js` filters candidate offers through that policy.
+
+Wire payload metadata cannot grant tenant or billing authorization. Without trusted provisioning, a provider is derived as self-scoped BYOK owned by its signed provider identity.
+
+**Current boundary:** `network/relay/server.js` has not yet been migrated to use this tenant registry directly. Its existing node/provider-signed allowlist remains the active relay boundary; the new registry is the tested next-layer policy primitive.
 
 ## Core rule
 
 TRUYN authorization is **server-side, identity-bound and fail-closed**.
 
-The official client, CLI and UI may provide helpful guardrails, but they are not a security boundary. A custom client that bypasses official UX must still be unable to invoke a provider it is not authorized to use.
+Official CLI/UI restrictions are product guardrails, not the security boundary. A custom client must not gain provider access by changing request fields or bypassing the official client.
 
 ## Canonical decision path
 
-Every execution-capable request path must converge on one authorization pipeline:
+Every execution path ultimately converges on:
 
 ```text
 authenticate requester
         ↓
-resolve authoritative requester identity / tenant
+resolve authoritative requester tenant
         ↓
-resolve candidate provider policy
+resolve authoritative provider owner/tenant/policy
         ↓
-authorize visibility + ownership + explicit grants
+capability filter
         ↓
-resolve billing responsibility
+authorization / entitlement
         ↓
-check quota / entitlement
+billing responsibility
+        ↓
+quota / cost policy
         ↓
 rank eligible providers
         ↓
 dispatch
 ```
 
-If any mandatory stage cannot produce a trustworthy answer, dispatch MUST NOT occur.
+If a mandatory stage cannot produce a trustworthy decision, dispatch does not occur.
 
-The current MVP implements the provider-execution authorization checkpoint at the point immediately before provider work. The remaining target stages are added without weakening that invariant.
+## Authoritative identity and tenant
 
-## Authoritative identity
+The implemented tenant registry follows these rules:
 
-The authorization layer may use a cryptographic TRUYN identity, authenticated relay session, account/tenant binding or another trusted provisioning mechanism. The important invariant is that requester authorization attributes are not accepted merely because the requester placed them in a payload.
+- provider identity comes from signed `OFFER.from`;
+- trusted server-side `tenantBindings` may bind several node identities to one tenant;
+- trusted `providerPolicies` define non-default visibility/billing/grants;
+- without trusted provisioning, provider tenant defaults to its signed node identity;
+- payload `ownerId`, `tenantId`, `visibility`, billing mode or cross-tenant flags are non-authoritative.
 
-Requester-controlled fields are claims. Authorization state is derived from authenticated context.
+Trusted policy is snapshotted when the registry is created, preventing later mutation of the input configuration from silently changing authorization.
 
-## Default deny
+## Default deny rules
 
-The following cases are denied by default in the target authorization model:
+The policy core denies by default when:
 
-- provider policy missing;
-- requester tenant unresolved;
-- provider owner unresolved;
-- billing owner unresolved;
-- visibility unknown;
-- explicit sharing required but no grant exists;
-- quota state unavailable when quota is mandatory;
-- legacy route cannot reach the central authorization layer.
+- requester or provider policy cannot be resolved;
+- a BYOK provider is requested cross-tenant;
+- an owner-funded provider is requested cross-tenant;
+- sponsored access is requested while sponsorship is disabled;
+- cross-tenant execution lacks explicit trusted enablement;
+- required caller/tenant entitlement is missing;
+- a route cannot reach the central authorization decision.
 
-For the implemented MVP requester gate specifically, `owner-only` with a missing or empty requester allowlist denies execution.
+## BYOK
 
-## Explicit policy exception
-
-Cross-owner execution is allowed only through an explicit policy/entitlement. Such a policy may represent a shared provider, paid capability, organization grant, sponsored allowance or future marketplace contract.
-
-There is no implicit rule that `authenticated user` means `may use all registered providers`.
-
-## Requester-owned provider
-
-For normal BYOK operation:
+BYOK remains private/self-scoped by default:
 
 ```text
-requester owner == provider owner
+requester tenant == provider tenant
 billingMode == byok
 ```
 
-is the simplest authorization path. It allows TRUYN to route intelligence while the user remains responsible for the upstream provider account.
+Cross-tenant BYOK is hard-denied in the implemented tenant core. If requester and provider use separate node identities, an authoritative tenant binding is required before the policy treats them as the same user/account.
 
-## Owner-funded provider
+Credentials remain at the provider runtime; they do not pass through relay envelopes.
 
-For an owner-funded provider:
+## Owner-funded providers
+
+Cross-tenant `owner-funded` execution is hard-denied in the tenant core, including when malicious payloads or untrusted configuration-like fields attempt to claim network visibility.
+
+For TRUYN-operated providers the invariant is:
 
 ```text
-provider owner != foreign requester owner
-visibility == private
+foreign requester
++ public relay
++ known provider identity/capability
++ custom client
+= zero owner-funded upstream execution
 ```
 
-must result in denial unless a trusted explicit grant exists. The denial must happen before any upstream model request, token reservation or chargeable job is created.
+The provider host independently preserves the final pre-inference deny boundary.
 
-The implemented runtime gate enforces the crucial pre-inference part of this invariant through an exact requester-identity allowlist. Rich owner/tenant/grant policy is the next layer rather than a substitute for this gate.
+## Explicit future entitlements
+
+Cross-tenant execution is possible only through trusted commercial policy. The implemented core currently models eligible explicit entitlement classes such as `prepaid` and `subscription`.
+
+A cross-tenant candidate requires:
+
+1. trusted provider policy;
+2. explicit cross-tenant enablement;
+3. an eligible billing mode;
+4. an exact caller/tenant grant or intentionally trusted network-provider policy.
+
+`sponsored` is represented for future use but disabled by default. Enabling sponsored execution later must also introduce explicit quota/cost controls.
+
+## Discovery and routing
+
+Capability does not imply authorization:
+
+```text
+capability match
+      ↓
+authoritative provider policy
+      ↓
+authorization filter
+      ↓
+eligible provider set
+```
+
+The reusable filter is covered by tests proving that forged provider metadata cannot create a routable foreign provider and that explicit trusted prepaid tenant grants can become routable.
 
 ## Legacy and alternate transports
 
-HTTP, WebSocket, MCP, SDK and future native transports MUST NOT implement independent authorization shortcuts. They may authenticate differently at the edge, but provider authorization converges on one policy decision layer.
+HTTP, WebSocket, compact/fast paths, chains, MCP and SDK integrations must converge on the same policy decision. No legacy route may dispatch around ownership authorization.
 
 ## Audit attributes
 
-An authorization decision should be traceable without exposing credentials. A transaction/audit record should be able to identify, where applicable:
+Future transaction/audit records should identify, without exposing credentials:
 
 ```text
 requesterId
@@ -128,8 +179,6 @@ quotaDecision
 requestId
 ```
 
-Operational identifiers and policy internals may remain private even when the semantic fields are public architecture.
-
 ## Non-goals
 
-This document does not define a universal identity provider, payment processor or global account system. It defines authorization invariants that any implementation must preserve.
+This document does not define a universal identity provider, payment processor or global account system. It defines authorization invariants that those systems must preserve.
