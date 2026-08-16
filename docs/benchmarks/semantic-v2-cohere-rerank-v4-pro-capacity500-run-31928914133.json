@@ -1,0 +1,25 @@
+{
+  "benchmark": "TRUYN Semantic v2 Cohere-rerank-v4.0-pro catalog-default order-invariance diagnostic",
+  "generatedAt": "2026-08-16T05:25:34.581Z",
+  "sourceSha": "6f2ddf743e83ad1704a831a7058a93ad668c6a69",
+  "githubActionsRunId": 31928914133,
+  "model": "Cohere-rerank-v4.0-pro",
+  "deployment": "Cohere-rerank-v4.0-pro",
+  "deploymentSku": "GlobalStandard",
+  "deploymentCapacity": 500,
+  "catalogDefaultCapacity": 500,
+  "result": "blocked_quota",
+  "semanticInferenceCompleted": false,
+  "httpFailure": {
+    "status": 429,
+    "code": "RateLimitReached",
+    "message": "Requests to Cohere-rerank-v4.0-pro exceeded the deployment rate limit after deployment warm-up and repeated Retry-After/backoff attempts."
+  },
+  "controls": {
+    "candidateOrdersPlanned": ["wrong-target", "target-wrong"],
+    "plannedSemanticCalls": 6,
+    "successfulSemanticCalls": 0,
+    "temporaryDeploymentDeleted": true
+  },
+  "conclusion": "Cohere-rerank-v4.0-pro cannot currently be benchmarked in this Azure subscription because the backend returns RateLimitReached even at the Azure catalog default GlobalStandard capacity. This is preserved as quota/access evidence and MUST NOT be interpreted as a semantic quality result. No further capacity escalation is justified for the Semantic Retrieval Gate experiment."
+}
