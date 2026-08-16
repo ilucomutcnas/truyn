@@ -1,0 +1,137 @@
+name: Ephemeral Semantic v2 Dual Compiler Hard Pairs
+
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/tmp-semantic-v2-dual-compiler-hard.yml']
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  diagnostic:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      GCP_PROJECT_ID_VALUE: ${{ vars.GCP_PROJECT_ID || secrets.GCP_PROJECT_ID }}
+      GCP_WIF_PROVIDER_VALUE: ${{ vars.GCP_WIF_PROVIDER || secrets.GCP_WIF_PROVIDER }}
+      GCP_DEPLOYER_SA_VALUE: ${{ vars.GCP_DEPLOYER_SERVICE_ACCOUNT_EMAIL || secrets.GCP_DEPLOYER_SERVICE_ACCOUNT_EMAIL }}
+      GCP_RUNTIME_SA_VALUE: ${{ vars.GCP_RUNTIME_SERVICE_ACCOUNT_EMAIL || secrets.GCP_RUNTIME_SERVICE_ACCOUNT_EMAIL }}
+      GCP_PROXY_REGION: us-east4
+      GCP_AR_REPO: truyn-poc
+      GCP_PROXY_SERVICE: truyn-semanticv2-dual-${{ github.run_id }}
+      SEMANTIC_V2_SOURCE_SHA: 6f2ddf743e83ad1704a831a7058a93ad668c6a69
+      SEMANTIC_V2_PROXY_SHA: c1ea39a3f5a0408035fea7f00604ff14310eda10
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { persist-credentials: false }
+      - uses: actions/setup-node@v4
+        with: { node-version: '20' }
+      - run: npm install --ignore-scripts --no-audit --no-fund
+
+      - name: Load immutable benchmark and proxy sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          load_file(){ mkdir -p "$(dirname "$1")"; curl -fsSL -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" "https://api.github.com/repos/${GITHUB_REPOSITORY}/contents/$1?ref=$2" | jq -r '.content' | tr -d '\n' | base64 -d > "$1"; }
+          load_file benchmarks/semantic-retrieval-v2.js "$SEMANTIC_V2_SOURCE_SHA"
+          load_file benchmarks/semantic-v2-gcp-proxy.js "$SEMANTIC_V2_PROXY_SHA"
+          load_file benchmarks/Dockerfile.semantic-v2-gcp-proxy "$SEMANTIC_V2_PROXY_SHA"
+
+      - uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID_VALUE }}
+          workload_identity_provider: ${{ env.GCP_WIF_PROVIDER_VALUE }}
+          service_account: ${{ env.GCP_DEPLOYER_SA_VALUE }}
+          create_credentials_file: true
+          export_environment_variables: true
+      - uses: google-github-actions/setup-gcloud@v3
+        with: { project_id: '${{ env.GCP_PROJECT_ID_VALUE }}' }
+
+      - name: Prepare isolated runtime-identity Vertex proxy
+        shell: bash
+        run: |
+          set -euo pipefail
+          token="$(openssl rand -hex 32)"; echo "::add-mask::$token"
+          registry="${GCP_PROXY_REGION}-docker.pkg.dev"; image="${registry}/${GCP_PROJECT_ID_VALUE}/${GCP_AR_REPO}/semanticv2-dual:${GITHUB_SHA}"
+          gcloud auth configure-docker "$registry" --quiet
+          docker build -f benchmarks/Dockerfile.semantic-v2-gcp-proxy -t "$image" . >/dev/null && docker push "$image" >/dev/null
+          gcloud run deploy "$GCP_PROXY_SERVICE" --project="$GCP_PROJECT_ID_VALUE" --region="$GCP_PROXY_REGION" --image="$image" --service-account="$GCP_RUNTIME_SA_VALUE" --port=8080 --min=0 --max=1 --cpu=1 --memory=512Mi --set-env-vars="BENCHMARK_PROXY_TOKEN=${token}" --no-invoker-iam-check --quiet >/dev/null
+          url="$(gcloud run services describe "$GCP_PROXY_SERVICE" --project="$GCP_PROJECT_ID_VALUE" --region="$GCP_PROXY_REGION" --format='value(status.url)')"
+          for a in $(seq 1 30); do curl -fsS -H "Authorization: Bearer ${token}" "${url}/health" | jq -e '.ok==true' >/dev/null && break; [[ "$a" -lt 30 ]] || exit 1; sleep 2; done
+          echo "VERTEX_API_ENDPOINT=$url" >> "$GITHUB_ENV"; echo "GCP_ACCESS_TOKEN=$token" >> "$GITHUB_ENV"; echo "GCP_PROJECT_ID=$GCP_PROJECT_ID_VALUE" >> "$GITHUB_ENV"
+
+      - name: Compile six passages once and score aligned semantic facets
+        shell: bash
+        run: |
+          cat > /tmp/dual-compiler.mjs <<'NODE'
+          import fs from 'node:fs';
+          import { createVertexGeminiProvider } from './adapters/providers/vertex-gemini.js';
+          import { createVertexEmbeddingClient } from './adapters/providers/vertex-embedding.js';
+          import vm from 'node:vm';
+
+          const source=fs.readFileSync('benchmarks/semantic-retrieval-v2.js','utf8');
+          const a=source.indexOf('const domains = ['),b=source.indexOf('const fullContext =');
+          if(a<0||b<0) throw new Error('corpus markers');
+          const sandbox={}; vm.createContext(sandbox); vm.runInContext('const corpusSize=600,retrievalCaseCount=360;'+source.slice(a,b)+';globalThis.__data={records,retrievalCases};',sandbox);
+          const {records,retrievalCases}=sandbox.__data;
+          const specs=[
+            {caseIndex:5,wrongId:'semantic-record-305',queryFacets:{domain:'ship route control',action:'operators must confirm permission validity',condition:'utilization has crossed the protective limit and saturation controls are engaged'}},
+            {caseIndex:241,wrongId:'semantic-record-437',queryFacets:{domain:'greenhouse gas record management',action:'recover the malfunctioning system',condition:'the main facility is offline at the remote continuity center'}},
+            {caseIndex:269,wrongId:'semantic-record-553',queryFacets:{domain:'store stock control',action:'preserve audit proof',condition:'outward-facing launch after users can already see it'}}
+          ];
+          const local=[];
+          for(const spec of specs){const item=retrievalCases.find(x=>x.caseIndex===spec.caseIndex),target=records.find(r=>r.id===item.id),wrong=records.find(r=>r.id===spec.wrongId);local.push({alias:`c${local.length}`,caseIndex:spec.caseIndex,role:'wrong',text:wrong.text});local.push({alias:`c${local.length}`,caseIndex:spec.caseIndex,role:'target',text:target.text});}
+          const provider=createVertexGeminiProvider({projectId:process.env.GCP_PROJECT_ID,location:'global',model:'gemini-2.5-flash',endpoint:process.env.VERTEX_API_ENDPOINT,accessTokenProvider:async()=>process.env.GCP_ACCESS_TOKEN,capabilities:['reasoning.general'],requestTimeoutMs:120000});
+          const instruction=[
+            'Compile each authoritative passage independently into semantic retrieval facets.',
+            'For every supplied local alias return concise English DOMAIN, OPERATIONAL_ACTION, CONDITION, and ACTION_EVIDENCE.',
+            'DOMAIN is the real-world subject/process/resource.',
+            'OPERATIONAL_ACTION is the controlled real-world activity the rule governs, not the meta act of following a rule or reading an answer code.',
+            'ACTION_EVIDENCE must copy a short exact source-language span from that passage expressing the controlled activity.',
+            'CONDITION is the state, threshold, time, location, visibility, approval, recovery mode, exception, or scope where the rule applies.',
+            'Translate domain/action/condition into concise English. Do not use or infer any answer code, record id, neighboring passage, query, or expected answer.',
+            'Process each passage independently and preserve local aliases exactly.'
+          ].join(' ');
+          const execution=await provider.execute({capability:'reasoning.general',input:{task:instruction,context:JSON.stringify(local.map(({alias,text})=>({alias,text})))},policy:{providerOptions:{thinkingBudget:0,temperature:0,maxOutputTokens:1600,responseMimeType:'application/json',responseSchema:{type:'OBJECT',properties:{items:{type:'ARRAY',items:{type:'OBJECT',properties:{alias:{type:'STRING'},domain:{type:'STRING'},action:{type:'STRING'},condition:{type:'STRING'},actionEvidence:{type:'STRING'}},required:['alias','domain','action','condition','actionEvidence']}}},required:['items']}}}});
+          const parsed=JSON.parse(execution.output); const compiled=new Map();
+          for(const item of parsed.items||[]){const original=local.find(x=>x.alias===item.alias);if(!original) throw new Error(`unknown alias ${item.alias}`);if(!original.text.includes(item.actionEvidence)) throw new Error(`invalid exact action evidence for ${item.alias}`);compiled.set(item.alias,item);}
+          if(compiled.size!==local.length) throw new Error(`compiled ${compiled.size}/${local.length}`);
+
+          const embedder=createVertexEmbeddingClient({projectId:process.env.GCP_PROJECT_ID,location:'us-central1',model:'gemini-embedding-001',endpoint:process.env.VERTEX_API_ENDPOINT,accessTokenProvider:async()=>process.env.GCP_ACCESS_TOKEN,batchSize:5,outputDimensionality:768,maxRetries:8});
+          const norm=v=>Math.sqrt(v.reduce((s,x)=>s+x*x,0)); const cos=(x,y)=>{let d=0;for(let i=0;i<Math.min(x.length,y.length);i++)d+=x[i]*y[i];const z=norm(x)*norm(y);return z?d/z:0;};
+          const rows=[];
+          for(const spec of specs){
+            const wrong=local.find(x=>x.caseIndex===spec.caseIndex&&x.role==='wrong'),target=local.find(x=>x.caseIndex===spec.caseIndex&&x.role==='target');
+            const wrongF=compiled.get(wrong.alias),targetF=compiled.get(target.alias);
+            const qTexts=[spec.queryFacets.domain,spec.queryFacets.action,spec.queryFacets.condition];
+            const wrongTexts=[wrongF.domain,wrongF.action,wrongF.condition]; const targetTexts=[targetF.domain,targetF.action,targetF.condition];
+            const qv=await embedder.embedMany(qTexts,{taskType:'RETRIEVAL_QUERY'}); const wv=await embedder.embedMany(wrongTexts,{taskType:'RETRIEVAL_DOCUMENT'}); const tv=await embedder.embedMany(targetTexts,{taskType:'RETRIEVAL_DOCUMENT'});
+            const wrongScores=qv.map((q,i)=>cos(q,wv[i])),targetScores=qv.map((q,i)=>cos(q,tv[i]));
+            const mean=x=>x.reduce((s,v)=>s+v,0)/x.length;
+            const strategies={minCoverage:{target:Math.min(...targetScores),wrong:Math.min(...wrongScores)},meanCoverage:{target:mean(targetScores),wrong:mean(wrongScores)},harmonicCoverage:{target:3/targetScores.reduce((s,v)=>s+1/Math.max(1e-6,v),0),wrong:3/wrongScores.reduce((s,v)=>s+1/Math.max(1e-6,v),0)}};
+            rows.push({caseIndex:spec.caseIndex,queryFacets:spec.queryFacets,compiledWrong:{domain:wrongF.domain,action:wrongF.action,condition:wrongF.condition,actionEvidence:wrongF.actionEvidence},compiledTarget:{domain:targetF.domain,action:targetF.action,condition:targetF.condition,actionEvidence:targetF.actionEvidence},facetCosine:{domain:{target:targetScores[0],wrong:wrongScores[0]},action:{target:targetScores[1],wrong:wrongScores[1]},condition:{target:targetScores[2],wrong:wrongScores[2]}},strategies:Object.fromEntries(Object.entries(strategies).map(([k,v])=>[k,{...v,selectedExpected:v.target>v.wrong}]))});
+          }
+          const names=['minCoverage','meanCoverage','harmonicCoverage']; const summary=Object.fromEntries(names.map(name=>[name,{correct:rows.filter(r=>r.strategies[name].selectedExpected).length,total:rows.length,passed:rows.every(r=>r.strategies[name].selectedExpected)}]));
+          const u=execution.metadata?.usage||{};
+          const report={benchmark:'TRUYN Semantic v2 dual semantic compiler aligned-facet hard-pair diagnostic',generatedAt:new Date().toISOString(),sourceSha:process.env.SEMANTIC_V2_SOURCE_SHA,documentCompiler:{model:'gemini-2.5-flash',thinkingBudget:0,batchPassages:local.length,usage:u},embedding:{model:'gemini-embedding-001',outputDimensionality:768,stats:embedder.stats()},privacyBoundary:'document compiler sees local aliases + passage text only; no real block ids, queries, answer codes as metadata, neighboring expectations, or expected labels',rows,summary,anyStrategyPassed:Object.values(summary).some(x=>x.passed)};
+          fs.writeFileSync('semantic-v2-dual-compiler-hard.json',JSON.stringify(report,null,2));console.log(JSON.stringify({documentCompiler:report.documentCompiler,embedding:report.embedding,summary,anyStrategyPassed:report.anyStrategyPassed},null,2));
+          if(!report.anyStrategyPassed) process.exitCode=2;
+          NODE
+          node /tmp/dual-compiler.mjs
+
+      - name: Upload diagnostic evidence
+        if: ${{ always() && hashFiles('semantic-v2-dual-compiler-hard.json') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: truyn-semantic-v2-dual-compiler-hard-${{ github.run_id }}
+          path: semantic-v2-dual-compiler-hard.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Delete isolated Vertex proxy
+        if: always()
+        shell: bash
+        run: gcloud run services delete "$GCP_PROXY_SERVICE" --project="$GCP_PROJECT_ID_VALUE" --region="$GCP_PROXY_REGION" --quiet >/dev/null 2>&1 || true
