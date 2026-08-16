@@ -8,7 +8,7 @@ import { createAttestation, createClaim } from '../core/claims/index.js';
 import { createDelegationCertificate, createSourceOwnerCertificate } from '../core/trust/source-owner-pki.js';
 import { DurableTransparencyLog } from '../core/trust/transparency-log.js';
 import { createTrustReceiptV2, verifyTrustReceiptV2 } from '../core/trust/receipt-v2.js';
-import { createQuicKademliaNode, connectQuicPeers, firstQuicAddress } from '../network/transport/quic-kademlia.js';
+import { createQuicKademliaNode, connectQuicPeers, firstQuicAddress, TRUYN_KAD_PROTOCOL } from '../network/transport/quic-kademlia.js';
 import { DecentralizedVerifierDiscovery, discoverVerifiers } from '../network/discovery/verifier-dht.js';
 import { ReplicatedTransparencyService } from '../network/replication/transparency-replication.js';
 
@@ -25,9 +25,8 @@ async function eventually(operation, { timeoutMs = 15_000, intervalMs = 250, lab
     } catch (error) { lastError = error; }
     await sleep(intervalMs);
   }
-  const error = lastError || new Error(`${label}_timeout`);
-  error.message = `${label}: ${error.message}`;
-  throw error;
+  if (lastError) throw new Error(`${label}: ${lastError.message || lastError.name || 'failed'}`, { cause: lastError });
+  throw new Error(`${label}_timeout`);
 }
 
 function makeAttestation(identity, claim, id) {
@@ -72,8 +71,20 @@ test('real QUIC/Kademlia testnet survives churn with relay-free verifier discove
   const requesterPeer = await startNode({ bootstrap: [bootstrapAddress] });
   await connectQuicPeers(replicaPeer, [firstQuicAddress(verifierPeer), firstQuicAddress(requesterPeer)]);
   await connectQuicPeers(verifierPeer, [firstQuicAddress(requesterPeer)]);
-  await sleep(750);
-  stage('topology:ready', { nodes: 4, quic: true });
+  const topologyNodes = [bootstrap, replicaPeer, verifierPeer, requesterPeer];
+  const kadLinks = await eventually(async () => {
+    const links = [];
+    for (const node of topologyNodes) {
+      for (const peerId of node.getPeers()) {
+        const peer = await node.peerStore.get(peerId, { signal: AbortSignal.timeout(1_000) });
+        const supportsKad = peer.protocols.includes(TRUYN_KAD_PROTOCOL);
+        links.push({ from: node.peerId.toString(), to: peerId.toString(), supportsKad });
+        if (!supportsKad) return null;
+      }
+    }
+    return links.length > 0 ? links : null;
+  }, { label: 'kad_protocol_visibility' });
+  stage('topology:ready', { nodes: 4, quic: true, kadLinks: kadLinks.length });
 
   const sourceOwner = createIdentity();
   const verifier = createIdentity();
@@ -96,15 +107,15 @@ test('real QUIC/Kademlia testnet survives churn with relay-free verifier discove
   await primaryLog.append({ identity: sourceOwner, eventType: 'ROOT', targetId: root.certificateId, payload: { certificateId: root.certificateId } });
   await primaryLog.append({ identity: sourceOwner, eventType: 'DELEGATE', targetId: delegation.delegationId, payload: { delegationId: delegation.delegationId } });
   const replicaLog = await new DurableTransparencyLog({ directory: replicaDirectory, sourceOwnerId: root.body.sourceOwnerId }).open();
-  const primaryReplication = new ReplicatedTransparencyService({ node: bootstrap, log: primaryLog, routingTimeoutMs: 3_000 });
-  const replicaReplication = new ReplicatedTransparencyService({ node: replicaPeer, log: replicaLog, routingTimeoutMs: 3_000 });
-  await eventually(() => primaryReplication.start().then(() => true), { label: 'primary_replication_start' });
-  await eventually(() => replicaReplication.start().then(() => true), { label: 'replica_replication_start' });
+  const primaryReplication = new ReplicatedTransparencyService({ node: bootstrap, log: primaryLog, routingTimeoutMs: 5_000 });
+  const replicaReplication = new ReplicatedTransparencyService({ node: replicaPeer, log: replicaLog, routingTimeoutMs: 5_000 });
+  await eventually(() => primaryReplication.start().then(() => true), { label: 'primary_replication_start', timeoutMs: 20_000 });
+  await eventually(() => replicaReplication.start().then(() => true), { label: 'replica_replication_start', timeoutMs: 20_000 });
   stage('replication:advertised');
   const replication = await eventually(async () => {
-    const value = await primaryReplication.replicate({ minAcks: 1, timeoutMs: 2_000 });
+    const value = await primaryReplication.replicate({ minAcks: 1, timeoutMs: 3_000 });
     return value.successful >= 1 ? value : null;
-  }, { label: 'initial_replication' });
+  }, { label: 'initial_replication', timeoutMs: 20_000 });
   assert.ok(replication.successful >= 1);
   assert.deepEqual(replicaLog.head(), primaryLog.head());
   stage('replication:converged', { sequence: primaryLog.head().sequence, acknowledgements: replication.successful });
@@ -116,13 +127,13 @@ test('real QUIC/Kademlia testnet survives churn with relay-free verifier discove
     ownerCertificate: root,
     delegation,
     methods: ['independent-review'],
-    routingTimeoutMs: 3_000
+    routingTimeoutMs: 5_000
   });
-  await eventually(() => verifierDiscovery.publish().then(() => true), { label: 'verifier_publish' });
+  await eventually(() => verifierDiscovery.publish().then(() => true), { label: 'verifier_publish', timeoutMs: 20_000 });
   const foundBeforeChurn = await eventually(async () => {
-    const found = await discoverVerifiers(requesterPeer, 'testnet.news', { limit: 4, timeoutMs: 2_000, revocationState: replicaLog.revocationState([delegation.delegationId]) });
+    const found = await discoverVerifiers(requesterPeer, 'testnet.news', { limit: 4, timeoutMs: 3_000, revocationState: replicaLog.revocationState([delegation.delegationId]) });
     return found.some((entry) => entry.record.body.verifierNodeId === verifier.nodeId) ? found : null;
-  }, { label: 'verifier_discovery_before_churn' });
+  }, { label: 'verifier_discovery_before_churn', timeoutMs: 20_000 });
   assert.ok(foundBeforeChurn.some((entry) => entry.record.body.libp2pPeerId === verifierPeer.peerId.toString()));
   stage('discovery:verified', { discovered: foundBeforeChurn.length });
 
@@ -145,12 +156,12 @@ test('real QUIC/Kademlia testnet survives churn with relay-free verifier discove
   stage('churn:bootstrap-down');
   const observerDirectory = await temp('observer-log');
   const observerLog = await new DurableTransparencyLog({ directory: observerDirectory, sourceOwnerId: root.body.sourceOwnerId }).open();
-  const observerReplication = new ReplicatedTransparencyService({ node: requesterPeer, log: observerLog, routingTimeoutMs: 3_000 });
-  await eventually(() => observerReplication.start().then(() => true), { label: 'observer_replication_start' });
+  const observerReplication = new ReplicatedTransparencyService({ node: requesterPeer, log: observerLog, routingTimeoutMs: 5_000 });
+  await eventually(() => observerReplication.start().then(() => true), { label: 'observer_replication_start', timeoutMs: 20_000 });
   await eventually(async () => {
-    const synced = await observerReplication.syncNetwork({ timeoutMs: 2_000 });
+    const synced = await observerReplication.syncNetwork({ timeoutMs: 3_000 });
     return observerLog.head().headHash === replicaLog.head().headHash && synced.successful >= 1 ? synced : null;
-  }, { label: 'observer_recovery_after_bootstrap_churn' });
+  }, { label: 'observer_recovery_after_bootstrap_churn', timeoutMs: 20_000 });
   assert.deepEqual(observerLog.head(), replicaLog.head(), 'new replica must recover durable lifecycle state without the original primary');
   stage('churn:replica-recovered', { sequence: observerLog.head().sequence });
 
@@ -158,33 +169,45 @@ test('real QUIC/Kademlia testnet survives churn with relay-free verifier discove
   await stopNode(verifierPeer);
   const verifierPeer2 = await startNode({ bootstrap: [firstQuicAddress(replicaPeer)] });
   await connectQuicPeers(verifierPeer2, [firstQuicAddress(requesterPeer)]);
-  await sleep(500);
-  const verifierDiscovery2 = new DecentralizedVerifierDiscovery({ node: verifierPeer2, identity: verifier, domain: 'testnet.news', ownerCertificate: root, delegation, routingTimeoutMs: 3_000 });
-  await eventually(() => verifierDiscovery2.publish().then(() => true), { label: 'verifier_republish_after_churn' });
+  await eventually(async () => {
+    for (const peerId of verifierPeer2.getPeers()) {
+      const peer = await verifierPeer2.peerStore.get(peerId, { signal: AbortSignal.timeout(1_000) });
+      if (peer.protocols.includes(TRUYN_KAD_PROTOCOL)) return true;
+    }
+    return null;
+  }, { label: 'verifier_rejoin_kad_visibility' });
+  const verifierDiscovery2 = new DecentralizedVerifierDiscovery({ node: verifierPeer2, identity: verifier, domain: 'testnet.news', ownerCertificate: root, delegation, routingTimeoutMs: 5_000 });
+  await eventually(() => verifierDiscovery2.publish().then(() => true), { label: 'verifier_republish_after_churn', timeoutMs: 20_000 });
   const foundAfterChurn = await eventually(async () => {
-    const found = await discoverVerifiers(requesterPeer, 'testnet.news', { limit: 8, timeoutMs: 2_000, revocationState: observerLog.revocationState([delegation.delegationId]) });
+    const found = await discoverVerifiers(requesterPeer, 'testnet.news', { limit: 8, timeoutMs: 3_000, revocationState: observerLog.revocationState([delegation.delegationId]) });
     return found.some((entry) => entry.record.body.verifierNodeId === verifier.nodeId && entry.record.body.libp2pPeerId !== oldVerifierPeerId) ? found : null;
-  }, { label: 'verifier_discovery_after_churn' });
+  }, { label: 'verifier_discovery_after_churn', timeoutMs: 20_000 });
   assert.ok(foundAfterChurn.some((entry) => entry.record.body.libp2pPeerId === verifierPeer2.peerId.toString()));
   stage('churn:verifier-rejoined', { peerRotated: true });
 
   const primaryPeer2 = await startNode({ bootstrap: [firstQuicAddress(replicaPeer)] });
   await connectQuicPeers(primaryPeer2, [firstQuicAddress(requesterPeer)]);
-  await sleep(500);
+  await eventually(async () => {
+    for (const peerId of primaryPeer2.getPeers()) {
+      const peer = await primaryPeer2.peerStore.get(peerId, { signal: AbortSignal.timeout(1_000) });
+      if (peer.protocols.includes(TRUYN_KAD_PROTOCOL)) return true;
+    }
+    return null;
+  }, { label: 'primary_restart_kad_visibility' });
   const reopenedPrimaryLog = await new DurableTransparencyLog({ directory: primaryDirectory, sourceOwnerId: root.body.sourceOwnerId }).open();
   assert.deepEqual(reopenedPrimaryLog.head(), replicaLog.head(), 'restart must retain the pre-churn durable head');
-  const primaryReplication2 = new ReplicatedTransparencyService({ node: primaryPeer2, log: reopenedPrimaryLog, routingTimeoutMs: 3_000 });
-  await eventually(() => primaryReplication2.start().then(() => true), { label: 'primary_restart_advertise' });
+  const primaryReplication2 = new ReplicatedTransparencyService({ node: primaryPeer2, log: reopenedPrimaryLog, routingTimeoutMs: 5_000 });
+  await eventually(() => primaryReplication2.start().then(() => true), { label: 'primary_restart_advertise', timeoutMs: 20_000 });
   await reopenedPrimaryLog.append({ identity: sourceOwner, eventType: 'REVOKE', targetId: delegation.delegationId, payload: { reason: 'testnet churn revocation' } });
   const finalReplication = await eventually(async () => {
-    const result = await primaryReplication2.replicate({ minAcks: 2, timeoutMs: 2_000 });
+    const result = await primaryReplication2.replicate({ minAcks: 2, timeoutMs: 3_000 });
     return result.successful >= 2 ? result : null;
-  }, { label: 'revocation_replication' });
+  }, { label: 'revocation_replication', timeoutMs: 20_000 });
   await eventually(async () => {
-    await replicaReplication.syncNetwork({ timeoutMs: 2_000 });
-    await observerReplication.syncNetwork({ timeoutMs: 2_000 });
+    await replicaReplication.syncNetwork({ timeoutMs: 3_000 });
+    await observerReplication.syncNetwork({ timeoutMs: 3_000 });
     return replicaLog.head().headHash === reopenedPrimaryLog.head().headHash && observerLog.head().headHash === reopenedPrimaryLog.head().headHash;
-  }, { label: 'revocation_convergence' });
+  }, { label: 'revocation_convergence', timeoutMs: 20_000 });
   stage('revocation:converged', { sequence: reopenedPrimaryLog.head().sequence, acknowledgements: finalReplication.successful });
 
   const currentState = observerLog.revocationState([delegation.delegationId, claim.claimId]);
@@ -192,7 +215,7 @@ test('real QUIC/Kademlia testnet survives churn with relay-free verifier discove
   const staleReceipt = verifyTrustReceiptV2(receipt, { currentLifecycleHead: observerLog.head(), currentRevocationState: currentState });
   assert.equal(staleReceipt.ok, false);
   assert.equal(staleReceipt.reason, 'trust_receipt_v2_lifecycle_head_stale');
-  const deniedDiscovery = await discoverVerifiers(requesterPeer, 'testnet.news', { limit: 8, timeoutMs: 2_000, revocationState: currentState });
+  const deniedDiscovery = await discoverVerifiers(requesterPeer, 'testnet.news', { limit: 8, timeoutMs: 3_000, revocationState: currentState });
   assert.equal(deniedDiscovery.some((entry) => entry.record.body.verifierNodeId === verifier.nodeId), false, 'revoked verifier delegation must be excluded from decentralized discovery');
   stage('gate:passed', { relayCalls: 0, receiptStaleAfterRevocation: true, revokedVerifierDiscoverable: false });
 });

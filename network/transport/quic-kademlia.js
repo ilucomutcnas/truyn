@@ -23,7 +23,11 @@ export async function createQuicKademliaNode({
       dht: kadDHT({
         protocol: TRUYN_KAD_PROTOCOL,
         clientMode: false,
-        kBucketSize
+        kBucketSize,
+        // A fresh private testnet must be able to issue its first query before the
+        // background self-query has completed. The query still goes through the
+        // real Kad routing/content-routing implementation and remote ADD_PROVIDER.
+        allowQueryWithZeroPeers: true
       })
     }
   });
@@ -33,9 +37,6 @@ export async function createQuicKademliaNode({
     const target = typeof address === 'string' ? multiaddr(address) : address;
     await node.dial(target, { signal: AbortSignal.timeout(5_000) });
   }
-  // Direct QUIC bootstrap peers are only routing-table seeds. Do not await the DHT's
-  // full bootstrap walk here: it is background maintenance and can outlive a test
-  // operation. Every user-visible DHT operation below is independently time-bounded.
   return node;
 }
 
