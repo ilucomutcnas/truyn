@@ -52,25 +52,23 @@ function normalizeStabilityRanks(stabilityRecheckDenseRanks, confidenceDenseRank
  *
  * Input candidates MUST already be ordered best-first by the dense retriever.
  * Two independent cheap semantic judges inspect only the first cheapCandidateK
- * candidates. Their agreement is accepted only when the agreed passage also
- * remains inside the configured dense confidence rank. All other requests fail
- * closed into a stronger verifier.
+ * candidates. Their agreement is accepted only inside the configured dense
+ * confidence rank. Everything else fails closed to a stronger verifier.
  *
- * When verifierCandidateTiers is configured, the fallback uses the smallest
- * dense-prefix tier that contains all observed cheap selections, with
- * maxCandidates as the final fail-closed tier. This reduces verifier context
- * without using case, language, category, answer or expected-ID hints.
+ * verifierCandidateTiers selects the smallest dense-prefix verifier tier that
+ * contains the observed cheap selections; maxCandidates remains the final
+ * fail-closed tier. No case/language/category/expected-answer hints are used.
  *
- * stabilityRecheckDenseRanks optionally hardens selected dense ranks against
- * stochastic or position-sensitive false agreement. For those ranks only, both
- * cheap judges are repeated with the candidate order reversed. The cheap result
- * is accepted only if both repeated selections resolve to the same original
- * passage as the initial agreement. Any instability fails closed to the strong
- * verifier. The rule is generic and uses only observed rank and reproducibility.
+ * stabilityRecheckDenseRanks hardens selected ranks against position-sensitive
+ * false agreement. At those ranks the cheaper Lite judge is repeated with the
+ * candidate order reversed. The initial agreement is accepted only if that
+ * independent reordered pass resolves to the same original passage; otherwise
+ * the request fails closed to the strong verifier. The second initial cheap
+ * judge is intentionally not repeated: the recheck is an instability detector,
+ * not another vote, which keeps the routing cost inside the economic gate.
  *
- * Every provider-facing selection is delegated to createProviderSemanticReranker,
- * which replaces real block IDs/CIDs with request-local aliases. No provider in
- * this gate receives TRUYN routing identifiers.
+ * Provider-facing calls always go through createProviderSemanticReranker, which
+ * replaces real block IDs/CIDs with request-local aliases.
  */
 export function createConfidenceGatedSemanticReranker({
   liteProvider,
@@ -153,26 +151,14 @@ export function createConfidenceGatedSemanticReranker({
     let stabilityChecked = false;
     let stabilityPassed = true;
     let stabilityLiteDenseRank = null;
-    let stabilityFlashDenseRank = null;
     if (agreement && stabilityRanks?.includes(agreedDenseRank)) {
       stabilityChecked = true;
       metrics.stabilityRechecks += 1;
       const reversedCandidates = [...cheapCandidates].reverse();
-      const [liteStability, flashStability] = await Promise.all([
-        lite.rerank(query, reversedCandidates),
-        flash.rerank(query, reversedCandidates)
-      ]);
+      const liteStability = await lite.rerank(query, reversedCandidates);
       stabilityLiteDenseRank = candidates.findIndex((candidate) => candidate.id === liteStability.id) + 1;
-      stabilityFlashDenseRank = candidates.findIndex((candidate) => candidate.id === flashStability.id) + 1;
-      stabilityPassed = liteStability.id === liteResult.id
-        && flashStability.id === flashResult.id
-        && liteStability.id === flashStability.id;
-      cheapMetadata = combineMetadata([
-        liteResult.metadata,
-        flashResult.metadata,
-        liteStability.metadata,
-        flashStability.metadata
-      ]);
+      stabilityPassed = liteStability.id === liteResult.id;
+      cheapMetadata = combineMetadata([liteResult.metadata, flashResult.metadata, liteStability.metadata]);
       if (!stabilityPassed) metrics.stabilityFailures += 1;
     }
 
@@ -190,7 +176,7 @@ export function createConfidenceGatedSemanticReranker({
           stabilityChecked,
           stabilityPassed,
           stabilityLiteDenseRank,
-          stabilityFlashDenseRank,
+          stabilityFlashDenseRank:null,
           cheapCandidateK,
           confidenceDenseRankMax,
           stabilityRecheckDenseRanks:stabilityRanks ? [...stabilityRanks] : null,
@@ -201,10 +187,9 @@ export function createConfidenceGatedSemanticReranker({
 
     metrics.verifierFallbacks += 1;
     if (!agreement) metrics.cheapDisagreements += 1;
-    else if (stabilityChecked && !stabilityPassed) metrics.stabilityFailures += 0;
-    else metrics.lowDenseConfidence += 1;
+    else if (!stabilityChecked || stabilityPassed) metrics.lowDenseConfidence += 1;
 
-    const observedRanks = [liteDenseRank, flashDenseRank, stabilityLiteDenseRank, stabilityFlashDenseRank]
+    const observedRanks = [liteDenseRank, flashDenseRank, stabilityLiteDenseRank]
       .filter((rank) => Number.isInteger(rank) && rank > 0);
     const observedDenseRank = observedRanks.length > 0 ? Math.max(...observedRanks) : maxCandidates;
     const verifierCandidateK = verifierTiers
@@ -226,7 +211,7 @@ export function createConfidenceGatedSemanticReranker({
         stabilityChecked,
         stabilityPassed,
         stabilityLiteDenseRank,
-        stabilityFlashDenseRank,
+        stabilityFlashDenseRank:null,
         verifierCandidateK,
         cheapCandidateK,
         confidenceDenseRankMax,
@@ -247,6 +232,7 @@ export function createConfidenceGatedSemanticReranker({
       maxCandidates,
       verifierCandidateTiers:verifierTiers ? [...verifierTiers] : null,
       stabilityRecheckDenseRanks:stabilityRanks ? [...stabilityRanks] : null,
+      stabilityRecheckJudge:stabilityRanks ? 'lite' : null,
       lite:lite.stats(),
       flash:flash.stats(),
       verifier:verifier.stats(),
