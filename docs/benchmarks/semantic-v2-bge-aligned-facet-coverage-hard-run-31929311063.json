@@ -1,0 +1,25 @@
+{
+  "benchmark": "TRUYN Semantic v2 BGE aligned-facet coverage hard-pair diagnostic",
+  "generatedAt": "2026-08-16T05:35:05.418768+00:00",
+  "sourceSha": "6f2ddf743e83ad1704a831a7058a93ad668c6a69",
+  "githubActionsRunId": 31929311063,
+  "githubActionsArtifactId": 9258816979,
+  "artifactDigest": "sha256:a38e0a51465ca7cab1cc71d4081c31d395a390e5553d14291d15b0d64c6e0c58",
+  "model": "BAAI/bge-reranker-v2-m3",
+  "modelRevision": "c0abf900d43de6a2652b9acd221bb1b45ab65d6e",
+  "license": "Apache-2.0",
+  "runtime": {"python":"3.12.13","torch":"2.8.0+cpu","device":"cpu","modelLoadMs":9373.493,"totalScoringMs":8326.199},
+  "importantFinding": "The isolated operational-action facet ranked the expected target above the previous wrong passage in all 3/3 eligible hard cases. Whole-passage domain/condition scoring remained contaminated by unrelated passage terms, so no generic aggregation reached 3/3.",
+  "actionFacet": {
+    "case5": {"targetRaw":-0.9617834091186523,"wrongRaw":-4.3038330078125,"margin":3.3420495986938477,"targetWins":true},
+    "case241": {"targetRaw":-5.837972640991211,"wrongRaw":-7.390240669250488,"margin":1.5522680282592773,"targetWins":true},
+    "case269": {"targetRaw":-5.389615058898926,"wrongRaw":-9.455126762390137,"margin":4.065511703491211,"targetWins":true}
+  },
+  "summary": {
+    "minCoverage":{"correct":2,"total":3,"passed":false},
+    "geometricMean":{"correct":1,"total":3,"passed":false},
+    "arithmeticMean":{"correct":1,"total":3,"passed":false},
+    "facetWins":{"correct":1,"total":3,"passed":false}
+  },
+  "conclusion": "Aligned query facets expose the decisive operational signal, but BGE scoring of each facet against the entire passage still allows other passage fields to contaminate domain/condition relevance. This architecture is not accepted. The next experiment should use an instruction-aware conjunction reranker or aligned document facets rather than tune aggregation weights on this hard set."
+}
