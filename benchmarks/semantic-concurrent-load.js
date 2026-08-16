@@ -252,11 +252,12 @@ try {
     roots:[rootFixtures[0]],
     repetitionsPerActorPerRoot:10
   }));
+  const multiRootRepetitions = 10;
   scenarios.push(await runBurst({
-    name:'350 simultaneous NEEDs / five root CIDs / one shared question',
+    name:`${ACTORS.length * rootFixtures.length * multiRootRepetitions} simultaneous NEEDs / ${rootFixtures.length} root CIDs / one shared question`,
     question:'alpha concurrent multi root question',
     roots:rootFixtures,
-    repetitionsPerActorPerRoot:10
+    repetitionsPerActorPerRoot:multiRootRepetitions
   }));
 
   const report = {
