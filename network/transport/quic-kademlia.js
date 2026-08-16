@@ -38,6 +38,16 @@ export async function createQuicKademliaNode({
     }
   });
 
+  // Current Kad topology handling adds peers on protocol connect, but does not
+  // remove routing-table contacts on libp2p disconnect. Under churn that leaves a
+  // dead bootstrap/peer eligible for closest-peer queries and can abort provider
+  // publication. Keep the Kad routing table aligned with live libp2p connectivity.
+  node.addEventListener('peer:disconnect', (event) => {
+    const peerId = event.detail;
+    if (!peerId || node.status !== 'started') return;
+    void node.services.dht.routingTable.remove(peerId, { signal: AbortSignal.timeout(5_000) }).catch(() => {});
+  });
+
   if (start) await node.start();
   for (const address of bootstrap) {
     const target = typeof address === 'string' ? multiaddr(address) : address;
