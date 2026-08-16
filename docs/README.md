@@ -16,6 +16,7 @@ Human-facing documentation for TRUYN architecture, concepts, setup, operations, 
 - [Public / Private Information Boundary](architecture/PUBLIC_PRIVATE_BOUNDARY.md) — what belongs in the public repository versus private operations.
 - [Production Semantic Index Lifecycle](architecture/SEMANTIC_INDEX_LIFECYCLE.md) — persistent root-CID index lifecycle, immutable block-vector reuse, explicit preparation, invalidation, and cold/warm startup for Semantic Retrieval Gate v2.
 - [Semantic Retrieval Scale Gate v3](architecture/SEMANTIC_SCALE_GATE_V3.md) — implemented and measured 600 → 10,000 → 100,000-block scale architecture, sharded durable vectors, fixed semantic/privacy/economic gates, latency definitions, and 100/1,000-node exercises.
+- [Distributed Semantic Retrieval](architecture/DISTRIBUTED_SEMANTIC_RETRIEVAL.md) — implemented network primitive where immutable blocks may live on multiple signed nodes: root-CID discovery, authorized partition holders, bounded candidate transfer, holder receipts, content-addressed provenance, replica placement, and fail-closed coverage.
 
 ### Provider and edge architecture
 
@@ -33,6 +34,8 @@ Human-facing documentation for TRUYN architecture, concepts, setup, operations, 
 - [Semantic Retrieval v2 Confidence Gate — 2026-08-16](benchmarks/SEMANTIC_RETRIEVAL_V2_CONFIDENCE_GATE_2026-08-16.md) — final Semantic v2 accuracy/stability/economic evidence.
 - [Semantic Index Lifecycle — 2026-08-16](benchmarks/SEMANTIC_INDEX_LIFECYCLE_2026-08-16.md) — persistent-index lifecycle and immutable-vector reuse proof.
 - [Semantic Scale Gate v3 — 2026-08-16](benchmarks/SEMANTIC_SCALE_GATE_V3_2026-08-16.md) — measured 600 / 10,000 / 100,000-block infrastructure-scale proof with cold/warm p50/p95/p99 and 100/1,000-node exercises.
+- [Semantic Concurrent Load — 2026-08-16](benchmarks/SEMANTIC_CONCURRENT_LOAD_2026-08-16.md) — signed multi-agent concurrent NEED and semantic-work single-flight proof, including the preserved 256-event relay queue boundary failure.
+- [Distributed Semantic Retrieval — 2026-08-16](benchmarks/DISTRIBUTED_SEMANTIC_RETRIEVAL_2026-08-16.md) — 600-block / four-partition / five-holder network proof with a replica, 48/48 correct retrieval, 100% provenance/minimal/no-ID, zero unauthorized holder work and 90.025% measured context-payload reduction.
 - [Multimodal Provider Parity Benchmark](benchmarks/MULTIMODAL_PROVIDER_PARITY.md) — public apples-to-apples methodology for reasoning, image and video comparisons.
 
 ### Benchmark documentation boundary
