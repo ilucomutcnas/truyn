@@ -1,4 +1,4 @@
-name: Temporary Relay Front Door Recovery
+name: Temporary Front Door Relay Route Discovery
 
 on:
   push:
@@ -10,15 +10,13 @@ permissions:
   id-token: write
 
 jobs:
-  recover:
+  discover:
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 10
     env:
       AZURE_CLIENT_ID_VALUE: ${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }}
       AZURE_TENANT_ID_VALUE: ${{ vars.AZURE_TENANT_ID || secrets.AZURE_TENANT_ID }}
       AZURE_SUBSCRIPTION_ID_VALUE: ${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}
-      CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKENS }}
-      CF_ZONE_ID: ${{ secrets.CLOUDFLARE_ZONE_ID || vars.CLOUDFLARE_ZONE_ID }}
       PUBLIC_RELAY_URL: https://relay.truyn.org
     steps:
       - name: Authenticate Azure with main-only OIDC
@@ -28,65 +26,64 @@ jobs:
           tenant-id: ${{ env.AZURE_TENANT_ID_VALUE }}
           subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID_VALUE }}
 
-      - name: Discover live Front Door and restore Cloudflare CNAME
+      - name: Discover exact live Front Door route without mutation
         shell: bash
         run: |
           set -euo pipefail
-          [[ -n "${CF_TOKEN:-}" && -n "${CF_ZONE_ID:-}" ]] || { echo 'AFD_RECOVERY=FAIL missing_cloudflare_binding'; exit 10; }
-
-          # Keep the current DNS record only as an in-run rollback file; never print the origin target.
-          dns_base="https://api.cloudflare.com/client/v4/zones/${CF_ZONE_ID}/dns_records"
-          dns="$(curl -sS -G -H "Authorization: Bearer ${CF_TOKEN}" --data-urlencode 'name=relay.truyn.org' "$dns_base")"
-          jq -e '.success == true and (.result | length) == 1' <<<"$dns" >/dev/null || { echo 'AFD_RECOVERY=FAIL dns_lookup'; exit 11; }
-          record_id="$(jq -r '.result[0].id' <<<"$dns")"
-          echo "::add-mask::$record_id"
-          jq '.result[0] | {type,name,content,ttl,proxied}' <<<"$dns" > /tmp/dns-before.json
-          old_content="$(jq -r '.content' /tmp/dns-before.json)"
-          echo "::add-mask::$old_content"
+          API='2025-04-15'
+          : > /tmp/live-endpoints.tsv
 
           profiles="$(az resource list --resource-type Microsoft.Cdn/profiles -o json)"
           mapfile -t profile_ids < <(jq -r '.[] | select((.sku.name // "") | test("AzureFrontDoor"; "i")) | .id' <<<"$profiles")
-          [[ "${#profile_ids[@]}" -gt 0 ]] || { echo 'AFD_RECOVERY=FAIL no_afd_profile'; exit 12; }
+          [[ "${#profile_ids[@]}" -gt 0 ]] || { echo 'AFD_ROUTE_DISCOVERY=FAIL no_afd_profile'; exit 10; }
 
-          : > /tmp/candidates
           for profile_id in "${profile_ids[@]}"; do
             echo "::add-mask::$profile_id"
-            endpoints="$(az rest --method get --url "https://management.azure.com${profile_id}/afdEndpoints?api-version=2025-04-15" 2>/dev/null || echo '{}')"
-            while IFS= read -r host; do
-              [[ -n "$host" ]] || continue
-              echo "::add-mask::$host"
-              code="$(curl -sS --max-time 15 --connect-to "relay.truyn.org:443:${host}:443" -o /tmp/afd-probe.body -w '%{http_code}' "https://relay.truyn.org/health" || true)"
+            endpoints="$(az rest --method get --url "https://management.azure.com${profile_id}/afdEndpoints?api-version=${API}" 2>/dev/null || echo '{}')"
+            while IFS=$'\t' read -r endpoint_id endpoint_name endpoint_host enabled; do
+              [[ "$enabled" == 'Enabled' && -n "$endpoint_id" && -n "$endpoint_host" ]] || continue
+              for value in "$endpoint_id" "$endpoint_name" "$endpoint_host"; do [[ -n "$value" ]] && echo "::add-mask::$value"; done
+              code="$(curl -sS --max-time 15 --connect-to "relay.truyn.org:443:${endpoint_host}:443" -o /tmp/afd-live.body -w '%{http_code}' "https://relay.truyn.org/health" || true)"
               if [[ "$code" == '200' ]]; then
-                printf '%s\n' "$host" >> /tmp/candidates
+                printf '%s\t%s\t%s\t%s\n' "$profile_id" "$endpoint_id" "$endpoint_name" "$endpoint_host" >> /tmp/live-endpoints.tsv
               fi
-            done < <(jq -r '.value[]? | select(.properties.enabledState=="Enabled") | .properties.hostName // empty' <<<"$endpoints")
+            done < <(jq -r '.value[]? | [.id, .name, (.properties.hostName // ""), (.properties.enabledState // "")] | @tsv' <<<"$endpoints")
           done
 
-          candidate_count="$(sort -u /tmp/candidates | sed '/^$/d' | wc -l | tr -d ' ')"
-          [[ "$candidate_count" == 1 ]] || { echo "AFD_RECOVERY=FAIL live_candidate_count=${candidate_count}"; exit 13; }
-          target="$(sort -u /tmp/candidates | head -n1)"
-          echo "::add-mask::$target"
-          echo 'AFD_DISCOVERY=PASS unique_live_endpoint=true'
+          live_count="$(sort -u /tmp/live-endpoints.tsv | sed '/^$/d' | wc -l | tr -d ' ')"
+          [[ "$live_count" == 1 ]] || { echo "AFD_ROUTE_DISCOVERY=FAIL live_endpoint_count=${live_count}"; exit 11; }
+          IFS=$'\t' read -r profile_id endpoint_id endpoint_name endpoint_host < <(sort -u /tmp/live-endpoints.tsv)
+          echo 'AFD_LIVE_ENDPOINT=PASS unique=true'
 
-          body="$(jq -nc --arg target "$target" '{type:"CNAME",name:"relay.truyn.org",content:$target,ttl:1,proxied:true}')"
-          changed="$(curl -sS -X PUT -H "Authorization: Bearer ${CF_TOKEN}" -H 'Content-Type: application/json' --data "$body" "${dns_base}/${record_id}")"
-          jq -e '.success == true and .result.type=="CNAME" and .result.proxied==true' <<<"$changed" >/dev/null || { echo 'AFD_RECOVERY=FAIL dns_write'; exit 14; }
+          domains="$(az rest --method get --url "https://management.azure.com${profile_id}/customDomains?api-version=${API}" 2>/dev/null || echo '{}')"
+          mapfile -t domain_ids < <(jq -r '.value[]? | select((.properties.hostName // "") == "relay.truyn.org") | .id' <<<"$domains")
+          [[ "${#domain_ids[@]}" == 1 ]] || { echo "AFD_ROUTE_DISCOVERY=FAIL relay_custom_domain_count=${#domain_ids[@]}"; exit 12; }
+          domain_id="${domain_ids[0]}"
+          echo "::add-mask::$domain_id"
+          echo 'AFD_CUSTOM_DOMAIN=PASS unique=true'
 
-          ok=0; last='000'
-          for attempt in $(seq 1 60); do
-            last="$(curl -sS --max-time 10 -D /tmp/public.headers -o /tmp/public.body -w '%{http_code}' "${PUBLIC_RELAY_URL}/health" || true)"
-            if [[ "$last" == '200' ]] && grep -qi '^cf-ray:' /tmp/public.headers; then ok=1; break; fi
-            sleep 3
-          done
-          if [[ "$ok" != 1 ]]; then
-            rollback="$(cat /tmp/dns-before.json)"
-            curl -sS -X PUT -H "Authorization: Bearer ${CF_TOKEN}" -H 'Content-Type: application/json' --data "$rollback" "${dns_base}/${record_id}" >/dev/null || true
-            echo "AFD_RECOVERY=FAIL public_health=${last} rolled_back=true"
-            exit 15
-          fi
+          routes="$(az rest --method get --url "https://management.azure.com${endpoint_id}/routes?api-version=${API}" 2>/dev/null || echo '{}')"
+          total_routes="$(jq '.value | length' <<<"$routes" 2>/dev/null || echo 0)"
+          [[ "$total_routes" -gt 0 ]] || { echo 'AFD_ROUTE_DISCOVERY=FAIL no_routes'; exit 13; }
 
-          final_dns="$(curl -sS -G -H "Authorization: Bearer ${CF_TOKEN}" --data-urlencode 'name=relay.truyn.org' "$dns_base")"
-          jq -e --arg target "$target" '.success==true and (.result|length)==1 and .result[0].type=="CNAME" and .result[0].content==$target and .result[0].proxied==true' <<<"$final_dns" >/dev/null || { echo 'AFD_RECOVERY=FAIL final_dns_mismatch'; exit 16; }
-          echo 'CLOUDFLARE_DNS=PASS proxied_cname_to_front_door=true'
+          # Select only routes attached to the relay custom domain. Compare IDs case-insensitively because ARM IDs are case-insensitive.
+          relay_routes="$(jq --arg domain "${domain_id,,}" '[.value[]? | select([.properties.customDomains[]?.id | ascii_downcase] | index($domain))]' <<<"$routes")"
+          route_count="$(jq 'length' <<<"$relay_routes")"
+          [[ "$route_count" == 1 ]] || { echo "AFD_ROUTE_DISCOVERY=FAIL relay_route_count=${route_count}"; exit 14; }
+          route_id="$(jq -r '.[0].id' <<<"$relay_routes")"
+          route_name="$(jq -r '.[0].name' <<<"$relay_routes")"
+          enabled_state="$(jq -r '.[0].properties.enabledState // "unknown"' <<<"$relay_routes")"
+          origin_group_id="$(jq -r '.[0].properties.originGroup.id // empty' <<<"$relay_routes")"
+          ruleset_count="$(jq '.[0].properties.ruleSets // [] | length' <<<"$relay_routes")"
+          forwarding_protocol="$(jq -r '.[0].properties.forwardingProtocol // "unknown"' <<<"$relay_routes")"
+          https_redirect="$(jq -r '.[0].properties.httpsRedirect // "unknown"' <<<"$relay_routes")"
+          for value in "$route_id" "$route_name" "$origin_group_id"; do [[ -n "$value" ]] && echo "::add-mask::$value"; done
+          [[ "$enabled_state" == 'Enabled' ]] || { echo "AFD_ROUTE_DISCOVERY=FAIL route_enabled_state=${enabled_state}"; exit 15; }
+          [[ -n "$origin_group_id" ]] || { echo 'AFD_ROUTE_DISCOVERY=FAIL origin_group_missing'; exit 16; }
+
+          public_code="$(curl -sS --max-time 15 -D /tmp/public.headers -o /tmp/public.body -w '%{http_code}' "${PUBLIC_RELAY_URL}/health" || true)"
+          [[ "$public_code" == '200' ]] && grep -qi '^cf-ray:' /tmp/public.headers || { echo "AFD_ROUTE_DISCOVERY=FAIL public_health=${public_code}"; exit 17; }
+
+          echo "AFD_RELAY_ROUTE=PASS unique=true enabled=true existing_rule_sets=${ruleset_count} forwarding_protocol=${forwarding_protocol} https_redirect=${https_redirect}"
           echo 'PUBLIC_RELAY=PASS health=200 cf_ray=true'
-          echo 'AFD_RECOVERY=PASS'
+          echo 'AFD_ROUTE_DISCOVERY=PASS read_only=true'
