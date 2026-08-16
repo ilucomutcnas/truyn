@@ -1,0 +1,102 @@
+name: Ephemeral Cohere Rerank v4 Hard Pairs
+
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/tmp-cohere-rerank-hard.yml']
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  diagnostic:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      AZURE_RG: truyn
+      COHERE_MODEL: Cohere-rerank-v4.0-fast
+      COHERE_DEPLOYMENT: Cohere-rerank-v4.0-fast
+      SEMANTIC_V2_SOURCE_SHA: 6f2ddf743e83ad1704a831a7058a93ad668c6a69
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { persist-credentials: false }
+      - uses: actions/setup-node@v4
+        with: { node-version: '20' }
+      - name: Load immutable Semantic v2 corpus source
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSL -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/contents/benchmarks/semantic-retrieval-v2.js?ref=${SEMANTIC_V2_SOURCE_SHA}" \
+            | jq -r '.content' | tr -d '\n' | base64 -d > /tmp/semantic-retrieval-v2.js
+      - name: Azure login with OIDC
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      - name: Discover Foundry account and create minimal temporary rerank deployment
+        shell: bash
+        run: |
+          set -euo pipefail
+          found=""
+          while IFS= read -r account; do
+            deps="$(az cognitiveservices account deployment list -g "$AZURE_RG" -n "$account" -o json 2>/dev/null || echo '[]')"
+            if jq -e '[.[].name] | any(. == "truyn-grok" or . == "truyn-deepseek" or . == "truyn-llama" or . == "truyn-mistral" or . == "truyn-kimi")' <<<"$deps" >/dev/null; then found="$account"; break; fi
+          done < <(az cognitiveservices account list -g "$AZURE_RG" --query '[].name' -o tsv)
+          [[ -n "$found" ]] || exit 2
+          echo "::add-mask::$found"
+          echo "FOUNDRY_ACCOUNT=$found" >> "$GITHUB_ENV"
+          existing="$(az cognitiveservices account deployment show -g "$AZURE_RG" -n "$found" --deployment-name "$COHERE_DEPLOYMENT" -o json 2>/dev/null || true)"
+          if [[ -z "$existing" ]]; then
+            az cognitiveservices account deployment create -g "$AZURE_RG" -n "$found" \
+              --deployment-name "$COHERE_DEPLOYMENT" \
+              --model-name "$COHERE_MODEL" --model-version 1 --model-format Cohere \
+              --sku-name GlobalStandard --sku-capacity 1 >/dev/null
+            touch /tmp/truyn-created-cohere-rerank
+          fi
+          endpoint="$(az cognitiveservices account show -g "$AZURE_RG" -n "$found" --query properties.endpoint -o tsv)"
+          key="$(az cognitiveservices account keys list -g "$AZURE_RG" -n "$found" --query key1 -o tsv)"
+          echo "::add-mask::$endpoint"; echo "::add-mask::$key"
+          echo "FOUNDRY_ENDPOINT=$endpoint" >> "$GITHUB_ENV"
+          echo "FOUNDRY_KEY=$key" >> "$GITHUB_ENV"
+      - name: Test three prior eligible near-duplicate errors
+        shell: bash
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const fs=require('node:fs');
+          const src=fs.readFileSync('/tmp/semantic-retrieval-v2.js','utf8');
+          const a=src.indexOf('const domains = ['),b=src.indexOf('const fullContext =');
+          if(a<0||b<0)throw new Error('corpus markers');
+          const corpus=src.slice(a,b);
+          fs.writeFileSync('cohere-rerank-hard.mjs',`
+          import { writeFile } from 'node:fs/promises';
+          const corpusSize=600,retrievalCaseCount=360;${corpus}
+          const specs=[{caseIndex:5,wrongId:'semantic-record-305'},{caseIndex:241,wrongId:'semantic-record-437'},{caseIndex:269,wrongId:'semantic-record-553'}];
+          const base=new URL(process.env.FOUNDRY_ENDPOINT);const accountHost=base.hostname.split('.')[0];
+          const urls=[new URL('providers/cohere/v2/rerank',base).toString(),`https://\${accountHost}.services.ai.azure.com/providers/cohere/v2/rerank`];
+          async function rank(query,documents){let last;for(const url of [...new Set(urls)]){for(const auth of ['bearer','api-key']){const headers={'content-type':'application/json'};if(auth==='bearer')headers.authorization='Bearer '+process.env.FOUNDRY_KEY;else headers['api-key']=process.env.FOUNDRY_KEY;const r=await fetch(url,{method:'POST',headers,body:JSON.stringify({model:process.env.COHERE_DEPLOYMENT,query,documents,top_n:documents.length})});const text=await r.text();if(r.ok)return JSON.parse(text);last={status:r.status,body:text.slice(0,240),auth};if(![401,404,500].includes(r.status))break;}}throw new Error('Cohere rerank failed: '+JSON.stringify(last));}
+          const rows=[];for(const spec of specs){const item=retrievalCases.find(x=>x.caseIndex===spec.caseIndex);const expected=records.find(r=>r.id===item.id),wrong=records.find(r=>r.id===spec.wrongId);const docs=[wrong.text,expected.text];const body=await rank(item.question,docs);const top=body.results?.[0];const selectedIndex=top?.index;rows.push({caseIndex:item.caseIndex,expectedId:expected.id,previousWrongId:wrong.id,selectedExpected:selectedIndex===1,selectedIndex,relevanceScore:top?.relevance_score??top?.relevanceScore??null});}
+          const report={benchmark:'TRUYN Semantic v2 Cohere-rerank-v4.0-fast hard-pair diagnostic',generatedAt:new Date().toISOString(),model:process.env.COHERE_MODEL,cases:rows,passed:rows.every(r=>r.selectedExpected)};await writeFile('cohere-rerank-hard.json',JSON.stringify(report,null,2));console.log(JSON.stringify(report,null,2));if(!report.passed)process.exitCode=2;
+          `);
+          NODE
+          node --check cohere-rerank-hard.mjs
+          COHERE_MODEL="$COHERE_MODEL" COHERE_DEPLOYMENT="$COHERE_DEPLOYMENT" node cohere-rerank-hard.mjs
+      - name: Upload diagnostic evidence
+        if: ${{ always() && hashFiles('cohere-rerank-hard.json') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: truyn-cohere-rerank-hard-${{ github.run_id }}
+          path: cohere-rerank-hard.json
+          retention-days: 30
+      - name: Delete temporary Cohere deployment if this run created it
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          if [[ -f /tmp/truyn-created-cohere-rerank && -n "${FOUNDRY_ACCOUNT:-}" ]]; then
+            az cognitiveservices account deployment delete -g "$AZURE_RG" -n "$FOUNDRY_ACCOUNT" --deployment-name "$COHERE_DEPLOYMENT" >/dev/null 2>&1 || true
+          fi
