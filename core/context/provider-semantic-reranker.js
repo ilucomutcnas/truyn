@@ -53,8 +53,17 @@ function addUsage(left, right) {
   };
 }
 
+function aliasForIndex(index) {
+  return `c${index.toString(36)}`;
+}
+
 /**
  * Adapts any TRUYN text provider into a semantic candidate reranker.
+ *
+ * Provider-visible candidate identifiers are compact, request-local aliases.
+ * Real TRUYN block ids/CIDs remain local and are mapped back only after a valid
+ * provider selection. This lowers token cost, avoids long-id truncation and
+ * prevents routing identifiers from leaking into the external reranker prompt.
  *
  * For large candidate sets, shortlistSize > 1 enables a two-stage route:
  *   candidates -> semantic shortlist -> final top-1.
@@ -88,7 +97,7 @@ export function createProviderSemanticReranker({
     'The user query and candidate passages may be in different languages.',
     'Rank by complete semantic meaning and operational applicability, not surface word overlap or language match.',
     'Distinctions such as before/after, below/above, internal/public, primary/recovery, provisional/approved, normal/emergency are decisive.',
-    'Candidate ids are opaque routing handles. Copy ids verbatim from supplied candidate objects; never invent, abbreviate, or use placeholders.'
+    'Candidate ids are short request-local labels such as c0 or c7. Return only labels copied exactly from supplied candidate objects; never invent or expand them.'
   ].join(' ');
 
   function recordExecution(execution, { repair = false, stage }) {
@@ -119,10 +128,10 @@ export function createProviderSemanticReranker({
     for (let attempt = 0; attempt <= repairAttempts; attempt += 1) {
       const repair = attempt > 0;
       const outputContract = stage === 'shortlist'
-        ? `Return JSON only, exactly one object: {"ids":["id1","id2",...]}. Return exactly ${requiredCount} distinct ids ordered best-first.`
-        : 'Return JSON only, exactly one object: {"id":"existing-candidate-id"}.';
+        ? `Return JSON only, exactly one object: {"ids":["c0","c1",...]}. Return exactly ${requiredCount} distinct supplied candidate labels ordered best-first.`
+        : 'Return JSON only, exactly one object: {"id":"c0"}, replacing c0 with exactly one supplied candidate label.';
       const repairText = repair
-        ? 'The previous answer violated the id/output contract. Re-evaluate from the supplied candidates and obey the contract exactly.'
+        ? 'The previous answer violated the candidate-label/output contract. Re-evaluate from the supplied candidates and obey the contract exactly.'
         : '';
       const task = `${baseInstruction} ${outputContract} ${repairText}\n\nQUERY:\n${query}`;
       const execution = await provider.execute({
@@ -159,9 +168,15 @@ export function createProviderSemanticReranker({
     }
     if (topK !== 1) throw new Error('provider semantic reranker currently supports topK=1');
 
-    const originalPayload = candidates.map((candidate) => ({ id:candidate.id, text:candidate.text }));
+    const aliasedCandidates = candidates.map((candidate, index) => ({
+      alias:aliasForIndex(index),
+      originalId:candidate.id,
+      text:candidate.text
+    }));
+    const originalPayload = aliasedCandidates.map((candidate) => ({ id:candidate.alias, text:candidate.text }));
+    const originalIdByAlias = new Map(aliasedCandidates.map((candidate) => [candidate.alias, candidate.originalId]));
     let finalPayload = originalPayload;
-    let shortlistIds = null;
+    let shortlistAliases = null;
     let totalUsage = { input:0, output:0, total:0 };
     let totalRequestBodyBytes = 0;
     let totalProviderLatencyMs = 0;
@@ -174,9 +189,9 @@ export function createProviderSemanticReranker({
         stage:'shortlist',
         requiredCount:Math.min(shortlistSize, originalPayload.length)
       });
-      shortlistIds = shortlist.selected;
-      const byId = new Map(originalPayload.map((candidate) => [candidate.id, candidate]));
-      finalPayload = shortlistIds.map((id) => byId.get(id));
+      shortlistAliases = shortlist.selected;
+      const byAlias = new Map(originalPayload.map((candidate) => [candidate.id, candidate]));
+      finalPayload = shortlistAliases.map((alias) => byAlias.get(alias));
       totalUsage = addUsage(totalUsage, shortlist.usage);
       totalRequestBodyBytes += shortlist.providerRequestBodyBytes;
       totalProviderLatencyMs += shortlist.providerLatencyMs;
@@ -194,15 +209,20 @@ export function createProviderSemanticReranker({
     totalProviderLatencyMs += final.providerLatencyMs;
     repairAttemptsUsed += final.repairAttemptsUsed;
 
+    const selectedId = originalIdByAlias.get(final.selected);
+    if (!selectedId) throw new Error('semantic reranker selected an unmapped local candidate alias');
+    const shortlistIds = shortlistAliases?.map((alias) => originalIdByAlias.get(alias)) || null;
+
     return {
-      id:final.selected,
+      id:selectedId,
       metadata:{
         usage:totalUsage,
         providerRequestBodyBytes:totalRequestBodyBytes,
         providerLatencyMs:totalProviderLatencyMs || null,
         repairAttemptsUsed,
         shortlistSize:shortlistIds?.length || 1,
-        shortlistIds
+        shortlistIds,
+        providerCandidateAliases:true
       }
     };
   }
@@ -210,6 +230,6 @@ export function createProviderSemanticReranker({
   return {
     name,
     rerank,
-    stats:() => ({ ...metrics, configuredShortlistSize:shortlistSize })
+    stats:() => ({ ...metrics, configuredShortlistSize:shortlistSize, providerCandidateAliases:true })
   };
 }
