@@ -45,7 +45,11 @@ function wsMessage(url, headers = {}) {
 }
 
 test('origin guard config is opt-in and fails closed on partial configuration', () => {
-  assert.deepEqual(createRuntimeOriginGuardConfig({}), { enabled: false, token: null });
+  assert.deepEqual(createRuntimeOriginGuardConfig({}), {
+    enabled: false,
+    token: null,
+    headerName: ORIGIN_GUARD_HEADER
+  });
   assert.throws(
     () => createRuntimeOriginGuardConfig({ TRUYN_ORIGIN_GUARD: '1' }),
     /TRUYN_ORIGIN_GUARD_TOKEN/
@@ -54,10 +58,27 @@ test('origin guard config is opt-in and fails closed on partial configuration', 
     () => createRuntimeOriginGuardConfig({ TRUYN_ORIGIN_GUARD_TOKEN: 'secret' }),
     /TRUYN_ORIGIN_GUARD=1/
   );
+  assert.throws(
+    () => createRuntimeOriginGuardConfig({ TRUYN_ORIGIN_GUARD_HEADER: 'x-azure-fdid' }),
+    /TRUYN_ORIGIN_GUARD=1/
+  );
   assert.deepEqual(createRuntimeOriginGuardConfig({
     TRUYN_ORIGIN_GUARD: 'true',
     TRUYN_ORIGIN_GUARD_TOKEN: 'secret'
-  }), { enabled: true, token: 'secret' });
+  }), {
+    enabled: true,
+    token: 'secret',
+    headerName: ORIGIN_GUARD_HEADER
+  });
+  assert.deepEqual(createRuntimeOriginGuardConfig({
+    TRUYN_ORIGIN_GUARD: 'true',
+    TRUYN_ORIGIN_GUARD_TOKEN: 'front-door-id',
+    TRUYN_ORIGIN_GUARD_HEADER: 'X-Azure-FDID'
+  }), {
+    enabled: true,
+    token: 'front-door-id',
+    headerName: 'x-azure-fdid'
+  });
 });
 
 test('origin guard blocks direct data-plane HTTP and strips the edge secret upstream', async (t) => {
@@ -105,6 +126,53 @@ test('origin guard blocks direct data-plane HTTP and strips the edge secret upst
   assert.equal(upstreamRequests, 1);
 });
 
+test('origin guard can validate X-Azure-FDID and strips all origin proof headers upstream', async (t) => {
+  let upstreamRequests = 0;
+  const upstream = http.createServer((req, res) => {
+    upstreamRequests += 1;
+    const body = JSON.stringify({
+      azureFrontDoorId: req.headers['x-azure-fdid'] || null,
+      legacyGuardHeader: req.headers[ORIGIN_GUARD_HEADER] || null
+    });
+    res.writeHead(200, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) });
+    res.end(body);
+  });
+  const upstreamPort = await listen(upstream);
+  t.after(() => closeServer(upstream));
+
+  const guard = createOriginGuard({
+    targetPort: upstreamPort,
+    token: 'specific-front-door-id',
+    headerName: 'X-Azure-FDID'
+  });
+  const guardUrl = await guard.listen({ host: '127.0.0.1', port: 0 });
+  t.after(() => guard.close());
+
+  const wrongHeader = await fetch(`${guardUrl}/v1/register`, {
+    method: 'POST',
+    headers: { [ORIGIN_GUARD_HEADER]: 'specific-front-door-id', 'content-type': 'application/json' },
+    body: '{}'
+  });
+  assert.equal(wrongHeader.status, 403);
+  assert.equal(upstreamRequests, 0);
+
+  const allowed = await fetch(`${guardUrl}/v1/register`, {
+    method: 'POST',
+    headers: {
+      'X-Azure-FDID': 'specific-front-door-id',
+      [ORIGIN_GUARD_HEADER]: 'attacker-controlled',
+      'content-type': 'application/json'
+    },
+    body: '{}'
+  });
+  assert.equal(allowed.status, 200);
+  assert.deepEqual(await allowed.json(), {
+    azureFrontDoorId: null,
+    legacyGuardHeader: null
+  });
+  assert.equal(upstreamRequests, 1);
+});
+
 test('origin guard enforces the same secret on websocket upgrades and strips it upstream', async (t) => {
   const upstream = http.createServer((req, res) => {
     res.writeHead(404);
@@ -145,9 +213,10 @@ test('origin guard enforces the same secret on websocket upgrades and strips it 
   assert.equal(deniedStatus, 403);
 });
 
-test('runtime relay wires the origin guard around an internal loopback relay', async () => {
+test('runtime relay wires configured origin guard header around an internal loopback relay', async () => {
   const source = await import('node:fs/promises').then(({ readFile }) => readFile(new URL('../runtime/service.js', import.meta.url), 'utf8'));
   assert.match(source, /createRuntimeOriginGuardConfig/);
   assert.match(source, /relay\.listen\(\{ host: '127\.0\.0\.1', port: 0 \}\)/);
   assert.match(source, /createOriginGuard/);
+  assert.match(source, /headerName: originGuardConfig\.headerName/);
 });
