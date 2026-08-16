@@ -104,7 +104,7 @@ export class DecentralizedVerifierDiscovery {
 
   async publish() {
     if (!this.started) {
-      await this.node.handle(VERIFIER_DISCOVERY_PROTOCOL, async ({ stream }) => {
+      await this.node.handle(VERIFIER_DISCOVERY_PROTOCOL, async (stream) => {
         const request = await readJsonStream(stream, { maxBytes: 16_384 });
         if (request?.type !== 'GET_VERIFIER_RECORD' || normalizedDomain(request.domain) !== this.domain) {
           await writeJsonStream(stream, { ok: false, error: 'verifier_record_not_found' });
