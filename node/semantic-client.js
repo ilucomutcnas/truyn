@@ -8,11 +8,18 @@ const jsonBytes = (value) => Buffer.byteLength(JSON.stringify(value));
  * context router while using the normal relay for identity, discovery, NEED
  * and RESULT traffic. This keeps provider handoff transport unchanged and
  * makes semantic context routing independently replaceable/testable.
+ *
+ * Production semantic routers may persist roots outside process memory. When
+ * loadManifest() is available, retrieval uses it so a cold process restart can
+ * rehydrate the root manifest from the durable semantic index store without a
+ * manual warm-up step or document re-embedding.
  */
 export class SemanticTruynNode extends TruynNode {
   constructor({ semanticRouter, retrievalLog = [], ...options } = {}) {
     super(options);
-    if (!semanticRouter || typeof semanticRouter.retrieve !== 'function' || typeof semanticRouter.manifest !== 'function') {
+    if (!semanticRouter || typeof semanticRouter.retrieve !== 'function' || (
+      typeof semanticRouter.manifest !== 'function' && typeof semanticRouter.loadManifest !== 'function'
+    )) {
       throw new Error('SemanticTruynNode requires semanticRouter');
     }
     this.semanticRouter = semanticRouter;
@@ -20,7 +27,9 @@ export class SemanticTruynNode extends TruynNode {
   }
 
   async retrieveContext(cid, query, { topK = 1 } = {}) {
-    const manifest = this.semanticRouter.manifest(cid);
+    const manifest = typeof this.semanticRouter.loadManifest === 'function'
+      ? await this.semanticRouter.loadManifest(cid)
+      : this.semanticRouter.manifest(cid);
     const result = await this.semanticRouter.retrieve(cid, query, { topK });
     const verification = verifyContextSelection(manifest, result.blocks, cid);
     if (!verification.ok) throw new Error(`Context retrieval verification failed: ${verification.reason}`);
