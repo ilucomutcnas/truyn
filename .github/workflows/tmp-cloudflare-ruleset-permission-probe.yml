@@ -1,4 +1,4 @@
-name: Temporary Cloudflare AOP Permission Probe
+name: Temporary Cloudflare DNS Proxy Permission Probe
 
 on:
   push:
@@ -16,25 +16,36 @@ jobs:
       CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKENS }}
       CF_ZONE_ID: ${{ secrets.CLOUDFLARE_ZONE_ID || vars.CLOUDFLARE_ZONE_ID }}
     steps:
-      - name: Probe AOP read/write permission without changing enablement
+      - name: Probe relay DNS record and safe same-value write permission
         shell: bash
         run: |
           set -euo pipefail
-          [[ -n "${CF_TOKEN:-}" && -n "${CF_ZONE_ID:-}" ]] || { echo 'CF_AOP_PROBE=FAIL missing_binding'; exit 1; }
-          endpoint="https://api.cloudflare.com/client/v4/zones/${CF_ZONE_ID}/origin_tls_client_auth/settings"
-          response="$(curl -sS -H "Authorization: Bearer ${CF_TOKEN}" "$endpoint")"
+          [[ -n "${CF_TOKEN:-}" && -n "${CF_ZONE_ID:-}" ]] || { echo 'CF_DNS_PROBE=FAIL missing_binding'; exit 1; }
+          base="https://api.cloudflare.com/client/v4/zones/${CF_ZONE_ID}/dns_records"
+          response="$(curl -sS -G -H "Authorization: Bearer ${CF_TOKEN}" --data-urlencode 'name=relay.truyn.org' "$base")"
           if ! jq -e '.success == true' <<<"$response" >/dev/null 2>&1; then
             code="$(jq -r '.errors[0].code // "unknown"' <<<"$response" 2>/dev/null || echo unknown)"
-            echo "CF_AOP_READ=DENIED code=${code}"
+            echo "CF_DNS_READ=DENIED code=${code}"
             exit 2
           fi
-          enabled="$(jq -r '.result.enabled // false' <<<"$response")"
-          echo "CF_AOP_READ=OK enabled=${enabled}"
-          write="$(curl -sS -X PUT -H "Authorization: Bearer ${CF_TOKEN}" -H 'Content-Type: application/json' --data "{\"enabled\":${enabled}}" "$endpoint")"
+          count="$(jq '.result | length' <<<"$response")"
+          [[ "$count" == 1 ]] || { echo "CF_DNS_PROBE=FAIL record_count=${count}"; exit 3; }
+          id="$(jq -r '.result[0].id' <<<"$response")"
+          type="$(jq -r '.result[0].type' <<<"$response")"
+          proxied="$(jq -r '.result[0].proxied // false' <<<"$response")"
+          proxiable="$(jq -r '.result[0].proxiable // false' <<<"$response")"
+          content="$(jq -r '.result[0].content' <<<"$response")"
+          ttl="$(jq -r '.result[0].ttl' <<<"$response")"
+          echo "CF_DNS_READ=OK type=${type} proxiable=${proxiable} proxied=${proxied}"
+          [[ "$proxiable" == true ]] || { echo 'CF_DNS_PROBE=FAIL record_not_proxiable'; exit 4; }
+          echo "::add-mask::$id"
+          echo "::add-mask::$content"
+          body="$(jq -nc --arg type "$type" --arg content "$content" --argjson ttl "$ttl" --argjson proxied "$proxied" '{type:$type,name:"relay.truyn.org",content:$content,ttl:$ttl,proxied:$proxied}')"
+          write="$(curl -sS -X PATCH -H "Authorization: Bearer ${CF_TOKEN}" -H 'Content-Type: application/json' --data "$body" "${base}/${id}")"
           if ! jq -e '.success == true' <<<"$write" >/dev/null 2>&1; then
             code="$(jq -r '.errors[0].code // "unknown"' <<<"$write" 2>/dev/null || echo unknown)"
-            echo "CF_AOP_WRITE=DENIED code=${code}"
-            exit 3
+            echo "CF_DNS_WRITE=DENIED code=${code}"
+            exit 5
           fi
-          echo 'CF_AOP_WRITE=OK'
-          echo 'CF_AOP_PROBE=PASS'
+          echo 'CF_DNS_WRITE=OK'
+          echo 'CF_DNS_PROBE=PASS'
