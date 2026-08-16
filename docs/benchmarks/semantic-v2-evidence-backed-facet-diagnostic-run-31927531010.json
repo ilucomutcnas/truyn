@@ -1,0 +1,51 @@
+{
+  "benchmark": "TRUYN Semantic v2 evidence-backed operational facet diagnostic",
+  "generatedAt": "2026-08-16T04:50:09.170Z",
+  "githubActionsRunId": 31927531010,
+  "githubActionsArtifactId": 9258290332,
+  "artifactDigest": "sha256:cf9bfbe7991c79508c705976caf61ccdcc7382cc0623323af4417084d81a9086",
+  "rows": [
+    {
+      "caseIndex": 5,
+      "facets": {
+        "domain": "ship route control",
+        "operationalAction": "operators must confirm permission validity",
+        "operationalActionEvidence": "operators must confirm permission validity",
+        "condition": "when utilization has crossed the protective limit and saturation controls are engaged"
+      },
+      "usage": {"promptTokenCount":384,"candidatesTokenCount":59,"totalTokenCount":443,"trafficType":"ON_DEMAND"}
+    },
+    {
+      "caseIndex": 112,
+      "facets": {
+        "domain": "ship route control",
+        "operationalAction": "confirm the origin trail of data",
+        "operationalActionEvidence": "team must confirm the origin trail of data",
+        "condition": "when utilization is still under the protective limit"
+      },
+      "usage": {"promptTokenCount":380,"candidatesTokenCount":59,"totalTokenCount":439,"trafficType":"ON_DEMAND"}
+    },
+    {
+      "caseIndex": 241,
+      "facets": {
+        "domain": "greenhouse gas record management",
+        "operationalAction": "recover the malfunctioning system",
+        "operationalActionEvidence": "aksayan sistemi kurtarmak gerektiğinde",
+        "condition": "when the main facility is offline at the remote continuity center"
+      },
+      "usage": {"promptTokenCount":397,"candidatesTokenCount":62,"totalTokenCount":459,"trafficType":"ON_DEMAND"}
+    },
+    {
+      "caseIndex": 269,
+      "facets": {
+        "domain": "store stock control",
+        "operationalAction": "preserve audit proof",
+        "operationalActionEvidence": "operators must preserve audit proof",
+        "condition": "during an outward-facing launch once users can already see it"
+      },
+      "usage": {"promptTokenCount":384,"candidatesTokenCount":57,"totalTokenCount":441,"trafficType":"ON_DEMAND"}
+    }
+  ],
+  "result": "4/4 hard queries decomposed into the intended real-world domain, operational action, exact source evidence, and condition after the evidence-backed contract was introduced.",
+  "note": "This report is preserved as query-compiler evidence only. It does not claim corpus-wide retrieval accuracy."
+}
