@@ -8,13 +8,15 @@ import {
 } from '../core/trust/lifecycle.js';
 import {
   resolveAuthorizedTrustVerifiers,
-  trustVerifierDiscoveryCapability
+  trustVerifierDiscoveryCapability,
+  trustVerifierOfferMetadata,
+  trustVerifierRequestCapability
 } from '../core/trust/network.js';
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 export class ActiveChallengeAttesterHost {
-  constructor({ node, domain, verifier, allowedRequesterIds = [], pollIntervalMs = 10 } = {}) {
+  constructor({ node, domain, verifier, allowedRequesterIds = [], methods = ['challenge-response', 'independent-review'], pollIntervalMs = 10 } = {}) {
     if (!node) throw new Error('active challenge attester node is required');
     if (typeof domain !== 'string' || !domain.trim()) throw new Error('active challenge domain is required');
     if (typeof verifier !== 'function') throw new Error('active challenge verifier is required');
@@ -24,9 +26,10 @@ export class ActiveChallengeAttesterHost {
     this.verifier = verifier;
     this.allowedRequesterIds = [...new Set(allowedRequesterIds)];
     this.allowedRequesterSet = new Set(this.allowedRequesterIds);
+    this.methods = [...new Set((methods || []).filter((item) => typeof item === 'string').map((item) => item.trim()).filter(Boolean))];
     this.pollIntervalMs = pollIntervalMs;
     this.discoveryCapability = trustVerifierDiscoveryCapability(this.domain);
-    this.requestCapability = `truyn.claim.verify.v1.${this.domain}.${this.node.identity.nodeId}`;
+    this.requestCapability = trustVerifierRequestCapability(this.domain, this.node.identity.nodeId);
     this.offerIds = [];
     this.running = false;
     this.loopPromise = null;
@@ -36,15 +39,12 @@ export class ActiveChallengeAttesterHost {
   async publish() {
     if (!this.node.sessionToken) await this.node.register({ name: `TRUYN active verifier ${this.domain}` });
     if (this.offerIds.length > 0) return this.offerIds;
-    const claimVerifier = {
-      protocol: 'truyn-claim-verifier-v1',
-      version: 1,
-      role: 'claim-verifier',
+    const claimVerifier = trustVerifierOfferMetadata({
       domain: this.domain,
       verifierNodeId: this.node.identity.nodeId,
       requestCapability: this.requestCapability,
-      methods: ['challenge-response', 'independent-review']
-    };
+      methods: this.methods
+    });
     const metadata = { accessMode: 'owner-only', allowedRequesterIds: this.allowedRequesterIds, claimVerifier };
     const discovery = await this.node.offer(this.discoveryCapability, metadata);
     const request = await this.node.offer(this.requestCapability, metadata);
@@ -84,7 +84,7 @@ export class ActiveChallengeAttesterHost {
         verdict: decision?.verdict,
         evidence: decision?.evidence || [],
         lineage: decision?.lineage || {},
-        method: decision?.method || 'challenge-response',
+        method: decision?.method || this.methods[0] || 'challenge-response',
         rationaleDigest: decision?.rationaleDigest || null
       });
       const verification = createVerification({ identity: this.node.identity, challenge, attestation });
@@ -141,7 +141,7 @@ export class ActiveTrustCoordinator {
     this.verifierLimit = verifierLimit;
     this.resultTimeoutMs = resultTimeoutMs;
     this.pollIntervalMs = pollIntervalMs;
-    this.metrics = { challengesIssued: 0, verifierNeeds: 0, verifierResults: 0, verificationsAccepted: 0, verificationFailures: 0 };
+    this.metrics = { challengesIssued: 0, discoveryCalls: 0, verifierNeeds: 0, verifierResults: 0, verificationsAccepted: 0, verificationFailures: 0 };
   }
 
   async register() {
@@ -151,6 +151,7 @@ export class ActiveTrustCoordinator {
 
   async discover(domain, limit = this.verifierLimit) {
     await this.register();
+    this.metrics.discoveryCalls += 1;
     const result = await this.node.find(trustVerifierDiscoveryCapability(domain));
     return resolveAuthorizedTrustVerifiers(result.offers || [], domain, { limit });
   }
@@ -176,6 +177,7 @@ export class ActiveTrustCoordinator {
     if (pending.size > 0) {
       const error = new Error('active_challenge_result_timeout');
       error.code = 'active_challenge_result_timeout';
+      error.pendingVerifiers = [...pending.values()].map((item) => item.verifier.nodeId);
       throw error;
     }
     return results;
@@ -243,7 +245,7 @@ export class ActiveTrustCoordinator {
       now,
       ...(maxAttestationAgeMs == null ? {} : { maxAttestationAgeMs })
     });
-    return { challenge, attestations, verifications, assessment };
+    return { challenge, authorizedVerifierCount: verifiers.length, attestations, verifications, assessment };
   }
 
   stats() { return { ...this.metrics }; }
