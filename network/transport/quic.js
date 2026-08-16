@@ -86,10 +86,16 @@ export class TruynQuicTransport {
     this.clientSessions = new WeakMap();
     this.replayCache = new SessionReplayCache();
     this.envelopeHandler = null;
+    this.controlHandler = null;
   }
 
   onEnvelope(handler) {
     this.envelopeHandler = typeof handler === 'function' ? handler : null;
+    return this;
+  }
+
+  onControl(handler) {
+    this.controlHandler = typeof handler === 'function' ? handler : null;
     return this;
   }
 
@@ -137,9 +143,23 @@ export class TruynQuicTransport {
       return;
     }
 
+    const session = this.serverSessions.get(connection);
+    if (!session || message.sessionId !== session.id) { await writeJson(stream, { ok: false, error: 'quic_session_required' }); return; }
+
+    if (message?.kind === 'control') {
+      if (typeof message.method !== 'string' || !message.method.trim()) { await writeJson(stream, { ok: false, error: 'quic_control_method_required' }); return; }
+      if (!this.controlHandler) { await writeJson(stream, { ok: false, error: 'no_control_handler' }); return; }
+      const result = await this.controlHandler(message.method, message.payload ?? null, {
+        peerNodeId: session.peerNodeId,
+        peerPublicKey: session.peerPublicKey,
+        transport: 'quic',
+        connection
+      });
+      await writeJson(stream, { ok: true, result: result ?? null });
+      return;
+    }
+
     if (message?.kind === 'envelope') {
-      const session = this.serverSessions.get(connection);
-      if (!session || message.sessionId !== session.id) { await writeJson(stream, { ok: false, error: 'quic_session_required' }); return; }
       const verification = verifyEnvelope(message.envelope);
       if (!verification.ok) { await writeJson(stream, { ok: false, error: verification.reason }); return; }
       if (message.envelope.from !== session.peerNodeId || message.envelope.publicKey !== session.peerPublicKey) { await writeJson(stream, { ok: false, error: 'quic_session_sender_mismatch' }); return; }
@@ -178,6 +198,14 @@ export class TruynQuicTransport {
     if (response.sessionId !== expectedSessionId) { await client.destroy({ force: true }); throw new Error('quic_session_id_mismatch'); }
     this.clientSessions.set(client.connection, { id: expectedSessionId, peerNodeId: response.accept.nodeId, peerPublicKey: response.accept.publicKey, binding });
     return client;
+  }
+
+  async requestControl(client, method, payload = null) {
+    const session = this.clientSessions.get(client?.connection);
+    if (!session) throw new Error('authenticated QUIC session is required');
+    const response = await requestJson(client.connection, { kind: 'control', sessionId: session.id, method, payload }, this.maxMessageBytes);
+    if (!response?.ok) throw new Error(response?.error || 'quic_control_rejected');
+    return response.result;
   }
 
   async sendEnvelope(client, envelope) {
