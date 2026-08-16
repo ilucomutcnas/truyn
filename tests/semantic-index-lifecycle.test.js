@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { buildContextDocument } from '../core/context/index.js';
 import { createSemanticContextRouterV2 } from '../core/context/semantic-router-v2.js';
 import { createFileSemanticIndexStore, createMemorySemanticIndexStore } from '../core/context/semantic-index-store.js';
 import { createProductionSemanticIndex } from '../core/context/production-semantic-index.js';
@@ -119,6 +120,45 @@ test('production factory cold-loads a ready root directly from durable storage',
     assert.equal(secondEmbedder.counts.documentInputs, 0);
     assert.equal(second.stats().lifecycle.rootStoreLoads, 1);
     assert.equal(second.stats().lifecycle.persistedVectorLoads, 2);
+  });
+});
+
+test('interrupted preparing root resumes explicitly and then cold-loads without re-embedding', async () => {
+  await withTempStore(async (directory) => {
+    const store = createFileSemanticIndexStore({ directory });
+    const document = buildContextDocument([
+      { id:'alpha', text:'alpha durable object' },
+      { id:'beta', text:'beta durable object' }
+    ]);
+    await store.saveRoot({
+      ...document,
+      metadata:{ recoveryFixture:true },
+      createdAt:new Date().toISOString(),
+      index:{ status:'preparing', rootCid:document.cid, manifestCid:document.manifest.cid }
+    });
+
+    const recoveringEmbedder = countingEmbedder();
+    const recovering = createSemanticContextRouterV2({
+      embedder:recoveringEmbedder,
+      indexStore:createFileSemanticIndexStore({ directory }),
+      lexicalTieBreakWeight:0
+    });
+    await assert.rejects(
+      recovering.retrieve(document.cid, 'alpha question'),
+      (error) => error?.code === 'semantic_index_not_ready'
+    );
+    assert.equal(recoveringEmbedder.counts.documentInputs, 0);
+
+    const recovered = await recovering.prepareContext(document.cid);
+    assert.equal(recovered.index.status, 'ready');
+    assert.equal(recovered.index.embeddedBlockVectors, 2);
+    assert.equal(recoveringEmbedder.counts.documentInputs, 2);
+
+    const restartedEmbedder = countingEmbedder();
+    const restarted = createProductionSemanticIndex({ directory, embedder:restartedEmbedder });
+    const result = await restarted.retrieve(document.cid, 'beta question');
+    assert.equal(result.blocks[0].id, 'beta');
+    assert.equal(restartedEmbedder.counts.documentInputs, 0);
   });
 });
 
