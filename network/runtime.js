@@ -14,7 +14,7 @@ import { DirectFirstP2P } from './transport/p2p.js';
 export class TruynNetworkNode {
   constructor({
     identity = createIdentity(), host = '0.0.0.0', port = 0, advertiseHost = null, tls,
-    k = 20, alpha = 3, relayFallback = null, nat = null, capabilities = [], peerRecordTtlMs = 300_000,
+    k = 20, alpha = 3, relayFallback = null, nat = null, natTraversal = null, capabilities = [], peerRecordTtlMs = 300_000,
     peerLeaseEnabled = true, peerRenewBeforeMs = null, peerGossipIntervalMs = null, peerGossipFanout = 8,
     maxInFlight = 64, maxQueued = 256, statePath = null, dhtReplicationFactor = 3, dhtWriteQuorum = 2,
     dhtRpcTimeoutMs = 5_000, faultController = null, workInboxPath = null, workInboxMaxCompleted = 10_000
@@ -29,6 +29,7 @@ export class TruynNetworkNode {
     this.alpha = alpha;
     this.relayFallback = relayFallback;
     this.nat = nat;
+    this.natTraversal = natTraversal;
     this.capabilities = [...new Set(capabilities)];
     this.peerRecordTtlMs = peerRecordTtlMs;
     this.peerLeaseEnabled = peerLeaseEnabled !== false;
@@ -58,6 +59,7 @@ export class TruynNetworkNode {
       quicTransport: this.quic,
       discovery: this.discovery,
       relayFallback,
+      natTraversal,
       maxInFlight,
       maxQueued,
       faults: this.faults
