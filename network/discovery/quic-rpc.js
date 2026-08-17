@@ -17,6 +17,18 @@ function parseEndpoint(value) {
   } catch { return null; }
 }
 
+function selectedEndpoint(peer) {
+  for (const value of peer?.endpoints || []) {
+    const endpoint = parseEndpoint(value);
+    if (endpoint) return { value, endpoint };
+  }
+  return null;
+}
+
+function peerBinding(peer, endpointValue) {
+  return `${Number.isInteger(peer?.sequence) ? peer.sequence : 'na'}:${endpointValue}`;
+}
+
 export class QuicDiscoveryRpc {
   constructor({ quicTransport, timeoutMs = 5_000, faults = null } = {}) {
     if (!quicTransport) throw new Error('quicTransport is required');
@@ -28,12 +40,14 @@ export class QuicDiscoveryRpc {
   }
 
   async client(peer) {
+    const selected = selectedEndpoint(peer);
+    if (!selected) throw new Error('discovery_peer_has_no_quic_endpoint');
+    const binding = peerBinding(peer, selected.value);
     const existing = this.clients.get(peer.nodeId);
-    if (existing) return existing;
-    const endpoint = (peer.endpoints || []).map(parseEndpoint).find(Boolean);
-    if (!endpoint) throw new Error('discovery_peer_has_no_quic_endpoint');
-    const client = await this.quic.connect(endpoint);
-    this.clients.set(peer.nodeId, client);
+    if (existing?.binding === binding) return existing.client;
+    if (existing) this.forget(peer.nodeId);
+    const client = await this.quic.connect(selected.endpoint);
+    this.clients.set(peer.nodeId, { client, binding });
     return client;
   }
 
@@ -102,11 +116,20 @@ export class QuicDiscoveryRpc {
   }
 
   forget(nodeId) {
-    const client = this.clients.get(nodeId);
+    const existing = this.clients.get(nodeId);
     this.clients.delete(nodeId);
-    if (typeof client?.destroy === 'function') {
+    const client = existing?.client || existing;
+    if (!client) return;
+    if (typeof this.quic.disconnect === 'function') {
       try {
-        const destroyed = client.destroy();
+        const disconnected = this.quic.disconnect(client);
+        if (disconnected?.catch) void disconnected.catch(() => {});
+      } catch {}
+      return;
+    }
+    if (typeof client.destroy === 'function') {
+      try {
+        const destroyed = client.destroy({ force: true });
         if (destroyed?.catch) void destroyed.catch(() => {});
       } catch {}
     }
