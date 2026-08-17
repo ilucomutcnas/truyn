@@ -57,7 +57,7 @@ jobs:
       - name: Install dependencies
         run: npm install --ignore-scripts --no-audit --no-fund
       - name: Run isolated 100-node scenario
-        run: node simulations/nodes-100/scenario-peer-routing-v2.js
+        run: node simulations/nodes-100/scenario-peer-routing-v3.js
       - name: Print compact scenario summary
         if: always()
         shell: bash
@@ -72,6 +72,7 @@ jobs:
           const report = JSON.parse(readFileSync(process.env.TRUYN_SCALE_REPORT, 'utf8'));
           const summary = {
             schema: report.schema,
+            runner: report.runner ?? null,
             scenario: report.scenario,
             passed: report.passed,
             nodeCount: report.nodeCount,
@@ -84,6 +85,7 @@ jobs:
             failureDomainType: report.execution?.failureDomainType,
             durationMs: report.durationMs,
             gates: report.gates,
+            diagnostics: report.diagnostics ?? null,
             result: report.result,
             telemetry: report.finalNetwork?.telemetry,
             claims: report.claims,
