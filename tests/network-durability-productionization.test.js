@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { performance } from 'node:perf_hooks';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -61,11 +62,12 @@ test('productionization: routing and DHT state survive crash-style restart and e
   }
 });
 
-test('productionization: DHT repair restores replication after a holder failure and quorum fails closed', { timeout: 45_000 }, async () => {
+test('productionization: DHT repair replaces a failed holder within bounded RPC time and quorum fails closed', { timeout: 30_000 }, async () => {
   const root = await mkdtemp(join(tmpdir(), 'truyn-dht-repair-'));
   const tls = await generateTls(root);
   const nodes = Array.from({ length: 5 }, (_, i) => new TruynNetworkNode({
-    identity: createIdentity(), host: '127.0.0.1', tls, statePath: statePath(root, `r${i}`), peerRecordTtlMs: 120_000
+    identity: createIdentity(), host: '127.0.0.1', tls, statePath: statePath(root, `r${i}`), peerRecordTtlMs: 120_000,
+    dhtRpcTimeoutMs: 1_500
   }));
   try {
     const records = await Promise.all(nodes.map((node) => node.start()));
@@ -79,14 +81,23 @@ test('productionization: DHT repair restores replication after a holder failure 
     const failed = nodes.find((node) => node.identity.nodeId === remoteHolderId);
     await failed.close();
 
+    const repairStarted = performance.now();
     const repaired = await a.repairRecord('productionization', 'repair-key', { replicationFactor: 3, minAcks: 3 });
+    const repairElapsedMs = performance.now() - repairStarted;
     assert.equal(repaired.records, 1);
     assert.equal(repaired.repairs[0].acknowledgements, 3);
     assert.equal(repaired.repairs[0].storedAt.includes(remoteHolderId), false, 'repair must replace failed holder with a live peer');
+    assert.ok(repairElapsedMs < 8_000, `dead-peer repair must be bounded; observed ${repairElapsedMs.toFixed(0)}ms`);
+    assert.ok(
+      repaired.readFailures.some((failure) => failure.nodeId === remoteHolderId),
+      'repair evidence must preserve which dead holder failed during read recovery'
+    );
 
     const isolatedRoot = await mkdtemp(join(tmpdir(), 'truyn-quorum-isolated-'));
     const isolatedTls = await generateTls(isolatedRoot);
-    const isolated = new TruynNetworkNode({ identity: createIdentity(), host: '127.0.0.1', tls: isolatedTls, statePath: statePath(isolatedRoot, 'isolated') });
+    const isolated = new TruynNetworkNode({
+      identity: createIdentity(), host: '127.0.0.1', tls: isolatedTls, statePath: statePath(isolatedRoot, 'isolated'), dhtRpcTimeoutMs: 1_500
+    });
     try {
       await isolated.start();
       const impossible = isolated.createRecord('productionization', 'quorum-key', { value: true });
