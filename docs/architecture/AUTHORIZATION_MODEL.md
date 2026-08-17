@@ -1,113 +1,183 @@
 # TRUYN Authorization Model
 
-**Status:** implemented reference authorization baseline; richer account/organization tenancy and commercial grant resolution remain future layers.
+**Status:** implemented reference authorization baseline; richer account/organization tenancy, durable grant administration and commercial entitlement resolution remain incremental layers.
 
-## Implemented baseline
+## Implemented minimum security gate
 
-The current reference implementation already enforces:
+The current provider runtime implements an identity-bound pre-inference gate:
 
 ```text
-verified/signed requester identity
-        ↓
-relay provider ownership + visibility policy
-        ↓
-authorization-aware discovery / matching
-        ↓
-provider-host access policy
-        ↓
-provider billing policy
-        ↓
-adapter.execute()
+verified NEED
+    ↓
+requester identity (`from`)
+    ↓
+provider access policy
+    ↓
+ALLOW → materialize context → provider billing decision → provider execution
+DENY  → RESULT / PROVIDER_ACCESS_DENIED
+          provider execution count = 0
 ```
 
-Key facts:
+Both the low-level provider access policy and provider runtime default to `owner-only`. With no explicit requester allowlist they fail closed. A public runtime requires explicit public-mode opt-in and still remains subject to billing policy.
 
-- provider ownership is bound to authenticated/signed provider identity, not requester-controlled owner/tenant metadata;
-- missing/unknown provider access policy fails closed to private/`owner-only` behavior;
-- the low-level provider policy and runtime provider both default to `owner-only`;
-- an empty requester allowlist denies execution;
-- private providers can carry provider-signed requester allowlists;
-- unauthorized private offers are excluded from discovery/dispatch before provider work is queued;
-- provider-host authorization is a second independent gate immediately before adapter execution;
-- regression tests assert zero adapter executions for denied requesters;
-- public provider mode is explicit opt-in and does not bypass billing rules.
+The gate is covered by negative tests asserting an unauthorized requester is rejected before the adapter's `execute()` method is called.
+
+The relay also applies authorization-aware provider discovery/matching before dispatch, so the provider-host gate is a second independent defense rather than the first/only check.
+
+## Implemented relay ownership / discovery boundary
+
+The reference relay binds provider ownership to the authenticated/signed provider identity that published the `OFFER`. Requester-controlled `ownerId`/`tenantId` fields are not authoritative.
+
+For private/owner-only offers, provider-signed requester allowlists can authorize the intended requester without globally trusting that requester at the relay.
+
+Unauthorized private offers are filtered from discovery and dispatch across legacy, compact and WebSocket-chain paths.
 
 ## What remains incomplete
 
-The current node/provider identity model is not yet a complete commercial identity/control plane. Still open:
+The current reference security model is not yet the final account/organization control plane. Still open:
 
-- rich account and organization identities that can own multiple node/provider identities;
-- authoritative tenant membership lifecycle;
-- durable policy/grant administration;
-- commercial prepaid/subscription entitlement resolver;
-- production sponsored-entitlement issuance and durable usage-store deployment;
+- multiple nodes/providers bound to one authoritative user/org account;
+- authoritative tenant membership and lifecycle;
+- durable grant/policy administration;
+- production commercial entitlement issuance/revocation;
+- prepaid/subscription resolver and reconciliation;
+- deployed durable sponsored usage accounting;
 - marketplace contract/settlement administration.
 
-These future layers must preserve the existing fail-closed execution invariant.
+These future layers must preserve the current fail-closed execution order.
 
 ## Core rule
 
-Authorization is **server-side, identity-bound and fail-closed**. UI/CLI controls, hidden IDs, DNS or network obscurity are never sufficient authorization.
+TRUYN authorization is **server-side, identity-bound and fail-closed**.
+
+The official client, CLI and UI may provide helpful guardrails, but they are not a security boundary. A custom client that bypasses official UX must still be unable to invoke a provider it is not authorized to use.
 
 ## Canonical decision path
+
+Every execution-capable request path must preserve the same logical authorization pipeline:
 
 ```text
 authenticate requester
         ↓
-resolve authoritative requester identity / tenant when available
+resolve authoritative requester identity / tenant where available
         ↓
-resolve candidate provider ownership/policy
+resolve candidate provider policy
         ↓
-authorize visibility + explicit grants
+authorize visibility + ownership + explicit grants
         ↓
 resolve billing responsibility
         ↓
-resolve mandatory entitlement/quota
+check required entitlement / quota reservation
         ↓
 apply hard request constraints
         ↓
 rank eligible providers
         ↓
 dispatch
+        ↓
+provider-host access + billing recheck where applicable
+        ↓
+execute
 ```
 
-If a mandatory stage cannot produce a trustworthy answer, chargeable/private dispatch does not occur.
+If any mandatory stage cannot produce a trustworthy answer, dispatch/execution MUST NOT occur.
 
-## Default deny cases
+## Authoritative identity
 
-At minimum deny when:
+The authorization layer may use cryptographic TRUYN identity, authenticated relay session, account/tenant binding or trusted provisioning state. The key invariant is that requester authorization attributes are not accepted merely because the requester placed them in a payload.
 
-- requester identity is missing where identity is required;
-- provider policy is missing/unknown;
-- explicit sharing is required but no trusted grant exists;
-- owner-funded/BYOK provider is configured public;
-- prepaid/subscription resolver is absent;
-- sponsored access lacks a valid signed actor entitlement;
-- sponsored usage state is unavailable/non-durable when sponsored mode requires it;
-- an execution-capable compatibility path cannot reach equivalent authorization logic.
+Requester-controlled fields are claims. Authorization state is derived from authenticated context.
 
-## BYOK
+## Default deny
 
-The normal private path is:
+The following cases are denied by default:
+
+- provider policy missing or unreadable;
+- requester identity missing where required;
+- requester tenant unresolved where tenant policy is mandatory;
+- provider owner unresolved;
+- billing owner/responsibility unresolved;
+- visibility unknown;
+- explicit sharing required but no trusted grant exists;
+- quota/entitlement state unavailable when mandatory;
+- owner-funded/BYOK provider configured public;
+- sponsored mode lacks a valid actor-bound signed entitlement;
+- sponsored usage store is missing/non-durable/unavailable;
+- prepaid/subscription mode has no resolver;
+- compatibility/legacy route cannot preserve equivalent authorization.
+
+For the implemented provider-host gate specifically, `owner-only` with missing/empty requester allowlist denies execution.
+
+## Explicit policy exception
+
+Cross-owner execution is allowed only through explicit policy/entitlement. Such policy may represent a shared provider, paid capability, organization grant, sponsored allowance or future marketplace contract.
+
+There is no implicit rule that `authenticated user` means `may use all registered providers`.
+
+## Requester-owned provider / BYOK
+
+For normal BYOK operation:
 
 ```text
 requester identity
-        ↑ provider-signed allowedRequesterIds
+        ↑ provider-signed allowlist
 private BYOK provider
         ↓ signed OFFER
-TRUYN routing
+TRUYN relay/routing
 ```
 
-The relay does not receive the upstream API key. Another requester absent from the allowlist cannot discover/use that private provider.
+The provider consumes the user's/provider owner's upstream relationship. The relay does not receive the raw API key.
 
-## Owner-funded providers
+Another registered requester absent from that allowlist cannot discover/dispatch to the private provider and therefore cannot cause provider-host execution.
 
-Owner-funded capacity remains private by default. A public relay or known provider ID does not create entitlement. Wider sponsored/shared access requires a separate explicit contract/entitlement and billing decision.
+## Owner-funded provider
 
-## Alternate transports
+For owner-funded capacity, public relay/network reachability is not entitlement.
 
-HTTP, WebSocket, MCP, SDK, fast paths and legacy bridges may authenticate differently at the edge but MUST preserve equivalent provider authorization before any upstream execution.
+The current billing/access combination requires private/owner-only provider access. A public owner-funded provider mismatch is denied before adapter execution.
+
+Rich explicit shared/sponsored owner-funded access is a separate entitlement layer, not a consequence of network authentication.
+
+## Sponsored authorization interaction
+
+Sponsored execution adds an entitlement decision after access authorization.
+
+The current policy requires:
+
+- signed entitlement verification;
+- actor binding to the authenticated requester;
+- valid expiry/limits;
+- durable atomic usage reservation.
+
+The requester cannot self-grant sponsored access by inventing billing fields in `NEED`.
+
+## Legacy and alternate transports
+
+HTTP, WebSocket, MCP, SDK and future native transports MUST NOT implement independent authorization shortcuts. They may authenticate differently at the edge, but provider authorization must remain equivalent before any chargeable/private execution.
+
+Backward compatibility is not a reason to keep an execution bypass.
 
 ## Audit attributes
 
-A durable future audit/accounting record should be able to bind non-secret identifiers such as requester identity, provider identity/owner, tenant when available, billing mode/responsibility, authorization policy reference, quota/entitlement decision and request ID.
+A durable authorization/accounting record should be able to identify, where applicable:
+
+```text
+requesterId
+requesterTenant
+providerId
+providerOwner
+providerTenant
+billingMode
+billingResponsibility
+authorizationDecision
+authorizationPolicyRef
+entitlementId
+quotaDecision
+requestId
+```
+
+Operational identifiers and policy internals may remain private even when the semantic fields are public architecture.
+
+## Non-goals
+
+This document does not define a universal identity provider, payment processor or global account system. It defines authorization invariants that any implementation must preserve.
