@@ -226,7 +226,11 @@ export class AdversarialScaleNode {
   async findPeer(targetPeerId, { timeoutMs = 5_000 } = {}) {
     if (!this.node || this.node.status !== 'started' || !targetPeerId) return null;
     try {
-      return await this.node.peerRouting.findPeer(targetPeerId, { signal: AbortSignal.timeout(timeoutMs) });
+      const peerInfo = await this.node.peerRouting.findPeer(targetPeerId, { signal: AbortSignal.timeout(timeoutMs) });
+      if (peerInfo?.id && Array.isArray(peerInfo.multiaddrs) && peerInfo.multiaddrs.length > 0) {
+        await this.node.peerStore.merge(peerInfo.id, { multiaddrs: peerInfo.multiaddrs }).catch(() => null);
+      }
+      return peerInfo;
     } catch {
       return null;
     }
