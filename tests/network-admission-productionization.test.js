@@ -19,14 +19,19 @@ async function generateTls(root) {
 
 function tick() { return new Promise((resolve) => setImmediate(resolve)); }
 
+const settleImmediately = (promise) => promise.then(
+  (value) => ({ status: 'fulfilled', value }),
+  (reason) => ({ status: 'rejected', reason })
+);
+
 test('productionization admission: 350-event burst has explicit accept-or-backpressure accounting with zero silent loss', async () => {
   const queue = new BoundedAdmissionQueue({ maxInFlight: 8, maxQueued: 32 });
   let release;
   const gate = new Promise((resolve) => { release = resolve; });
-  const attempts = Array.from({ length: 350 }, (_, index) => queue.run(async () => {
+  const attempts = Array.from({ length: 350 }, (_, index) => settleImmediately(queue.run(async () => {
     await gate;
     return index;
-  }));
+  })));
 
   await tick();
   const saturated = queue.snapshot();
@@ -37,7 +42,7 @@ test('productionization admission: 350-event burst has explicit accept-or-backpr
   assert.equal(saturated.admitted + saturated.rejected, 350);
 
   release();
-  const settled = await Promise.allSettled(attempts);
+  const settled = await Promise.all(attempts);
   const fulfilled = settled.filter((item) => item.status === 'fulfilled');
   const rejected = settled.filter((item) => item.status === 'rejected');
   assert.equal(fulfilled.length, 40);
@@ -87,7 +92,7 @@ test('productionization admission: inbound QUIC overload rejects excess before h
         privateKeyPem: clientIdentity.privateKeyPem,
         publicKeyPem: clientIdentity.publicKeyPem
       });
-      return client.sendEnvelope(connection, envelope);
+      return settleImmediately(client.sendEnvelope(connection, envelope));
     });
 
     await new Promise((resolve) => setTimeout(resolve, 80));
@@ -99,7 +104,7 @@ test('productionization admission: inbound QUIC overload rejects excess before h
     assert.equal(handlerExecutions, 1, 'queued/excess work must not run early');
 
     release();
-    const settled = await Promise.allSettled(sends);
+    const settled = await Promise.all(sends);
     assert.equal(settled.filter((item) => item.status === 'fulfilled').length, 2);
     const rejected = settled.filter((item) => item.status === 'rejected');
     assert.equal(rejected.length, 3);
