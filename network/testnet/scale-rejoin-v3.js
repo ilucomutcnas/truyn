@@ -33,7 +33,7 @@ async function forgetOldPeer(oldPeerId) {
     try {
       if (typeof node.node.peerStore?.delete === 'function') await node.node.peerStore.delete(oldPeerId);
     } catch {
-      // The peer may already have been evicted by the disconnect handler.
+      // The peer may already have been evicted by the DHT or fault-harness purge.
     }
   }));
 }
@@ -85,8 +85,16 @@ if (!AdversarialScaleNode.prototype.__truynScaleRejoinV3) {
 
   AdversarialScaleNode.prototype.stop = async function stopWithPeerEviction() {
     const oldPeerId = this.peerId;
-    const result = await originalStop.call(this);
+
+    // Deregister before awaiting transport shutdown. During a real churn batch the
+    // survivor set still contains the live nodes that must forget this old PeerId.
+    // During final cluster teardown every stop() call reaches this point before the
+    // underlying asynchronous shutdown settles, so liveNodes becomes empty and we
+    // avoid an O(N^2) all-to-all purge that previously kept the process alive long
+    // after the scenario had already written its result.
     liveNodes.delete(this.index);
+
+    const result = await originalStop.call(this);
     await forgetOldPeer(oldPeerId);
     return result;
   };
