@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { createIdentity } from '../../core/identity/index.js';
 import { nodeIdFromPublicKey } from '../../core/protocol/index.js';
 import { TruynNetworkNode } from '../runtime.js';
+import { TESTNET_OPERATOR_PREFIX } from './operator.js';
 
 const MAX_BODY_BYTES = 1024 * 1024;
 
@@ -75,6 +76,16 @@ function int(value, fallback, { min = 1, max = Number.MAX_SAFE_INTEGER } = {}) {
   return parsed;
 }
 
+function csv(value = '') {
+  return [...new Set(String(value).split(',').map((item) => item.trim()).filter(Boolean))];
+}
+
+function decodePem(value, label) {
+  if (!value) return null;
+  try { return Buffer.from(value, 'base64').toString('utf8'); }
+  catch { throw new Error(`invalid_${label}_base64`); }
+}
+
 export async function createTestnetNodeService({
   identityPath,
   statePath,
@@ -90,12 +101,14 @@ export async function createTestnetNodeService({
   maxQueued = 256,
   dhtReplicationFactor = 3,
   dhtWriteQuorum = 2,
-  dhtRpcTimeoutMs = 5_000
+  dhtRpcTimeoutMs = 5_000,
+  operatorNodeIds = []
 } = {}) {
   if (!identityPath || !statePath) throw new Error('identityPath and statePath are required');
   if (!tlsKey || !tlsCert) throw new Error('tlsKey and tlsCert are required');
   if (!advertiseHost) throw new Error('advertiseHost is required');
   const identity = await loadOrCreateTestnetIdentity(identityPath);
+  const operators = new Set(operatorNodeIds);
   const node = new TruynNetworkNode({
     identity,
     host: quicHost,
@@ -112,82 +125,108 @@ export async function createTestnetNodeService({
     dhtRpcTimeoutMs
   });
 
-  node.onEnvelope(async (message, context) => ({
-    ok: true,
-    echo: message.payload?.input ?? null,
-    from: message.from,
-    to: identity.nodeId,
-    transport: context.transport
-  }));
-
   const startedAt = Date.now();
   let requestCount = 0;
+  const statusSnapshot = () => ({
+    ok: true,
+    nodeId: identity.nodeId,
+    started: node.started,
+    uptimeMs: Date.now() - startedAt,
+    quicPort: node.quic.port,
+    peerCount: node.discovery.routing.size(),
+    dhtRecordCount: node.recordStore.snapshot().length,
+    peerRecordSequence: node.localPeerRecord?.sequence || 0,
+    dhtRpcTimeoutMs: node.rpc.timeoutMs,
+    operatorCount: operators.size,
+    requests: requestCount
+  });
+
+  const replicate = async (body = {}) => {
+    const record = node.createRecord(body.namespace, body.key, body.value, {
+      sequence: int(body.sequence, 1),
+      ttlMs: int(body.ttlMs, 300_000)
+    });
+    const result = await node.replicateRecord(record, {
+      replicationFactor: int(body.replicationFactor, dhtReplicationFactor),
+      minAcks: int(body.minAcks, dhtWriteQuorum)
+    });
+    await node.persistState();
+    return { record, result };
+  };
+
+  const find = async (body = {}) => {
+    if (!body.namespace || !body.key) throw new Error('namespace_and_key_required');
+    return node.findReplicatedValue(body.namespace, body.key, {
+      fanout: int(body.fanout, dhtReplicationFactor + 4)
+    });
+  };
+
+  const repair = async (body = {}) => {
+    if (!body.namespace || !body.key) throw new Error('namespace_and_key_required');
+    const result = await node.repairRecord(body.namespace, body.key, {
+      replicationFactor: int(body.replicationFactor, dhtReplicationFactor),
+      minAcks: int(body.minAcks, dhtWriteQuorum)
+    });
+    await node.persistState();
+    return result;
+  };
+
+  const sweep = async () => {
+    const peers = node.discovery.sweep();
+    const records = node.recordStore.sweep();
+    await node.persistState();
+    return { peers, records };
+  };
+
+  node.onEnvelope(async (message, context) => {
+    const capability = message.payload?.capability?.name;
+    const input = message.payload?.input ?? {};
+    if (!String(capability || '').startsWith(TESTNET_OPERATOR_PREFIX)) {
+      return {
+        ok: true,
+        echo: input,
+        from: message.from,
+        to: identity.nodeId,
+        transport: context.transport
+      };
+    }
+
+    if (!operators.has(message.from)) {
+      const error = new Error('testnet_operator_denied');
+      error.code = 'TRUYN_TESTNET_OPERATOR_DENIED';
+      throw error;
+    }
+
+    const command = capability.slice(TESTNET_OPERATOR_PREFIX.length);
+    if (command === 'status') return statusSnapshot();
+    if (command === 'bootstrap') return { results: node.bootstrap(input.records || []) };
+    if (command === 'need') {
+      if (!input.nodeId) throw new Error('operator_need_nodeId_required');
+      return node.need(input.nodeId, 'testnet.echo', input.input ?? { nonce: randomUUID() }, {}, { allowRelayFallback: false });
+    }
+    if (command === 'replicate') return replicate(input);
+    if (command === 'find') return find(input);
+    if (command === 'repair') return repair(input);
+    if (command === 'sweep') return sweep();
+    throw new Error('unsupported_testnet_operator_command');
+  });
+
   const server = http.createServer(async (req, res) => {
     requestCount += 1;
     const url = new URL(req.url || '/', 'http://localhost');
     try {
-      if (req.method === 'GET' && url.pathname === '/status') {
-        return json(res, 200, {
-          ok: true,
-          nodeId: identity.nodeId,
-          started: node.started,
-          uptimeMs: Date.now() - startedAt,
-          quicPort: node.quic.port,
-          peerCount: node.discovery.routing.size(),
-          dhtRecordCount: node.recordStore.snapshot().length,
-          peerRecordSequence: node.localPeerRecord?.sequence || 0,
-          dhtRpcTimeoutMs: node.rpc.timeoutMs,
-          requests: requestCount
-        });
-      }
+      if (req.method === 'GET' && url.pathname === '/status') return json(res, 200, statusSnapshot());
       if (req.method === 'GET' && url.pathname === '/record') return json(res, 200, { record: node.localPeerRecord });
-      if (req.method === 'POST' && url.pathname === '/bootstrap') {
-        const body = await readJson(req);
-        return json(res, 200, { results: node.bootstrap(body.records || []) });
-      }
-      if (req.method === 'POST' && url.pathname === '/ping') {
-        const body = await readJson(req);
-        return json(res, 200, { pong: await node.pingPeer(body.nodeId) });
-      }
+      if (req.method === 'POST' && url.pathname === '/bootstrap') return json(res, 200, { results: node.bootstrap((await readJson(req)).records || []) });
+      if (req.method === 'POST' && url.pathname === '/ping') return json(res, 200, { pong: await node.pingPeer((await readJson(req)).nodeId) });
       if (req.method === 'POST' && url.pathname === '/need') {
         const body = await readJson(req);
-        const result = await node.need(body.nodeId, 'testnet.echo', body.input ?? { nonce: randomUUID() }, {}, { allowRelayFallback: false });
-        return json(res, 200, result);
+        return json(res, 200, await node.need(body.nodeId, 'testnet.echo', body.input ?? { nonce: randomUUID() }, {}, { allowRelayFallback: false }));
       }
-      if (req.method === 'POST' && url.pathname === '/replicate') {
-        const body = await readJson(req);
-        const record = node.createRecord(body.namespace, body.key, body.value, {
-          sequence: int(body.sequence, 1),
-          ttlMs: int(body.ttlMs, 300_000)
-        });
-        const result = await node.replicateRecord(record, {
-          replicationFactor: int(body.replicationFactor, dhtReplicationFactor),
-          minAcks: int(body.minAcks, dhtWriteQuorum)
-        });
-        await node.persistState();
-        return json(res, 200, { record, result });
-      }
-      if (req.method === 'GET' && url.pathname === '/find') {
-        const namespace = url.searchParams.get('namespace');
-        const key = url.searchParams.get('key');
-        if (!namespace || !key) return json(res, 400, { ok: false, error: 'namespace_and_key_required' });
-        return json(res, 200, await node.findReplicatedValue(namespace, key, { fanout: int(url.searchParams.get('fanout'), dhtReplicationFactor + 4) }));
-      }
-      if (req.method === 'POST' && url.pathname === '/repair') {
-        const body = await readJson(req);
-        const result = await node.repairRecord(body.namespace, body.key, {
-          replicationFactor: int(body.replicationFactor, dhtReplicationFactor),
-          minAcks: int(body.minAcks, dhtWriteQuorum)
-        });
-        await node.persistState();
-        return json(res, 200, result);
-      }
-      if (req.method === 'POST' && url.pathname === '/sweep') {
-        const peers = node.discovery.sweep();
-        const records = node.recordStore.sweep();
-        await node.persistState();
-        return json(res, 200, { peers, records });
-      }
+      if (req.method === 'POST' && url.pathname === '/replicate') return json(res, 200, await replicate(await readJson(req)));
+      if (req.method === 'GET' && url.pathname === '/find') return json(res, 200, await find({ namespace: url.searchParams.get('namespace'), key: url.searchParams.get('key'), fanout: url.searchParams.get('fanout') }));
+      if (req.method === 'POST' && url.pathname === '/repair') return json(res, 200, await repair(await readJson(req)));
+      if (req.method === 'POST' && url.pathname === '/sweep') return json(res, 200, await sweep());
       return json(res, 404, { ok: false, error: 'not_found' });
     } catch (error) {
       return json(res, error?.statusCode || 500, {
@@ -222,10 +261,8 @@ export async function createTestnetNodeService({
 
 export async function runTestnetNodeFromEnv(env = process.env) {
   const dataDir = resolve(env.TRUYN_TESTNET_DATA_DIR || '.truyn-testnet');
-  const [tlsKey, tlsCert] = await Promise.all([
-    readFile(env.TRUYN_TLS_KEY_PATH, 'utf8'),
-    readFile(env.TRUYN_TLS_CERT_PATH, 'utf8')
-  ]);
+  const tlsKey = decodePem(env.TRUYN_TLS_KEY_B64, 'tls_key') || await readFile(env.TRUYN_TLS_KEY_PATH, 'utf8');
+  const tlsCert = decodePem(env.TRUYN_TLS_CERT_B64, 'tls_cert') || await readFile(env.TRUYN_TLS_CERT_PATH, 'utf8');
   const service = await createTestnetNodeService({
     identityPath: resolve(env.TRUYN_IDENTITY_PATH || `${dataDir}/identity.json`),
     statePath: resolve(env.TRUYN_NETWORK_STATE_PATH || `${dataDir}/network-state.json`),
@@ -241,10 +278,17 @@ export async function runTestnetNodeFromEnv(env = process.env) {
     maxQueued: int(env.TRUYN_MAX_QUEUED, 256, { min: 0 }),
     dhtReplicationFactor: int(env.TRUYN_DHT_REPLICATION_FACTOR, 3),
     dhtWriteQuorum: int(env.TRUYN_DHT_WRITE_QUORUM, 2),
-    dhtRpcTimeoutMs: int(env.TRUYN_DHT_RPC_TIMEOUT_MS, 5_000, { min: 100, max: 120_000 })
+    dhtRpcTimeoutMs: int(env.TRUYN_DHT_RPC_TIMEOUT_MS, 5_000, { min: 100, max: 120_000 }),
+    operatorNodeIds: csv(env.TRUYN_TESTNET_OPERATOR_NODE_IDS)
   });
   const address = service.controlAddress;
-  process.stdout.write(`${JSON.stringify({ ok: true, nodeId: service.identity.nodeId, quicPort: service.node.quic.port, controlPort: address.port })}\n`);
+  process.stdout.write(`${JSON.stringify({
+    ok: true,
+    nodeId: service.identity.nodeId,
+    quicPort: service.node.quic.port,
+    controlPort: address.port,
+    peerRecord: service.node.localPeerRecord
+  })}\n`);
   let stopping = false;
   const stop = async () => {
     if (stopping) return;
