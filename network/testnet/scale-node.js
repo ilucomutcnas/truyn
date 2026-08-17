@@ -223,6 +223,15 @@ export class AdversarialScaleNode {
     return providers;
   }
 
+  async findPeer(targetPeerId, { timeoutMs = 5_000 } = {}) {
+    if (!this.node || this.node.status !== 'started' || !targetPeerId) return null;
+    try {
+      return await this.node.peerRouting.findPeer(targetPeerId, { signal: AbortSignal.timeout(timeoutMs) });
+    } catch {
+      return null;
+    }
+  }
+
   async probe(targetPeerId, value, { expectedDigest = scaleValueDigest(value), timeoutMs = 3_000, requestId = null } = {}) {
     const request = {
       requestId: requestId || `scale-${this.index}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
