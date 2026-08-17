@@ -1,4 +1,4 @@
-name: Temporary Durable Inbox Debug
+name: Temporary Full Suite Debug
 
 on:
   push:
@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 jobs:
-  durable-debug:
+  suite-debug:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -19,17 +19,16 @@ jobs:
         with:
           node-version: 22
       - run: npm install --ignore-scripts --no-audit --no-fund
-      - name: Run durable tests with explicit failure annotation
+      - name: Run full suite with explicit failure annotation
         shell: bash
         run: |
           set +e
-          node --test tests/durable-inbox-productionization.test.js > /tmp/durable.log 2>&1
+          npm test > /tmp/suite.log 2>&1
           rc=$?
-          cat /tmp/durable.log
+          cat /tmp/suite.log
           if [[ "$rc" != 0 ]]; then
-            detail="$(tail -n 80 /tmp/durable.log | sed ':a;N;$!ba;s/%/%25/g;s/\r/%0D/g;s/\n/%0A/g')"
-            echo "::error title=TRUYN Durable Inbox Test Failure::$detail"
+            detail="$(tail -n 140 /tmp/suite.log | sed ':a;N;$!ba;s/%/%25/g;s/\r/%0D/g;s/\n/%0A/g')"
+            echo "::error title=TRUYN Full Suite Failure::$detail"
             exit "$rc"
           fi
-          echo 'TRUYN_DURABLE_INBOX=PASS'
-          # rerun marker: numeric-port-fix
+          echo 'TRUYN_FULL_SUITE=PASS'
