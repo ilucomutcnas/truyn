@@ -4,9 +4,17 @@ import { ORIGIN_GUARD_HEADER } from './origin-guard-contract.js';
 
 export { ORIGIN_GUARD_HEADER } from './origin-guard-contract.js';
 
+const HEADER_NAME_PATTERN = /^[!#$%&'*+\-.^_`|~0-9a-z]+$/;
+
 function enabled(value) {
   const normalized = String(value || '').trim().toLowerCase();
   return normalized === '1' || normalized === 'true';
+}
+
+function normalizeHeaderName(value = ORIGIN_GUARD_HEADER) {
+  const headerName = String(value || '').trim().toLowerCase();
+  if (!headerName || !HEADER_NAME_PATTERN.test(headerName)) throw new Error('invalid origin guard header name');
+  return headerName;
 }
 
 function constantTimeEqual(left, right) {
@@ -16,8 +24,9 @@ function constantTimeEqual(left, right) {
   return timingSafeEqual(a, b);
 }
 
-function guardedHeaders(headers = {}) {
+function guardedHeaders(headers = {}, headerName = ORIGIN_GUARD_HEADER) {
   const next = { ...headers };
+  delete next[normalizeHeaderName(headerName)];
   delete next[ORIGIN_GUARD_HEADER];
   return next;
 }
@@ -56,18 +65,22 @@ function responseHead(response) {
 export function createRuntimeOriginGuardConfig(env = process.env) {
   const active = enabled(env.TRUYN_ORIGIN_GUARD);
   const token = String(env.TRUYN_ORIGIN_GUARD_TOKEN || '').trim();
+  const configuredHeader = String(env.TRUYN_ORIGIN_GUARD_HEADER || '').trim();
   if (active && !token) throw new Error('TRUYN_ORIGIN_GUARD=1 requires TRUYN_ORIGIN_GUARD_TOKEN');
   if (!active && token) throw new Error('TRUYN_ORIGIN_GUARD_TOKEN requires explicit TRUYN_ORIGIN_GUARD=1');
-  return { enabled: active, token: active ? token : null };
+  if (!active && configuredHeader) throw new Error('TRUYN_ORIGIN_GUARD_HEADER requires explicit TRUYN_ORIGIN_GUARD=1');
+  const headerName = active ? normalizeHeaderName(configuredHeader || ORIGIN_GUARD_HEADER) : ORIGIN_GUARD_HEADER;
+  return { enabled: active, token: active ? token : null, headerName };
 }
 
-export function createOriginGuard({ targetHost = '127.0.0.1', targetPort, token } = {}) {
+export function createOriginGuard({ targetHost = '127.0.0.1', targetPort, token, headerName = ORIGIN_GUARD_HEADER } = {}) {
   if (!Number.isInteger(targetPort) || targetPort <= 0 || targetPort > 65535) throw new Error('targetPort is required');
   if (!String(token || '').trim()) throw new Error('origin guard token is required');
   const expectedToken = String(token).trim();
+  const expectedHeader = normalizeHeaderName(headerName);
 
   function authorized(req) {
-    return constantTimeEqual(req.headers[ORIGIN_GUARD_HEADER], expectedToken);
+    return constantTimeEqual(req.headers[expectedHeader], expectedToken);
   }
 
   function proxyHttp(req, res) {
@@ -76,7 +89,7 @@ export function createOriginGuard({ targetHost = '127.0.0.1', targetPort, token 
       port: targetPort,
       method: req.method,
       path: req.url,
-      headers: guardedHeaders(req.headers)
+      headers: guardedHeaders(req.headers, expectedHeader)
     }, (upstreamRes) => {
       res.writeHead(upstreamRes.statusCode || 502, upstreamRes.headers);
       upstreamRes.pipe(res);
@@ -109,7 +122,7 @@ export function createOriginGuard({ targetHost = '127.0.0.1', targetPort, token 
       port: targetPort,
       method: req.method,
       path: req.url,
-      headers: guardedHeaders(req.headers)
+      headers: guardedHeaders(req.headers, expectedHeader)
     });
     upstream.on('upgrade', (response, upstreamSocket, upstreamHead) => {
       if (socket.destroyed) {
