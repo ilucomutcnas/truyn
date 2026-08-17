@@ -89,7 +89,8 @@ export async function createTestnetNodeService({
   maxInFlight = 64,
   maxQueued = 256,
   dhtReplicationFactor = 3,
-  dhtWriteQuorum = 2
+  dhtWriteQuorum = 2,
+  dhtRpcTimeoutMs = 5_000
 } = {}) {
   if (!identityPath || !statePath) throw new Error('identityPath and statePath are required');
   if (!tlsKey || !tlsCert) throw new Error('tlsKey and tlsCert are required');
@@ -107,7 +108,8 @@ export async function createTestnetNodeService({
     maxInFlight,
     maxQueued,
     dhtReplicationFactor,
-    dhtWriteQuorum
+    dhtWriteQuorum,
+    dhtRpcTimeoutMs
   });
 
   node.onEnvelope(async (message, context) => ({
@@ -134,6 +136,7 @@ export async function createTestnetNodeService({
           peerCount: node.discovery.routing.size(),
           dhtRecordCount: node.recordStore.snapshot().length,
           peerRecordSequence: node.localPeerRecord?.sequence || 0,
+          dhtRpcTimeoutMs: node.rpc.timeoutMs,
           requests: requestCount
         });
       }
@@ -237,7 +240,8 @@ export async function runTestnetNodeFromEnv(env = process.env) {
     maxInFlight: int(env.TRUYN_MAX_IN_FLIGHT, 64),
     maxQueued: int(env.TRUYN_MAX_QUEUED, 256, { min: 0 }),
     dhtReplicationFactor: int(env.TRUYN_DHT_REPLICATION_FACTOR, 3),
-    dhtWriteQuorum: int(env.TRUYN_DHT_WRITE_QUORUM, 2)
+    dhtWriteQuorum: int(env.TRUYN_DHT_WRITE_QUORUM, 2),
+    dhtRpcTimeoutMs: int(env.TRUYN_DHT_RPC_TIMEOUT_MS, 5_000, { min: 100, max: 120_000 })
   });
   const address = service.controlAddress;
   process.stdout.write(`${JSON.stringify({ ok: true, nodeId: service.identity.nodeId, quicPort: service.node.quic.port, controlPort: address.port })}\n`);
