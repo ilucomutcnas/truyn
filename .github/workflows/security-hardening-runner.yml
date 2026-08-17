@@ -27,11 +27,17 @@ jobs:
           test -n "$PATCH_B64"
           printf '%s' "$PATCH_B64" | base64 -d | gzip -d > /tmp/apply-security-hardening.mjs
           node /tmp/apply-security-hardening.mjs
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const path = 'tests/runtime-combined-perimeter.test.js';
+          const original = fs.readFileSync(path, 'utf8');
+          const needle = "      TRUYN_ORIGIN_GUARD_TOKEN: 'edge-proof',\n";
+          if (!original.includes(needle)) throw new Error('origin guard fixture anchor missing');
+          fs.writeFileSync(path, original.replace(needle, `${needle}      TRUYN_ORIGIN_GUARD_TOKEN_EXPIRES_AT: '2099-01-01T00:00:00.000Z',\n`));
+          NODE
           rm -f .github/workflows/security-hardening-apply.yml .github/workflows/security-hardening-runner.yml
       - name: Run full regression suite
         run: npm test
-        env:
-          TRUYN_LOCAL_DEVELOPMENT: '1'
       - name: Check diff whitespace
         run: git diff --check
       - name: Commit validated hardening
