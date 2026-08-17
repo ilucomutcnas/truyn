@@ -13,6 +13,8 @@ function isTransportFailure(result) {
   return Boolean(result && !result.ok && result.transportError);
 }
 
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
 if (!AdversarialScaleNode.prototype.__truynScaleProbeTransportV3) {
   Object.defineProperty(AdversarialScaleNode.prototype, '__truynScaleProbeTransportV3', {
     value: true,
@@ -37,25 +39,30 @@ if (!AdversarialScaleNode.prototype.__truynScaleProbeTransportV3) {
       await this.node.dial(dialTarget, { signal: AbortSignal.timeout(Math.min(5_000, timeoutMs)) }).catch(() => null);
     }
 
-    let result = await originalProbe.call(this, dialTarget, value, {
+    let result = await originalProbe.call(this, resolved?.id || dialTarget, value, {
       ...options,
       timeoutMs,
       transportRetries
     });
 
     // A transport failure may mean that a freshly rotated PeerId/address has not
-    // converged into this requester's PeerStore yet. Repair routing once, then
-    // retry transport. Cryptographically invalid/malicious replies are never
-    // retried because they do not carry transportError.
+    // converged into this requester's PeerStore yet, or that a connection under
+    // adversarial stream pressure has been reset. Replace only the target
+    // connection, repair routing once, then retry. Attacker connections remain
+    // established, so this does not weaken Byzantine/Sybil pressure.
+    // Cryptographically invalid/malicious replies never enter this branch because
+    // they do not carry transportError and therefore are never retried-to-success.
     if (isTransportFailure(result) && expectedPeerId) {
       const peerIdObject = resolved?.id || (!String(target?.toString?.() || target).startsWith('/') ? target : null);
       if (peerIdObject) {
+        await this.node.hangUp(peerIdObject).catch(() => null);
+        await sleep(40);
         const refreshed = await this.findPeer(peerIdObject, { timeoutMs: Math.min(6_000, timeoutMs) }).catch(() => null);
         if (refreshed?.multiaddrs?.length > 0) {
           await this.node.peerStore.merge(refreshed.id, { multiaddrs: refreshed.multiaddrs }).catch(() => null);
           dialTarget = refreshed.multiaddrs[0];
           await this.node.dial(dialTarget, { signal: AbortSignal.timeout(Math.min(5_000, timeoutMs)) }).catch(() => null);
-          result = await originalProbe.call(this, dialTarget, value, {
+          result = await originalProbe.call(this, refreshed.id, value, {
             ...options,
             timeoutMs,
             transportRetries: 1
