@@ -9,6 +9,7 @@ on:
       - '.github/workflows/scale-gate.yml'
       - 'network/testnet/**'
       - 'network/transport/quic-kademlia.js'
+      - 'network/transport/json-stream.js'
       - 'simulations/network-failure/**'
       - 'simulations/nodes-100/**'
       - 'package.json'
@@ -56,7 +57,7 @@ jobs:
       - name: Install dependencies
         run: npm install --ignore-scripts --no-audit --no-fund
       - name: Run isolated 100-node scenario
-        run: node simulations/nodes-100/scenario-peer-routing.js
+        run: node simulations/nodes-100/scenario-peer-routing-v2.js
       - name: Print compact scenario summary
         if: always()
         shell: bash
@@ -75,6 +76,7 @@ jobs:
             passed: report.passed,
             nodeCount: report.nodeCount,
             routingPrimitive: report.routingPrimitive ?? null,
+            topologyMode: report.topologyMode ?? null,
             live: report.finalNetwork?.live ?? report.topology?.live ?? null,
             libp2pIds: report.finalNetwork?.uniqueLibp2pPeerIds ?? report.topology?.uniqueLibp2pPeerIds ?? null,
             truynIds: report.finalNetwork?.uniqueTruynNodeIds ?? report.topology?.uniqueTruynNodeIds ?? null,
