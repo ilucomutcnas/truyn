@@ -129,22 +129,60 @@ export class DecentralizedVerifierDiscovery {
   }
 }
 
-export async function discoverVerifiers(node, domain, { limit = 8, timeoutMs = 5_000, revocationState = null } = {}) {
+export async function discoverVerifiers(node, domain, {
+  limit = 8,
+  timeoutMs = 5_000,
+  revocationState = null,
+  candidateLimit = Math.max(limit * 2, limit + 2),
+  perPeerTimeoutMs = Math.max(500, Math.min(1_500, Math.floor(timeoutMs / 2)))
+} = {}) {
   const cid = await verifierDiscoveryCid(domain);
-  const discovered = [];
+  const selfPeerId = node.peerId.toString();
+  const candidates = [];
   const seen = new Set();
-  const deadline = Date.now() + timeoutMs;
-  for await (const provider of node.contentRouting.findProviders(cid, { signal: AbortSignal.timeout(timeoutMs) })) {
-    if (Date.now() >= deadline || discovered.length >= limit) break;
-    const peerId = provider.id.toString();
-    if (seen.has(peerId) || peerId === node.peerId.toString()) continue;
-    seen.add(peerId);
-    try {
-      const response = await requestJson(node, provider.id, VERIFIER_DISCOVERY_PROTOCOL, { type: 'GET_VERIFIER_RECORD', domain: normalizedDomain(domain) }, { timeoutMs: Math.max(250, deadline - Date.now()), maxBytes: 256_000 });
-      if (!response?.ok || !response.record) continue;
-      const check = verifySignedVerifierRecord(response.record, { expectedDomain: domain, expectedPeerId: peerId, revocationState });
-      if (check.ok) discovered.push({ peerId, record: response.record, verification: check });
-    } catch {}
+  const collectionTimeoutMs = Math.max(500, Math.min(timeoutMs, Math.floor(timeoutMs * 0.6)));
+
+  try {
+    for await (const provider of node.contentRouting.findProviders(cid, { signal: AbortSignal.timeout(collectionTimeoutMs) })) {
+      const peerId = provider.id.toString();
+      if (seen.has(peerId) || peerId === selfPeerId) continue;
+      seen.add(peerId);
+      candidates.push(provider);
+      if (candidates.length >= candidateLimit) break;
+    }
+  } catch (error) {
+    if (error?.name !== 'AbortError' && error?.name !== 'TimeoutError') throw error;
   }
-  return discovered;
+
+  const verified = await Promise.all(candidates.map(async (provider) => {
+    const peerId = provider.id.toString();
+    try {
+      const response = await requestJson(
+        node,
+        provider.id,
+        VERIFIER_DISCOVERY_PROTOCOL,
+        { type: 'GET_VERIFIER_RECORD', domain: normalizedDomain(domain) },
+        { timeoutMs: perPeerTimeoutMs, maxBytes: 256_000 }
+      );
+      if (!response?.ok || !response.record) return null;
+      const check = verifySignedVerifierRecord(response.record, { expectedDomain: domain, expectedPeerId: peerId, revocationState });
+      return check.ok ? { peerId, record: response.record, verification: check } : null;
+    } catch {
+      return null;
+    }
+  }));
+
+  const latestByVerifier = new Map();
+  for (const entry of verified) {
+    if (!entry) continue;
+    const verifierNodeId = entry.record.body.verifierNodeId;
+    const previous = latestByVerifier.get(verifierNodeId);
+    if (!previous || new Date(entry.record.issuedAt).getTime() > new Date(previous.record.issuedAt).getTime()) {
+      latestByVerifier.set(verifierNodeId, entry);
+    }
+  }
+
+  return [...latestByVerifier.values()]
+    .sort((a, b) => new Date(b.record.issuedAt).getTime() - new Date(a.record.issuedAt).getTime())
+    .slice(0, limit);
 }
