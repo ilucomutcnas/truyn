@@ -3,24 +3,16 @@ import { createEnvelope } from '../core/protocol/index.js';
 import { KademliaRecordStore, createDhtRecord } from './dht/kademlia.js';
 import { PeerDiscovery, createPeerRecord, verifyPeerRecord } from './discovery/peer-discovery.js';
 import { QuicDiscoveryRpc, createQuicDiscoveryControlHandler } from './discovery/quic-rpc.js';
+import { DhtReplicationManager } from './replication/dht-replication.js';
+import { DurableNetworkState } from './state/persistent-state.js';
 import { TruynQuicTransport } from './transport/quic.js';
 import { DirectFirstP2P } from './transport/p2p.js';
 
 export class TruynNetworkNode {
   constructor({
-    identity = createIdentity(),
-    host = '0.0.0.0',
-    port = 0,
-    advertiseHost = null,
-    tls,
-    k = 20,
-    alpha = 3,
-    relayFallback = null,
-    nat = null,
-    capabilities = [],
-    peerRecordTtlMs = 300_000,
-    maxInFlight = 64,
-    maxQueued = 256
+    identity = createIdentity(), host = '0.0.0.0', port = 0, advertiseHost = null, tls,
+    k = 20, alpha = 3, relayFallback = null, nat = null, capabilities = [], peerRecordTtlMs = 300_000,
+    maxInFlight = 64, maxQueued = 256, statePath = null, dhtReplicationFactor = 3, dhtWriteQuorum = 2
   } = {}) {
     if (!tls?.key || !tls?.cert) throw new Error('network runtime TLS key/certificate are required');
     this.identity = identity;
@@ -37,56 +29,80 @@ export class TruynNetworkNode {
     this.sequence = 0;
     this.started = false;
     this.localPeerRecord = null;
-    this.recordStore = new KademliaRecordStore();
+    this.stateStore = statePath ? new DurableNetworkState({ filePath: statePath }) : null;
+    this.stateReady = false;
+    this.persistQueue = Promise.resolve();
+    const onStateChange = () => this.schedulePersist();
+    this.recordStore = new KademliaRecordStore({ onChange: onStateChange });
     this.quic = new TruynQuicTransport({ identity, host, port, tls });
-    this.discovery = new PeerDiscovery({ identity, k, alpha });
+    this.discovery = new PeerDiscovery({ identity, k, alpha, onChange: onStateChange });
     this.rpc = new QuicDiscoveryRpc({ quicTransport: this.quic });
     this.discovery.rpc = this.rpc;
-    this.router = new DirectFirstP2P({
-      quicTransport: this.quic,
+    this.replication = new DhtReplicationManager({
       discovery: this.discovery,
-      relayFallback,
-      maxInFlight,
-      maxQueued
+      rpc: this.rpc,
+      recordStore: this.recordStore,
+      replicationFactor: dhtReplicationFactor,
+      writeQuorum: dhtWriteQuorum
     });
+    this.router = new DirectFirstP2P({ quicTransport: this.quic, discovery: this.discovery, relayFallback, maxInFlight, maxQueued });
     this.quic.onControl(createQuicDiscoveryControlHandler(this.discovery, { recordStore: this.recordStore }));
   }
 
-  onEnvelope(handler) {
-    this.quic.onEnvelope(handler);
-    return this;
+  snapshotState() {
+    return {
+      nodeId: this.identity.nodeId,
+      sequence: this.sequence,
+      savedAt: new Date().toISOString(),
+      peerRecords: this.discovery.snapshot(),
+      dhtRecords: this.recordStore.snapshot()
+    };
   }
 
+  schedulePersist() {
+    if (!this.stateStore || !this.stateReady) return;
+    const snapshot = this.snapshotState();
+    this.persistQueue = this.persistQueue.then(() => this.stateStore.save(snapshot));
+  }
+
+  async persistState() {
+    if (!this.stateStore) return null;
+    const snapshot = this.snapshotState();
+    this.persistQueue = this.persistQueue.then(() => this.stateStore.save(snapshot));
+    await this.persistQueue;
+    return snapshot;
+  }
+
+  async hydrateState() {
+    if (!this.stateStore) { this.stateReady = true; return null; }
+    const state = await this.stateStore.load();
+    if (state) {
+      if (state.nodeId !== this.identity.nodeId) throw new Error('network_state_identity_mismatch');
+      this.sequence = Math.max(this.sequence, Number.isInteger(state.sequence) ? state.sequence : 0);
+      this.discovery.restore(state.peerRecords || [], { notify: false });
+      this.recordStore.restore(state.dhtRecords || [], { notify: false });
+    }
+    this.stateReady = true;
+    return state;
+  }
+
+  onEnvelope(handler) { this.quic.onEnvelope(handler); return this; }
+
   envelope(type, payload, { to = null, id, time, trace, deadline, priority } = {}) {
-    return createEnvelope({
-      type,
-      from: this.identity.nodeId,
-      to,
-      payload,
-      id,
-      time,
-      trace,
-      deadline,
-      priority,
-      privateKeyPem: this.identity.privateKeyPem,
-      publicKeyPem: this.identity.publicKeyPem
-    });
+    return createEnvelope({ type, from: this.identity.nodeId, to, payload, id, time, trace, deadline, priority,
+      privateKeyPem: this.identity.privateKeyPem, publicKeyPem: this.identity.publicKeyPem });
   }
 
   async start() {
     if (this.started) return this.localPeerRecord;
+    await this.hydrateState();
     const endpoint = await this.quic.start();
     const advertisedHost = this.advertiseHost || (endpoint.host === '0.0.0.0' ? '127.0.0.1' : endpoint.host);
     this.sequence += 1;
-    this.localPeerRecord = createPeerRecord({
-      identity: this.identity,
-      endpoints: [`quic://${advertisedHost}:${endpoint.port}`],
-      sequence: this.sequence,
-      ttlMs: this.peerRecordTtlMs,
-      capabilities: this.capabilities,
-      nat: this.nat
-    });
+    this.localPeerRecord = createPeerRecord({ identity: this.identity, endpoints: [`quic://${advertisedHost}:${endpoint.port}`],
+      sequence: this.sequence, ttlMs: this.peerRecordTtlMs, capabilities: this.capabilities, nat: this.nat });
     this.started = true;
+    await this.persistState();
     return structuredClone(this.localPeerRecord);
   }
 
@@ -96,14 +112,9 @@ export class TruynNetworkNode {
     this.capabilities = [...new Set(capabilities)];
     const endpoint = this.localPeerRecord.endpoints[0];
     this.sequence += 1;
-    this.localPeerRecord = createPeerRecord({
-      identity: this.identity,
-      endpoints: [endpoint],
-      sequence: this.sequence,
-      ttlMs: this.peerRecordTtlMs,
-      capabilities: this.capabilities,
-      nat: this.nat
-    });
+    this.localPeerRecord = createPeerRecord({ identity: this.identity, endpoints: [endpoint], sequence: this.sequence,
+      ttlMs: this.peerRecordTtlMs, capabilities: this.capabilities, nat: this.nat });
+    this.schedulePersist();
     return structuredClone(this.localPeerRecord);
   }
 
@@ -111,56 +122,29 @@ export class TruynNetworkNode {
     const results = [];
     for (const record of records) {
       const verification = verifyPeerRecord(record);
-      if (!verification.ok) {
-        results.push({ accepted: false, reason: verification.reason });
-        continue;
-      }
+      if (!verification.ok) { results.push({ accepted: false, reason: verification.reason }); continue; }
       results.push(this.discovery.ingest(record));
     }
     return results;
   }
 
-  async findPeer(nodeId) {
-    return this.discovery.get(nodeId) || this.discovery.findNode(nodeId);
-  }
-
-  async pingPeer(nodeId) {
-    const peer = await this.findPeer(nodeId);
-    if (!peer) return false;
-    return this.rpc.ping(peer);
-  }
-
-  async send(nodeId, envelope, options = {}) {
-    if (!this.started) throw new Error('network node is not started');
-    return this.router.send(nodeId, envelope, options);
-  }
+  async findPeer(nodeId) { return this.discovery.get(nodeId) || this.discovery.findNode(nodeId); }
+  async pingPeer(nodeId) { const peer = await this.findPeer(nodeId); return peer ? this.rpc.ping(peer) : false; }
+  async send(nodeId, envelope, options = {}) { if (!this.started) throw new Error('network node is not started'); return this.router.send(nodeId, envelope, options); }
 
   async need(nodeId, capability, input, policy = {}, options = {}) {
-    const message = this.envelope('NEED', {
-      capability: { name: capability },
-      input,
-      policy
-    }, { to: nodeId });
-    return this.send(nodeId, message, options);
+    return this.send(nodeId, this.envelope('NEED', { capability: { name: capability }, input, policy }, { to: nodeId }), options);
   }
 
-  createRecord(namespace, key, value, options = {}) {
-    return createDhtRecord({ identity: this.identity, namespace, key, value, ...options });
-  }
-
-  async storeAt(nodeId, record) {
-    const peer = await this.findPeer(nodeId);
-    if (!peer) throw new Error('DHT peer not found');
-    return this.rpc.store(peer, record);
-  }
-
-  async findValueAt(nodeId, namespace, key) {
-    const peer = await this.findPeer(nodeId);
-    if (!peer) throw new Error('DHT peer not found');
-    return this.rpc.findValue(peer, namespace, key);
-  }
+  createRecord(namespace, key, value, options = {}) { return createDhtRecord({ identity: this.identity, namespace, key, value, ...options }); }
+  async storeAt(nodeId, record) { const peer = await this.findPeer(nodeId); if (!peer) throw new Error('DHT peer not found'); return this.rpc.store(peer, record); }
+  async findValueAt(nodeId, namespace, key) { const peer = await this.findPeer(nodeId); if (!peer) throw new Error('DHT peer not found'); return this.rpc.findValue(peer, namespace, key); }
+  async replicateRecord(record, options = {}) { return this.replication.put(record, options); }
+  async findReplicatedValue(namespace, key, options = {}) { return this.replication.get(namespace, key, options); }
+  async repairRecord(namespace, key, options = {}) { return this.replication.repair(namespace, key, options); }
 
   async close() {
+    if (this.stateReady) await this.persistState();
     this.started = false;
     await this.quic.close();
   }
