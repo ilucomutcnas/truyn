@@ -149,9 +149,10 @@ export class AdversarialScaleNode {
     return refreshKademliaRoutingTable(this.node, { timeoutMs, externalAbort });
   }
 
-  async advertise(key, { timeoutMs = 8_000 } = {}) {
+  async advertise(key, { timeoutMs = 8_000, externalAbort = false } = {}) {
     const cid = key instanceof CID ? key : await scaleContentCid(key);
-    await this.node.contentRouting.provide(cid, { signal: AbortSignal.timeout(timeoutMs) });
+    const options = externalAbort ? { signal: AbortSignal.timeout(timeoutMs) } : {};
+    await this.node.contentRouting.provide(cid, options);
     return cid;
   }
 
