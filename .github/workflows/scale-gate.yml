@@ -56,7 +56,7 @@ jobs:
       - name: Install dependencies
         run: npm install --ignore-scripts --no-audit --no-fund
       - name: Run isolated 100-node scenario
-        run: node simulations/nodes-100/scenario.js
+        run: node simulations/nodes-100/scenario-peer-routing.js
       - name: Print compact scenario summary
         if: always()
         shell: bash
@@ -70,9 +70,11 @@ jobs:
           import { readFileSync } from 'node:fs';
           const report = JSON.parse(readFileSync(process.env.TRUYN_SCALE_REPORT, 'utf8'));
           const summary = {
+            schema: report.schema,
             scenario: report.scenario,
             passed: report.passed,
             nodeCount: report.nodeCount,
+            routingPrimitive: report.routingPrimitive ?? null,
             live: report.finalNetwork?.live ?? report.topology?.live ?? null,
             libp2pIds: report.finalNetwork?.uniqueLibp2pPeerIds ?? report.topology?.uniqueLibp2pPeerIds ?? null,
             truynIds: report.finalNetwork?.uniqueTruynNodeIds ?? report.topology?.uniqueTruynNodeIds ?? null,
