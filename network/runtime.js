@@ -3,6 +3,7 @@ import { createEnvelope } from '../core/protocol/index.js';
 import { KademliaRecordStore, createDhtRecord } from './dht/kademlia.js';
 import { PeerDiscovery, createPeerRecord, verifyPeerRecord } from './discovery/peer-discovery.js';
 import { QuicDiscoveryRpc, createQuicDiscoveryControlHandler } from './discovery/quic-rpc.js';
+import { NetworkFaultController } from './faults/controller.js';
 import { DhtReplicationManager } from './replication/dht-replication.js';
 import { DurableNetworkState } from './state/persistent-state.js';
 import { TruynQuicTransport } from './transport/quic.js';
@@ -13,7 +14,7 @@ export class TruynNetworkNode {
     identity = createIdentity(), host = '0.0.0.0', port = 0, advertiseHost = null, tls,
     k = 20, alpha = 3, relayFallback = null, nat = null, capabilities = [], peerRecordTtlMs = 300_000,
     maxInFlight = 64, maxQueued = 256, statePath = null, dhtReplicationFactor = 3, dhtWriteQuorum = 2,
-    dhtRpcTimeoutMs = 5_000
+    dhtRpcTimeoutMs = 5_000, faultController = null
   } = {}) {
     if (!tls?.key || !tls?.cert) throw new Error('network runtime TLS key/certificate are required');
     this.identity = identity;
@@ -33,11 +34,12 @@ export class TruynNetworkNode {
     this.stateStore = statePath ? new DurableNetworkState({ filePath: statePath }) : null;
     this.stateReady = false;
     this.persistQueue = Promise.resolve();
+    this.faults = faultController || new NetworkFaultController();
     const onStateChange = () => this.schedulePersist();
     this.recordStore = new KademliaRecordStore({ onChange: onStateChange });
     this.quic = new TruynQuicTransport({ identity, host, port, tls });
     this.discovery = new PeerDiscovery({ identity, k, alpha, onChange: onStateChange });
-    this.rpc = new QuicDiscoveryRpc({ quicTransport: this.quic, timeoutMs: dhtRpcTimeoutMs });
+    this.rpc = new QuicDiscoveryRpc({ quicTransport: this.quic, timeoutMs: dhtRpcTimeoutMs, faults: this.faults });
     this.discovery.rpc = this.rpc;
     this.replication = new DhtReplicationManager({
       discovery: this.discovery,
@@ -46,7 +48,14 @@ export class TruynNetworkNode {
       replicationFactor: dhtReplicationFactor,
       writeQuorum: dhtWriteQuorum
     });
-    this.router = new DirectFirstP2P({ quicTransport: this.quic, discovery: this.discovery, relayFallback, maxInFlight, maxQueued });
+    this.router = new DirectFirstP2P({
+      quicTransport: this.quic,
+      discovery: this.discovery,
+      relayFallback,
+      maxInFlight,
+      maxQueued,
+      faults: this.faults
+    });
     this.quic.onControl(createQuicDiscoveryControlHandler(this.discovery, { recordStore: this.recordStore }));
   }
 
@@ -143,6 +152,18 @@ export class TruynNetworkNode {
   async replicateRecord(record, options = {}) { return this.replication.put(record, options); }
   async findReplicatedValue(namespace, key, options = {}) { return this.replication.get(namespace, key, options); }
   async repairRecord(namespace, key, options = {}) { return this.replication.repair(namespace, key, options); }
+
+  partitionPeers(nodeIds) {
+    for (const nodeId of Array.isArray(nodeIds) ? nodeIds : [nodeIds]) {
+      this.router.forget(nodeId);
+      this.rpc.forget(nodeId);
+    }
+    return this.faults.partition(nodeIds);
+  }
+
+  healPeers(nodeIds = null) { return this.faults.heal(nodeIds); }
+  setRelayFault(config = {}) { return this.faults.setRelay(config); }
+  faultSnapshot() { return this.faults.snapshot(); }
 
   async close() {
     if (this.stateReady) await this.persistState();

@@ -36,12 +36,13 @@ export class ExplicitBackpressureQueue {
 }
 
 export class DirectFirstP2P {
-  constructor({ quicTransport, discovery, relayFallback = null, maxInFlight = 64, maxQueued = 256 } = {}) {
+  constructor({ quicTransport, discovery, relayFallback = null, maxInFlight = 64, maxQueued = 256, faults = null } = {}) {
     if (!quicTransport) throw new Error('quicTransport is required');
     if (!discovery) throw new Error('peer discovery is required');
     this.quic = quicTransport;
     this.discovery = discovery;
     this.relayFallback = relayFallback;
+    this.faults = faults;
     this.connections = new Map();
     this.queue = new ExplicitBackpressureQueue({ maxInFlight, maxQueued });
   }
@@ -63,6 +64,7 @@ export class DirectFirstP2P {
       let directError = null;
       if (record) {
         try {
+          this.faults?.assertPeer(peerNodeId, 'direct');
           const client = await this.#directClient(record);
           const result = await this.quic.sendEnvelope(client, envelope);
           return { transport: 'quic-direct', result };
@@ -74,6 +76,12 @@ export class DirectFirstP2P {
         directError = new Error('peer_not_discovered');
       }
       if (!allowRelayFallback || typeof this.relayFallback !== 'function') throw directError;
+      try {
+        await this.faults?.beforeRelay(peerNodeId);
+      } catch (error) {
+        error.directFailure = directError?.message || 'unknown';
+        throw error;
+      }
       const result = await this.relayFallback(peerNodeId, envelope);
       return { transport: 'relay-fallback', result, directFailure: directError?.message || 'unknown' };
     });

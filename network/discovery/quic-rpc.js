@@ -18,11 +18,12 @@ function parseEndpoint(value) {
 }
 
 export class QuicDiscoveryRpc {
-  constructor({ quicTransport, timeoutMs = 5_000 } = {}) {
+  constructor({ quicTransport, timeoutMs = 5_000, faults = null } = {}) {
     if (!quicTransport) throw new Error('quicTransport is required');
     if (!Number.isInteger(timeoutMs) || timeoutMs < 100 || timeoutMs > 120_000) throw new Error('DHT RPC timeoutMs must be between 100 and 120000');
     this.quic = quicTransport;
     this.timeoutMs = timeoutMs;
+    this.faults = faults;
     this.clients = new Map();
   }
 
@@ -39,6 +40,7 @@ export class QuicDiscoveryRpc {
   async bounded(peer, operation) {
     let timer = null;
     try {
+      this.faults?.assertPeer(peer.nodeId, 'dht-rpc');
       return await Promise.race([
         operation(),
         new Promise((_, reject) => {
