@@ -1,11 +1,11 @@
 # Repository Structure
 
-TRUYN is a **single evolving codebase**. Software releases are tracked with Git tags/releases, while compatibility-sensitive network contracts can coexist in versioned directories.
+TRUYN is a **single evolving codebase**. Software releases are tracked with Git tags/releases, while compatibility-sensitive network contracts coexist in versioned directories.
 
 The repository deliberately separates four kinds of versioning:
 
 ```text
-Software release      v0.1.0, v1.0.0, v2.3.1, ...
+Software release      0.1.0-dev, v1.0.0, v2.3.1, ...
 Network protocol      TRUYN/1, TRUYN/2, ...
 Wire schema           proto/v1, proto/v2, ...
 Local storage/config  migrated independently
@@ -19,9 +19,9 @@ A newer node may support multiple protocol generations simultaneously. We do **n
 - `MANIFESTO.md` — values and direction.
 - `WHITEPAPER.md` — academic and engineering rationale.
 - `STRUCTURE.md` — repository ownership and versioning model.
-- `ROADMAP.md` — staged implementation sequence.
+- `ROADMAP.md` — staged implementation/maturity sequence.
 - `LICENSE` — 0BSD.
-- `SECURITY.md` — security reporting, provider/relay security status and acceptance boundary.
+- `SECURITY.md` — security reporting, provider/relay security baseline and repository boundary.
 - `CONTRIBUTING.md` — contribution principles.
 - `CHANGELOG.md` — factual repository/release changes.
 - `VERSION` — current software development version.
@@ -31,52 +31,74 @@ A newer node may support multiple protocol generations simultaneously. We do **n
 Different documents have different jobs:
 
 1. `spec/protocol/<generation>/` — **normative protocol semantics**.
-2. `proto/<generation>/` — **machine-readable wire schema** implementing the normative semantics.
+2. `proto/<generation>/` — **machine-readable wire schema** implementing normative semantics.
 3. `docs/architecture/ARCHITECTURE_CONTRACT.md` — subsystem ownership and cross-document mapping.
-4. `docs/architecture/PROVIDER_OWNERSHIP.md`, `AUTHORIZATION_MODEL.md`, `RELAY_SECURITY.md`, `BILLING_BOUNDARY.md`, `BYOK_ARCHITECTURE.md`, `THREAT_MODEL.md` — approved provider-security architecture.
-5. `WHITEPAPER.md` — scientific rationale, models and research basis.
-6. `README.md` — human-facing summary; it must not redefine protocol behavior.
-7. `ROADMAP.md` — sequencing only; it must not silently redefine protocol semantics.
+4. `docs/architecture/IMPLEMENTATION_STATUS.md` — canonical factual maturity/status.
+5. subsystem architecture documents — current implementation contracts + target boundaries.
+6. `docs/benchmarks/` — durable measured evidence.
+7. `WHITEPAPER.md` — scientific rationale/models/research basis.
+8. `README.md` — human-facing summary; must not redefine protocol behavior.
+9. `ROADMAP.md` — sequencing/maturity; must not silently redefine protocol semantics.
 
 If these disagree, the inconsistency must be corrected rather than treated as a feature.
 
 ## Main architecture directories
 
-- `docs/` — architecture, concepts, getting started, operations, security, trustability, compatibility and ADRs.
+- `docs/` — architecture, concepts, setup, operations, security, Trustability, compatibility, decisions and evidence.
 - `spec/` — normative protocol specifications, versioned by protocol generation.
 - `proto/` — machine-readable wire schemas.
 - `core/` — protocol-independent domain logic: identity, capability, intent, claims, content-addressed objects, provenance, trust, state, routing policy and crypto.
-- `core/security/` — **planned owner** for central provider authorization, provider policy, tenant resolution and quota/entitlement decision logic. Its presence/description here is architectural ownership, not an implementation claim.
-- `network/` — transport, discovery, DHT, pub/sub, relay, NAT traversal, authenticated sessions and cache mechanics. Network execution paths must call the central provider authorization layer rather than implement transport-specific shortcuts.
-- `node/` — long-running TRUYN Node/daemon runtime, service lifecycle, local config, storage integration, health and telemetry.
-- `cli/` — user-facing `truyn` command, including planned BYOK onboarding. CLI gates are UX controls, not the authoritative provider security boundary.
-- `adapters/` — bridges to AI/model/agent ecosystems and existing protocols. Provider credentials belong at the adapter/runtime secret boundary, not in TRUYN envelopes.
-- `sdk/` — native client SDKs.
-- `gateways/` — compatibility bridges to HTTP/REST/webhook/legacy systems. Execution-capable gateways must converge on central authorization.
-- `compute/` — remote capability execution, compute-near-data placement, sandboxing and execution policy.
-- `trust/` — Trustability engine, scoring, provenance, independence, domain history, aggregation, receipts, Sybil/collusion defense and anomaly handling.
-- `storage/` — persistent state, claims, content-addressed objects, cache, identity metadata and migrations.
-- `economics/` — optional capability pricing/settlement abstractions plus usage/accounting interfaces; not required for basic networking and not an implicit authorization source.
-- `installers/` — OS installation/service-registration lifecycle.
-- `packaging/` — package-manager/distribution metadata and checksums.
-- `updater/` — signed update channels, compatibility checks, migrations, rollback and recovery.
-- `config/` — defaults plus `local`, `testnet`, `mainnet` network profiles. Public network mode never overrides provider visibility.
-- `bootstrap/` — bootstrap-node/discovery configuration for testnet/mainnet.
-- `tests/` — unit, integration, interoperability, network, trust, compute, security and adversarial tests, including the provider-authorization negative matrix.
-- `benchmarks/` — latency, throughput, tokens, bandwidth, inference cost, trust and scale measurements.
+- `core/security/` — **implemented reference owner** for provider access policy, relay provider policy, provider billing safety, protected-node/backchannel helpers and sponsored entitlement verification. Rich account/tenant membership, commercial entitlement administration and distributed accounting remain broader future control-plane work.
+- `network/` — real QUIC transport, authenticated sessions, Kademlia discovery/DHT RPC/state, P2P routing, relay, NAT traversal and testnet mechanics.
+- `node/` — long-running TRUYN Node/daemon composition, service lifecycle, config/storage/health/telemetry ownership as it matures.
+- `runtime/` — executable relay/provider runtime composition and security configuration.
+- `cli/` — user-facing `truyn` commands, including implemented reference BYOK onboarding. CLI gates are UX/defense-in-depth, not authoritative provider security.
+- `adapters/` — bridges to AI/model/agent ecosystems and protocols. Provider credentials belong at adapter/runtime secret boundaries, not TRUYN envelopes.
+- `sdk/` — native/public client SDK surfaces as they stabilize.
+- `gateways/` — HTTP/REST/webhook/legacy compatibility bridges. Execution-capable gateways must preserve equivalent central authorization.
+- `compute/` — remote capability execution, compute-near-data placement, sandboxing and execution policy ownership; not yet a fully productionized general subsystem.
+- `trust/` — Trustability engine, provenance/independence, receipts, lifecycle, source-owner authority, revocation and trust-network components.
+- `storage/` — persistent state/claims/content/index/cache metadata and migrations.
+- `economics/` — optional capability pricing/settlement/accounting abstractions; never an implicit authorization source.
+- `installers/` — OS installation/service-registration lifecycle target.
+- `packaging/` — package/distribution metadata and checksums target.
+- `updater/` — signed update channels, compatibility checks, migrations, rollback/recovery target.
+- `config/` — defaults plus `local`, `testnet`, `mainnet` profiles. Public network mode never overrides provider visibility.
+- `bootstrap/` — bootstrap/discovery configuration/contracts for testnet/mainnet.
+- `tests/` — unit, integration, interoperability, network, trust, compute, security and adversarial tests.
+- `benchmarks/` — benchmark code/workloads for latency, tokens, bandwidth, inference cost, trust and scale. Durable reports live in `docs/benchmarks/`.
 - `simulations/` — controlled multi-node, network-failure, trust and adversarial simulations.
-- `examples/` — runnable interoperability/use-case examples; examples must not embed live private operational identifiers or credentials.
-- `scripts/` — development/testing/benchmark/release helpers; scripts must not pretend to be functional before implementation.
-- `migrations/` — explicit config, storage and protocol migration tooling.
-- `.github/` — CI/CD, issue templates and PR templates. Operational secrets remain in protected secret systems rather than committed source.
+- `examples/` — runnable interoperability/use-case examples; no live private secrets/topology.
+- `scripts/` — development/testing/benchmark/release helpers.
+- `migrations/` — explicit config/storage/protocol migration tooling target.
+- `.github/` — CI and temporary bounded operational workflows; permanent public workflows must respect the repository security boundary.
+
+## Documentation tree
+
+```text
+docs/
+├── architecture/     canonical architecture + implementation status
+├── benchmarks/       append-only sanitized evidence ledger
+├── compatibility/    software/protocol/node/adapter compatibility
+├── concepts/         explanatory concepts
+├── decisions/        ADR-style decisions
+├── getting-started/  user setup/BYOK/MVP guidance
+├── operations/       node/testnet/billing operational contracts
+├── security/         security architecture status + operational security
+└── trustability/     claim/trust lifecycle architecture
+```
+
+`operations`, `security` and `compatibility` are no longer placeholders; they contain explicit current baselines.
 
 ## Public architecture documents
 
-The provider-security/public-private boundary is documented under:
+Canonical provider/network/security/status documents include:
 
 ```text
 docs/architecture/
 ├── ARCHITECTURE_CONTRACT.md
+├── IMPLEMENTATION_STATUS.md
+├── NETWORK_UNDERLAY_V01.md
 ├── PROVIDER_OWNERSHIP.md
 ├── AUTHORIZATION_MODEL.md
 ├── RELAY_SECURITY.md
@@ -84,14 +106,27 @@ docs/architecture/
 ├── BYOK_ARCHITECTURE.md
 ├── THREAT_MODEL.md
 ├── PUBLIC_PRIVATE_BOUNDARY.md
+├── PUBLIC_EDGE_DOMAINS.md
 ├── MULTI_CLOUD_PROVIDER_ARCHITECTURE.md
-└── PUBLIC_EDGE_DOMAINS.md
+├── SEMANTIC_INDEX_LIFECYCLE.md
+├── SEMANTIC_SCALE_GATE_V3.md
+├── DISTRIBUTED_SEMANTIC_RETRIEVAL.md
+├── DECENTRALIZED_PLACEMENT_BYZANTINE_RETRIEVAL.md
+└── KADEMLIA_QUIC_TRUST_TESTNET.md
 ```
 
 User-facing BYOK setup contract:
 
 ```text
 docs/getting-started/BYOK.md
+```
+
+Detailed operations/security/compatibility:
+
+```text
+docs/operations/
+docs/security/
+docs/compatibility/
 ```
 
 Normative provider-policy target:
@@ -102,7 +137,7 @@ spec/protocol/v1/provider-policy.md
 
 ## Public repository vs private operations
 
-The public repository owns protocol/architecture, generic adapters, generic deployment patterns, tests and reproducible public benchmarks.
+The public repository owns protocol/architecture, generic adapters, generic deployment patterns, tests and reproducible sanitized public benchmarks.
 
 Credentials, private keys, private cloud identity/topology, privileged allowlists, private origins/backchannels, exact production quotas/cost ceilings, billing/credit information and sensitive incident/customer data belong to protected operational systems.
 
@@ -110,7 +145,7 @@ Security must remain correct even if the public architecture is fully known.
 
 ## Canonical TRUYN/1 vocabulary
 
-The first protocol generation defines these top-level exchange objects:
+The first protocol generation defines top-level exchange objects:
 
 ```text
 IDENTITY
@@ -130,13 +165,13 @@ REVOKE
 
 `CAPABILITY` is a descriptor used by `OFFER`, `NEED` and `COMPUTE`.
 
-Provider ownership/authorization policy is not a new top-level exchange object. It is a policy layer around provider discovery/eligibility/execution, specified in `spec/protocol/v1/provider-policy.md`.
+Provider ownership/authorization/billing policy is not a new top-level exchange object. It is a policy layer around discovery/eligibility/execution, specified in `spec/protocol/v1/provider-policy.md` and implemented incrementally by `core/security/` + relay/provider runtime boundaries.
 
-`CHALLENGE`, `VERIFY` and `DISPUTE` are composed verification behaviors built from existing primitives, not additional top-level envelope types in TRUYN/1.
+`CHALLENGE`, `VERIFY` and `DISPUTE` are composed verification behaviors built from existing primitives, not additional TRUYN/1 envelope types.
 
 ## Runtime model
 
-TRUYN installs a **Node**, not an AI model. The intended background process is `truynd`; users and software interact through the `truyn` CLI, adapters, SDKs or local APIs.
+TRUYN installs/runs a **Node**, not an AI model. The intended background process name remains `truynd` as the daemon lifecycle stabilizes; current reference runtimes are executable through repository runtime/node/testnet entry points.
 
 ```text
 AI agent / model / machine
@@ -145,17 +180,17 @@ adapter / SDK / local API
           ↓
        TRUYN Node
  identity · discovery · routing
- objects · state · execution
+ objects/state · execution
  provenance · trustability
           ↓
-  authorization / provider policy
+ authorization / provider policy / billing
           ↓
       QUIC / UDP / IP
           ↓
    existing Internet
 ```
 
-For provider execution, the authorization decision happens before dispatch to a private/shared/network provider.
+For provider execution, authorization and billing decisions occur before upstream work.
 
 ## First-run lifecycle
 
@@ -172,9 +207,9 @@ generate or import cryptographic node identity
         ↓
 store private key in OS secure storage where available
         ↓
-create config + local database
+create config + local database/state
         ↓
-register background service (`truynd`)
+register background service (`truynd`) when packaged
         ↓
 select local / testnet / mainnet profile
         ↓
@@ -187,9 +222,7 @@ start authenticated networking
 TRUYN Node online
 ```
 
-A future official-client AI requester flow may require at least one successfully configured own provider. That is a UX guardrail; server-side provider authorization remains authoritative.
-
-See `docs/getting-started/NODE_LIFECYCLE.md` and `docs/getting-started/BYOK.md`.
+Parts of this lifecycle (identity, config, BYOK, networking/testnet runtime) exist in reference form. Verified cross-platform installers, stable service registration and signed updater/rollback remain v0.8/v1.0 work.
 
 ## Intended local runtime data
 
@@ -208,16 +241,18 @@ See `docs/getting-started/NODE_LIFECYCLE.md` and `docs/getting-started/BYOK.md`.
 └── db/
 ```
 
-Private key/provider credential material SHOULD use operating-system secure storage/keychains or an equivalent secure secret facility where available; this tree is a logical model, not a requirement to store secrets as plaintext files.
+This is a logical ownership model, not a requirement to store secrets as plaintext. Private keys/provider credential material SHOULD use operating-system/cloud secure storage where possible.
 
 ## Network modes
 
-The canonical names are exactly:
+Canonical names are exactly:
 
 - `local` — isolated development/testing on one machine or LAN;
-- `testnet` — public experimental network where protocol changes and adversarial testing are expected;
-- `mainnet` — future stable public network with stricter compatibility, signed-update and rollback requirements.
-
-The repository uses `config/local`, `config/testnet` and `config/mainnet`. The former `development`/`production` naming is deprecated and removed from the skeleton.
+- `testnet` — public/controlled experimental network for protocol changes, adversarial testing and interoperability;
+- `mainnet` — future stable public network with stricter compatibility/update/rollback requirements.
 
 Network mode affects reachability/compatibility; it never grants access to a private provider.
+
+## Current maturity
+
+Current software is `0.1.0-dev`; `TRUYN/1` remains draft. The v0.1 underlay is implemented/CI-proven and bounded real QUIC/Kademlia trust-network evidence exists. Stable mainnet, production commercial tenancy/accounting, large real-node WAN scale and stable updater/compatibility contracts remain future gates.

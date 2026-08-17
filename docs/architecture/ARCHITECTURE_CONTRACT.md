@@ -1,6 +1,6 @@
 # TRUYN Architecture Contract
 
-This document prevents architectural ideas from being lost between the whitepaper, public README, protocol specification and implementation tree.
+This document prevents architectural ideas and factual implementation status from being lost or silently diverging between the whitepaper, public README, protocol specification, implementation tree, operations and benchmark evidence.
 
 ## Document authority
 
@@ -11,28 +11,44 @@ This document prevents architectural ideas from being lost between the whitepape
 | Wire representation | `proto/<generation>/` |
 | Repository ownership | `STRUCTURE.md` and subsystem READMEs |
 | Implementation sequence | `ROADMAP.md` |
+| Factual implementation maturity | `docs/architecture/IMPLEMENTATION_STATUS.md` |
 | Public explanation | `README.md` |
+| Network underlay | `docs/architecture/NETWORK_UNDERLAY_V01.md` |
 | Provider ownership | `docs/architecture/PROVIDER_OWNERSHIP.md` |
 | Provider authorization | `docs/architecture/AUTHORIZATION_MODEL.md` and `spec/protocol/v1/provider-policy.md` |
 | Relay/control-plane boundary | `docs/architecture/RELAY_SECURITY.md` |
 | BYOK model | `docs/architecture/BYOK_ARCHITECTURE.md` |
-| Billing/quota boundary | `docs/architecture/BILLING_BOUNDARY.md` |
+| Billing/quota/entitlement boundary | `docs/architecture/BILLING_BOUNDARY.md` |
 | Provider/relay threat model | `docs/architecture/THREAT_MODEL.md` |
 | Public/private information boundary | `docs/architecture/PUBLIC_PRIVATE_BOUNDARY.md` |
-| Public multi-cloud provider target | `docs/architecture/MULTI_CLOUD_PROVIDER_ARCHITECTURE.md` |
+| Public multi-cloud provider architecture | `docs/architecture/MULTI_CLOUD_PROVIDER_ARCHITECTURE.md` |
+| Semantic lifecycle / scale | `docs/architecture/SEMANTIC_INDEX_LIFECYCLE.md`, `SEMANTIC_SCALE_GATE_V3.md` |
+| Distributed/decentralized semantic retrieval | `DISTRIBUTED_SEMANTIC_RETRIEVAL.md`, `DECENTRALIZED_PLACEMENT_BYZANTINE_RETRIEVAL.md` |
+| Real trust-testnet slice | `KADEMLIA_QUIC_TRUST_TESTNET.md` |
+| Trustability | `docs/trustability/` |
+| Operations | `docs/operations/` |
+| Detailed security status/runbooks | `docs/security/` plus root `SECURITY.md` |
+| Compatibility | `docs/compatibility/` |
+| Measured claims | `docs/benchmarks/` |
 | Multimodal comparison methodology | `docs/benchmarks/MULTIMODAL_PROVIDER_PARITY.md` |
 
-A mismatch is a defect to be reconciled. README/roadmap language MUST NOT silently create protocol semantics that do not exist in `spec/`.
+A mismatch is a defect to be reconciled. README/roadmap language MUST NOT silently create protocol semantics that do not exist in `spec/`. Architecture language MUST NOT promote a subsystem to a maturity state that its implementation/evidence does not support.
 
 ## Architecture status discipline
 
 TRUYN documentation distinguishes:
 
-- **implemented behavior** — supported by current executable code/tests;
-- **approved target architecture** — accepted design that implementation must converge toward;
-- **planned/research work** — not yet an implementation contract.
+- **Defined** — architecture/specification exists;
+- **Implemented** — executable reference behavior exists;
+- **CI-proven** — bounded automated tests prove the contract;
+- **Bounded real-testnet proven** — a real network/process topology proves a bounded gate;
+- **Productionized** — intended deployment lifecycle/recovery/security/observability gates are satisfied;
+- **Internet-scale proven** — large real-node/WAN/adversarial evidence exists;
+- **Stable** — compatibility guarantees are declared.
 
-The provider-ownership/BYOK/security documents added to the architecture are approved targets. They do not retroactively make the current MVP relay production-safe.
+The repository is intentionally mixed maturity. The v0.1 QUIC/Kademlia underlay is implemented and CI-proven; the trust lifecycle has bounded real four-node QUIC/Kademlia evidence; semantic retrieval and provider security have substantial implementation/evidence; large real-node WAN scale, rich commercial/account control planes and stable mainnet remain open.
+
+An approved architecture document is not an implementation-complete security claim. Conversely, once a slice is implemented and evidenced, documentation must not continue describing it as purely planned.
 
 ## Canonical concepts
 
@@ -59,11 +75,15 @@ explicit access policy
 
 Authorization-sensitive ownership attributes are derived from authenticated context or trusted provisioning state, not accepted as authoritative merely because a requester supplied them.
 
-`private` is the default provider visibility. Cross-owner execution requires explicit policy.
+`private`/`owner-only` is the default provider posture. Cross-owner execution requires explicit policy.
+
+The current implemented reference owner binding is node/provider identity based; rich account/organization ownership remains future control-plane work.
 
 ### BYOK
 
 TRUYN is BYOK by default: Bring Your Own Intelligence / Bring Your Own Provider. Normal users connect provider capacity they control. Upstream credentials remain local to the provider runtime/secure secret facility and are not TRUYN routing payloads.
+
+The reference CLI/runtime implements private BYOK profiles for supported provider types. OS-native credential-store integration and stable account tenancy remain separate maturity gates.
 
 ### Need
 `NEED` describes an outcome rather than a predetermined server. It can carry hard constraints for trustability, freshness, latency, cost, deadline, privacy, domain/purpose and compute placement.
@@ -73,19 +93,27 @@ A `NEED` cannot grant itself provider authorization by declaring ownership/tenan
 ### Object
 `OBJECT` is immutable, content-addressed information identified by digest. It supports deduplication, cache reuse and location-independent retrieval. Mutable knowledge is represented by `STATE`, with immutable objects/deltas referenced as needed.
 
+Implemented semantic-index/retrieval layers already apply content-addressed root/block concepts, persistent immutable-vector reuse and minimal-context retrieval. That does not mean every generic `OBJECT` network behavior is fully productionized.
+
 ### State and Delta
 `STATE` identifies current state; `DELTA` represents a change against an identified base state. A receiver MUST know/verify the base before applying a delta.
+
+Generic network-wide `STATE`/`DELTA`/`SUBSCRIBE` maturity remains broader than the implemented semantic/trust state slices.
 
 ### Compute
 `COMPUTE` requests execution of an advertised capability. Execution placement can prefer the node where data already resides, enabling compute-near-data. Sandboxing, resource limits, data-release rules and result signing belong to the compute subsystem.
 
-Any chargeable/private compute/provider invocation is subject to the same ownership/authorization/billing boundary as AI inference.
+Any chargeable/private compute/provider invocation is subject to the same ownership/authorization/billing boundary as AI inference. General production `COMPUTE` sandboxing remains incomplete.
 
 ### Claim, Evidence and Attestation
 A `CLAIM` is a signed assertion. Evidence/provenance are references attached to claims or attestations. `ATTEST` supports, disputes or reports insufficient evidence about a claim.
 
+Claim-centric Trustability, provenance/source-lineage logic and bounded adversarial evidence are implemented reference slices.
+
 ### Active verification
 `CHALLENGE`, `VERIFY` and `DISPUTE` are behaviors composed from existing TRUYN/1 messages. They are not separate envelope kinds. A challenge can create a verification `NEED`; independent nodes return `ATTEST`; the trust engine may issue a `TRUST_RECEIPT`.
+
+The active trust lifecycle and a bounded real QUIC/Kademlia verifier-discovery/revocation path are implemented.
 
 ### Trustability
 Trustability is **claim-centric and context-dependent**:
@@ -96,35 +124,43 @@ T = Trust(claim, requester, purpose, domain, time, policy)
 
 It is not a universal node score. Domain history, provenance, evidence, independence, freshness, integrity, consensus, anomaly and Sybil-resistance signals can contribute to a Trust Vector. The relying party decides how to interpret it.
 
-Trustability and authorization are separate questions. A provider can be highly trusted but unauthorized for a requester; an authorized provider may still fail a trust threshold for a particular decision.
+Trustability and authorization are separate questions. A provider can be highly trusted but unauthorized; an authorized provider may still fail a trust threshold for a particular decision.
 
 ### Trust aggregation and receipts
 A consumer should not need every raw attestation. Independent evidence can be aggregated into a signed `TRUST_RECEIPT` containing policy ID, trust vector/score, raw vs independent support counts, dispute counts, evidence commitment and expiry. Raw evidence remains retrievable/auditable when policy requires it.
 
+The implemented trust-network slice additionally commits source-owner delegation/lifecycle state and can detect stale receipts after revocation-state advancement.
+
 ### Revocation
 `REVOKE` invalidates/supersedes a revocable network object. Key revocation and security-critical revocations require rapid propagation. Revocation does not erase historical provenance; it changes current validity.
+
+The real trust-testnet slice includes durable signed transparency/revocation state and replicated lifecycle advancement in a bounded topology.
 
 ### Routing, authorization and value
 Routing is constraint-first and policy-local, but provider authorization precedes ranking.
 
-The canonical target pipeline is:
+The canonical pipeline is:
 
 ```text
 authenticate requester
         ↓
-resolve requester identity / tenant
+resolve authoritative requester identity / tenant where available
         ↓
 discover capability candidates
         ↓
 provider ownership / visibility authorization
         ↓
-billing responsibility + quota/entitlement
+billing responsibility + entitlement/quota
         ↓
 hard request constraints
         ↓
 ranking
         ↓
 dispatch
+        ↓
+provider-host authorization/billing recheck where applicable
+        ↓
+execution
 ```
 
 A candidate that fails authorization MUST NOT be recoverable by a high trust score, low price or excellent latency.
@@ -141,9 +177,17 @@ When EVI is positive and policy permits, additional verification is justified.
 
 ### Billing boundary
 
-Before a chargeable provider call, TRUYN must be able to determine who is authorized to cause it and who is responsible for its cost. If billing responsibility is ambiguous, execution fails closed.
+Before a chargeable provider call, TRUYN must determine who is authorized to cause it and who is responsible for its cost. If billing responsibility is ambiguous, execution fails closed.
 
-Logical billing modes include `byok`, `owner-funded`, `prepaid`, `subscription` and `sponsored`. Sponsored/free owner-funded access is an explicit entitlement, not a default consequence of public network access.
+Logical billing modes include `byok`, `owner-funded`, `prepaid`, `subscription` and `sponsored`.
+
+Current implementation facts:
+
+- BYOK and owner-funded execution require private/owner-only provider access;
+- prepaid/subscription fail closed without an entitlement resolver;
+- sponsored access is disabled unless explicitly enabled;
+- sponsored activation requires actor-bound signed entitlement verification and an atomic durable usage store;
+- a process-local usage counter is not an acceptable production billing boundary.
 
 ### Capability economy
 Cost-aware routing is part of the core request model; mandatory settlement is not. A future capability market can add payment/settlement adapters without making TRUYN dependent on a blockchain, currency or provider.
@@ -154,11 +198,19 @@ Provider ownership remains intact in a market: paid/shared cross-owner execution
 
 A relay may be public while providers remain private. Public reachability is not provider authorization.
 
-Execution-capable HTTP, WebSocket, MCP, SDK and legacy paths MUST converge on one central authorization decision before provider dispatch.
+Execution-capable HTTP, WebSocket, MCP, SDK and legacy paths MUST preserve equivalent central authorization before provider execution.
 
-Provider runtimes SHOULD use an authenticated machine-to-machine backchannel. Edge/WAF/Cloudflare/cloud-native controls are defense in depth and do not replace TRUYN authorization.
+The reference provider security path is defense in depth: relay filtering plus provider-host access/billing checks.
 
-Discovery SHOULD hide owner-private providers from unauthorized requesters, while execution authorization remains mandatory even if a private provider ID is known.
+Provider runtimes may use an authenticated machine-to-machine backchannel. Edge/WAF/cloud controls are additive and do not replace TRUYN authorization.
+
+## Reference edge/origin security
+
+The reference runtime includes an optional origin guard, Cloudflare-compatible edge proxy and protected-provider M2M guard.
+
+Origin proof is expiry-bound, supports an active+previous rotation window and is stripped before the inner relay. Protected-provider M2M proof is also transport-only and stripped before protocol handling. Oversized HTTP bodies return 413 and close the connection to prevent keep-alive poisoning. Local-development mode hard-fails if combined with public/production markers.
+
+Reference code does not prove that a particular production perimeter is correctly activated; deployment proof is operational work.
 
 ## Multi-cloud and multimodal provider contract
 
@@ -197,7 +249,7 @@ Provider-specific temporary URLs, bucket names and credentials are adapter/stora
 
 ### Asynchronous providers
 
-A provider MAY require a long-running job or polling operation. That execution detail MUST remain behind the provider adapter. At the network boundary the requester still observes a normal TRUYN request/result lifecycle.
+A provider MAY require a long-running job or polling operation. That execution detail remains behind the provider adapter; the network boundary still observes a normal TRUYN request/result lifecycle.
 
 ### Provider identity isolation
 
@@ -205,7 +257,7 @@ Different provider families or materially different capability runtimes SHOULD r
 
 ## Public/private information contract
 
-Public architecture describes invariants, schemas, threats, generic deployment patterns and intentionally public service names.
+Public architecture describes invariants, schemas, threats, generic deployment patterns and intentionally public service roles.
 
 Private operational state includes credentials/private keys, unnecessary cloud identity details, private origins/backchannels, privileged allowlists, exact quotas/cost ceilings, billing/credit information, secret paths and sensitive incident/customer data.
 
@@ -222,19 +274,25 @@ mainnet
 ```
 
 - `local`: isolated development/LAN.
-- `testnet`: public experimental network.
+- `testnet`: public/controlled experimental network.
 - `mainnet`: future stable public network.
 
 Public network mode never overrides provider visibility/authorization.
 
 ## Versioning
 
-Software, protocol, wire and storage versions are independent. A new software release does not automatically imply a new wire generation.
+Software, protocol, wire and storage versions are independent. Current software is `0.1.0-dev`; `TRUYN/1` remains draft. A new software release does not automatically imply a new wire generation.
+
+See `docs/compatibility/`.
 
 ## Installation and upgrades
 
-Installation, first-run bootstrap and update/rollback are infrastructure contracts, not ad-hoc shell scripts. Private keys should use OS secure storage where possible. Updates must be authenticated, compatibility-checked and rollback-capable.
+Installation, first-run bootstrap and update/rollback are infrastructure contracts, not ad-hoc shell-script semantics. Private keys should use OS secure storage where possible. Updates must eventually be authenticated, compatibility-checked and rollback-capable.
+
+Production installer/updater/rollback maturity remains a v0.8/v1.0 gate.
 
 ## Interoperability
 
-TRUYN is model/provider-neutral. Vendor adapters are replaceable edges. MCP, SDKs, HTTP/gRPC/WebSocket gateways and provider-specific adapters connect systems to TRUYN; none of them defines the TRUYN network itself.
+TRUYN is model/provider-neutral. Vendor adapters are replaceable edges. MCP, SDKs, HTTP/gRPC/WebSocket gateways and provider-specific adapters connect systems to TRUYN; none defines the network itself.
+
+See `docs/compatibility/ADAPTER_COMPATIBILITY.md` for the factual adapter compatibility boundary.

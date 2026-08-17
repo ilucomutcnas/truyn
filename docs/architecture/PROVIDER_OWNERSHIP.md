@@ -1,12 +1,12 @@
 # TRUYN Provider Ownership Architecture
 
-**Status:** first provider-identity/authorization boundary implemented; richer account/tenant/billing semantics remain target architecture.
+**Status:** implemented node-level provider identity/authorization boundary; richer account/organization tenancy, shared-provider administration and commercial ownership semantics remain target architecture.
 
 ## Principle
 
 > **Open protocol does not mean open billing account.**
 
-A TRUYN provider is not merely a capability endpoint. It has an accountable owner, a visibility policy and eventually a tenant/billing boundary. Provider ownership is an authorization primitive, not descriptive metadata.
+A TRUYN provider is not merely a capability endpoint. It has an accountable owner, visibility policy and billing boundary. Provider ownership is an authorization primitive, not descriptive metadata.
 
 The long-term policy model is conceptually:
 
@@ -21,21 +21,25 @@ allowedCallers / policy reference
 
 These fields describe policy semantics. Their final wire/storage representation is an implementation detail that must remain compatible with the normative protocol.
 
-## Implemented MVP ownership boundary
+## Implemented reference ownership boundary
 
-The current reference relay implements a deliberately smaller, cryptographically authoritative subset:
+The current relay implements a deliberately smaller, cryptographically authoritative subset:
 
 ```text
 signed OFFER.from
       ↓
 providerNodeId
       ↓
-ownerNodeId = providerNodeId
+reference ownerNodeId = providerNodeId
 ```
 
-The relay does **not** trust requester/provider-supplied `ownerId` or `tenantId` metadata to establish ownership. The cryptographic sender identity of the signed, session-bound `OFFER` is authoritative for the current MVP provider owner.
+The relay does **not** trust requester/provider-supplied `ownerId` or `tenantId` metadata to establish ownership. The cryptographic sender identity of the signed, session-bound `OFFER` is authoritative for the current node-level provider owner.
 
-Each stored offer also receives a relay-side provider policy:
+This is not yet the final account-level model. A future control plane may bind multiple provider nodes to one authenticated account/organization/tenant, but requester-controlled fields must still never create ownership or entitlement.
+
+## Implemented provider policy
+
+Each stored offer receives relay-side provider policy equivalent to:
 
 ```text
 accessMode: owner-only | public
@@ -43,65 +47,74 @@ visibility: private | network
 allowedRequesterIds: [...]   # only for owner-only
 ```
 
-Unknown or missing access mode fails closed to `owner-only` / `private`.
+Unknown/missing access mode fails closed to `owner-only` / private behavior.
 
-For an `owner-only` provider, `allowedRequesterIds` is taken from the provider-signed `OFFER` metadata. This enables a private/BYOK provider to authorize its own requester identity without adding that user to a global relay trusted-requester list.
+For an `owner-only` provider, `allowedRequesterIds` is taken from provider-signed `OFFER` metadata. This enables a private/BYOK provider to authorize its own requester identity without adding that user to a global relay trusted-requester list.
 
-This node-level owner binding is not yet the final account-level tenant model. A future control plane may bind multiple provider nodes to one authenticated account/tenant, but it must not weaken the rule that requester-controlled fields cannot create ownership or entitlement.
+The low-level provider access policy and provider runtime also default to `owner-only`. Public execution therefore requires explicit operator intent at more than one layer.
 
 ## Ownership rules
 
-1. `ownerId` and `tenantId` MUST be derived from authenticated server-side identity or trusted provisioning state.
+1. `ownerId` and `tenantId` used for authorization MUST be derived from authenticated server-side identity or trusted provisioning state.
 2. A requester-supplied `ownerId` or `tenantId` MUST NOT grant authorization.
 3. Providers are private by default.
-4. A missing, unreadable or ambiguous provider policy MUST fail closed.
-5. A requester MUST NOT be routed to a provider merely because the provider advertises a matching capability.
+4. Missing/unreadable/ambiguous provider policy MUST fail closed.
+5. A requester MUST NOT be routed to a provider merely because capability matches.
 6. Explicit sharing is an opt-in policy decision by the provider owner.
-7. Owner-funded providers MUST NOT become public network resources solely because they are connected to a public relay.
+7. Owner-funded providers MUST NOT become public network resources solely because they are connected to a public relay/network.
+8. Billing/entitlement policy MUST NOT be inferred from provider discoverability.
 
-The implemented reference relay already enforces rules 2–7 at the node/provider-offer level.
+The current reference relay/runtime enforces these rules at the node/provider-offer execution boundary.
 
 ## Visibility classes
 
-The target architecture reserves these semantic classes:
+The target architecture reserves semantic classes:
 
-- `private` — usable only by the owning tenant or explicitly authorized callers;
+- `private` — owning tenant or explicitly authorized callers only;
 - `self` — BYOK provider usable by the identity/account that configured it;
-- `shared` — visible/usable only by an explicit allow policy;
-- `network` — intentionally advertised for wider network use under explicit commercial or policy terms.
+- `shared` — explicit allow policy;
+- `network` — intentionally advertised for wider use under explicit commercial/policy terms.
 
 `private` is the default.
 
-The current MVP maps:
+Current reference mapping:
 
-- `owner-only` → `private`;
-- `public` → `network`.
+- `owner-only` → private;
+- `public` → network.
 
-Additional `self` / `shared` account-level semantics remain future work.
+Additional account-level `self`/`shared` semantics remain future control-plane work.
 
 ## Billing modes
 
-The architecture distinguishes at least:
+The architecture distinguishes:
 
-- `byok` — the requester/provider owner supplies and pays for its own intelligence provider;
-- `owner-funded` — the provider owner pays and access is private unless explicitly delegated;
-- `prepaid` — future metered entitlement funded in advance;
-- `subscription` — future entitlement governed by a subscription policy;
-- `sponsored` — future provider-owner-funded allowance subject to explicit quota.
+- `byok` — requester/provider owner supplies/pays for its own intelligence provider;
+- `owner-funded` — provider owner pays and access remains private unless explicitly delegated;
+- `prepaid` — future metered entitlement;
+- `subscription` — future subscription entitlement;
+- `sponsored` — explicit provider-owner-funded allowance subject to signed entitlement and durable usage reservation.
 
-The existence of `sponsored` in the architecture does not enable it. Sponsored/free owner-funded access remains disabled until an explicit entitlement/quota layer is implemented and deliberately activated.
+The existence of a mode in architecture does not enable it.
+
+Current facts:
+
+- BYOK/owner-funded require private/owner-only access;
+- prepaid/subscription fail closed without a resolver;
+- sponsored mode cannot activate without actor-bound signed entitlement verification and durable atomic usage-store reservation.
 
 ## Owner-private reference providers
 
-TRUYN-operated reference providers used for internal proofs, benchmarks or development are owner-private. Public documentation may describe their logical capability class, but MUST NOT imply that outside users are entitled to consume their provider quota.
+TRUYN-operated reference providers used for internal proofs, benchmarks or development are owner-private unless explicitly shared through a future entitlement policy.
 
-The runtime defaults to `owner-only`. Switching an individual provider runtime to public requires both an explicit public access mode and a second public-provider opt-in. Separately, the relay keeps wider authenticated-network dispatch disabled unless it is explicitly enabled. These independent controls are intentional defense in depth.
+Public documentation may describe their logical capability/model family where safe, but MUST NOT imply outside users are entitled to consume their quota.
+
+The runtime defaults to `owner-only`. Switching a provider runtime to public requires explicit public access opt-in; owner-funded billing independently denies public execution.
 
 ## BYOK providers
 
-A normal user-connected provider is expected to be `byok` and private/self-scoped by default. Provider credentials remain at the provider runtime or user's secure local environment; the relay does not receive them.
+A normal user-connected provider is expected to be `byok` and private/self-scoped by default. Provider credentials remain at the provider runtime or user's secure local/cloud secret environment; the relay does not receive them.
 
-The current reference implementation proves this private-provider flow:
+The current reference flow is:
 
 ```text
 user requester identity
@@ -111,25 +124,31 @@ private BYOK provider
 TRUYN relay
 ```
 
-A second registered requester that is absent from that allowlist cannot discover or dispatch to the provider. The provider receives zero queued events, and the provider host therefore performs zero adapter/upstream executions for that denied requester.
+A second registered requester absent from the allowlist cannot discover or dispatch to the provider. Provider-host authorization independently prevents adapter/upstream execution for denied requesters.
+
+## Shared / sponsored future ownership
+
+Cross-owner execution requires explicit grant/entitlement.
+
+For sponsored execution, the current reference billing boundary requires a signed actor-bound entitlement and durable atomic usage reservation. A public provider flag alone is not sufficient authorization to spend owner-funded quota.
 
 ## Authorization invariant
 
-For an owner-private provider, the safety invariant is:
+For an owner-private provider:
 
 ```text
 foreign requester
-+ public relay
++ public relay/network
 + known provider capability/identity
 + custom/malicious client
-= no provider invocation
+= no unauthorized provider execution
 ```
 
-The denial occurs before dispatch in the relay and is independently checked again before adapter execution in the provider host.
+Denial happens before dispatch and is independently checked again before adapter execution.
 
 ## Relationship to capability discovery
 
-Capability describes **what** a provider can do. Ownership policy determines **who may see or use** that provider. These are independent filters.
+Capability describes **what** a provider can do. Ownership policy determines **who may see/use** it.
 
 ```text
 capability match
@@ -138,16 +157,16 @@ authorization filter
       ↓
 eligible provider set
       ↓
+billing/entitlement filter
+      ↓
 ranking / routing
 ```
-
-The current relay applies this same filtered provider set to legacy NEED, compact NEED and chain routing. Unauthorized private offers are also omitted from discovery.
 
 A capability match never overrides ownership policy.
 
 ## Public/private documentation boundary
 
-This document intentionally publishes the security model. It does not publish production tenant identifiers, privileged caller lists, provider node IDs, cloud identities, private endpoints, quotas, cost ceilings or secret paths.
+This document intentionally publishes the security model. It does not publish production tenant IDs, privileged caller lists, protected provider IDs, cloud identities, private endpoints, quotas, cost ceilings or secret paths.
 
 See also:
 
@@ -156,3 +175,4 @@ See also:
 - `BILLING_BOUNDARY.md`
 - `BYOK_ARCHITECTURE.md`
 - `PUBLIC_PRIVATE_BOUNDARY.md`
+- `../security/`
