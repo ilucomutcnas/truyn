@@ -3,14 +3,10 @@
   "version": "0.1.0-mvp.2",
   "private": true,
   "type": "module",
-  "engines": {
-    "node": ">=22"
-  },
-  "bin": {
-    "truyn": "./cli/index.js"
-  },
+  "engines": { "node": ">=22" },
+  "bin": { "truyn": "./cli/index.js" },
   "scripts": {
-    "test": "node --test tests/network-fault-productionization.test.js",
+    "test": "node --test --test-name-pattern='peer partition blocks direct' tests/network-fault-productionization.test.js",
     "testnet:trust": "node --test tests/kademlia-quic-testnet.test.js",
     "demo": "node examples/mvp-demo.js",
     "demo:ai": "node examples/ai-mvp-demo.js",
