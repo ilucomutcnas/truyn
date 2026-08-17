@@ -14,6 +14,22 @@ import { createAdversarialConnectionGater } from './adversarial-gater.js';
 
 export const SCALE_PROBE_PROTOCOL = '/truyn/testnet/scale-probe/1.0.0';
 const encoder = new TextEncoder();
+const MAX_CONCURRENT_ADVERTISEMENTS = Math.max(1, Number.parseInt(process.env.TRUYN_SCALE_ADVERTISE_CONCURRENCY || '2', 10));
+let activeAdvertisements = 0;
+const advertisementWaiters = [];
+
+async function withAdvertisementSlot(operation) {
+  if (activeAdvertisements >= MAX_CONCURRENT_ADVERTISEMENTS) {
+    await new Promise((resolve) => advertisementWaiters.push(resolve));
+  }
+  activeAdvertisements += 1;
+  try {
+    return await operation();
+  } finally {
+    activeAdvertisements -= 1;
+    advertisementWaiters.shift()?.();
+  }
+}
 
 export function scaleValueDigest(value) {
   return `sha256:${createHash('sha256').update(canonicalize(value)).digest('hex')}`;
@@ -83,8 +99,12 @@ export class AdversarialScaleNode {
   }
 
   get address() {
-    if (!this.node) return null;
-    return firstQuicAddress(this.node);
+    if (!this.node || this.node.status !== 'started') return null;
+    try {
+      return firstQuicAddress(this.node);
+    } catch {
+      return null;
+    }
   }
 
   setFault({ mode = 'honest', value = null, delayMs = this.delayMs } = {}) {
@@ -161,6 +181,7 @@ export class AdversarialScaleNode {
   }
 
   async refresh({ timeoutMs = 8_000, externalAbort = false } = {}) {
+    if (!this.node || this.node.status !== 'started') return null;
     try {
       const refresh = refreshKademliaRoutingTable(this.node, { timeoutMs, externalAbort });
       return externalAbort ? refresh : await softDeadline(refresh, timeoutMs + 2_000, `truyn_scale_refresh_${this.index}`);
@@ -171,20 +192,24 @@ export class AdversarialScaleNode {
   }
 
   async advertise(key, { timeoutMs = 25_000, externalAbort = false } = {}) {
+    if (!this.node || this.node.status !== 'started') throw new Error(`truyn_scale_node_${this.index}_not_started`);
     const cid = key instanceof CID ? key : await scaleContentCid(key);
     const options = externalAbort ? { signal: AbortSignal.timeout(timeoutMs) } : {};
-    try {
-      const publication = this.node.contentRouting.provide(cid, options);
-      if (externalAbort) await publication;
-      else await softDeadline(publication, timeoutMs + 5_000, `truyn_scale_provide_${this.index}`);
-      return cid;
-    } catch (error) {
-      if (error.code === 'ERR_TRUYN_SCALE_SOFT_DEADLINE') this.telemetry.advertisementSoftDeadlines += 1;
-      throw error;
-    }
+    return withAdvertisementSlot(async () => {
+      try {
+        const publication = this.node.contentRouting.provide(cid, options);
+        if (externalAbort) await publication;
+        else await softDeadline(publication, timeoutMs + 5_000, `truyn_scale_provide_${this.index}`);
+        return cid;
+      } catch (error) {
+        if (error.code === 'ERR_TRUYN_SCALE_SOFT_DEADLINE') this.telemetry.advertisementSoftDeadlines += 1;
+        throw error;
+      }
+    });
   }
 
   async findProviders(key, { timeoutMs = 5_000, limit = 20 } = {}) {
+    if (!this.node || this.node.status !== 'started') return [];
     const cid = key instanceof CID ? key : await scaleContentCid(key);
     const providers = [];
     const seen = new Set();
@@ -244,20 +269,37 @@ export class AdversarialScaleNode {
     return this.gater.snapshot();
   }
 
+  async purgeRoutingPeers(peerIds = []) {
+    if (!this.node || this.node.status !== 'started') return 0;
+    const routingTable = this.node.services?.dht?.routingTable;
+    if (!routingTable?.remove) return 0;
+    let removed = 0;
+    for (const peerId of peerIds) {
+      try {
+        await routingTable.remove(peerId);
+        removed += 1;
+      } catch {
+        // Removing a peer that is already absent is harmless for the fault harness.
+      }
+    }
+    return removed;
+  }
+
   healPeers(peerIds = []) {
     if (peerIds.length === 0) return this.gater.heal();
     return this.gater.allow(peerIds);
   }
 
   snapshot() {
+    const started = this.node?.status === 'started';
     return {
       index: this.index,
       nodeId: this.identity.nodeId,
       peerId: this.peerIdString,
-      address: this.address,
+      address: started ? this.address : null,
       status: this.node?.status || 'stopped',
-      connectedPeers: this.node?.getPeers?.().length || 0,
-      routingTableSize: this.node?.services?.dht?.routingTable?.size ?? null,
+      connectedPeers: started ? (this.node?.getPeers?.().length || 0) : 0,
+      routingTableSize: started ? (this.node?.services?.dht?.routingTable?.size ?? null) : 0,
       blockedPeers: this.gater.snapshot(),
       fault: this.faultSnapshot(),
       telemetry: { ...this.telemetry }
