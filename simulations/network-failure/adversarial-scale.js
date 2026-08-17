@@ -20,6 +20,10 @@ function batches(items, size) {
   return output;
 }
 
+function unique(values) {
+  return [...new Set(values)];
+}
+
 export class AdversarialScaleCluster {
   constructor({ count = 12, seed = 0x54525559, bootstrapCount = 4, kBucketSize = 20 } = {}) {
     if (!Number.isInteger(count) || count < 6) throw new Error('adversarial scale cluster requires at least 6 nodes');
@@ -30,6 +34,7 @@ export class AdversarialScaleCluster {
     this.kBucketSize = kBucketSize;
     this.nodes = Array.from({ length: count }, (_, index) => new AdversarialScaleNode({ index, kBucketSize }));
     this.assignments = [];
+    this.topologyReadiness = null;
   }
 
   pick(items) {
@@ -56,17 +61,72 @@ export class AdversarialScaleCluster {
       const bootstrap = this.nodes.slice(0, i).map((node) => node.address);
       await this.nodes[i].start({ bootstrap });
     }
+
     const seedAddresses = this.nodes.slice(0, this.bootstrapCount).map((node) => node.address);
     const remaining = this.nodes.slice(this.bootstrapCount);
     for (const batch of batches(remaining, concurrency)) {
-      await Promise.all(batch.map((node, offset) => {
-        const rotated = seedAddresses.slice(offset % seedAddresses.length).concat(seedAddresses.slice(0, offset % seedAddresses.length));
+      await Promise.all(batch.map((node) => {
+        const offset = node.index % seedAddresses.length;
+        const rotated = seedAddresses.slice(offset).concat(seedAddresses.slice(0, offset));
         return node.start({ bootstrap: rotated.slice(0, Math.min(3, rotated.length)) });
       }));
     }
-    await sleep(150);
-    await this.refreshAll({ concurrency, timeoutMs: 6_000 });
+
+    this.topologyReadiness = await this.stabilizeTopology({ concurrency });
     return this.snapshot();
+  }
+
+  async connectOverlay({ indices = this.liveIndices(), concurrency = 10 } = {}) {
+    const live = new Set(indices);
+    const attempts = [];
+    const chord = Math.max(2, Math.floor(this.count / 3));
+    for (const index of indices) {
+      const targetIndices = unique([
+        (index + 1) % this.count,
+        (index + chord) % this.count,
+        (index + Math.max(2, Math.floor(this.count / 2))) % this.count
+      ]).filter((target) => target !== index && live.has(target));
+      attempts.push({ index, targetIndices });
+    }
+
+    const outcomes = [];
+    for (const batch of batches(attempts, concurrency)) {
+      const batchOutcomes = await Promise.all(batch.map(async ({ index, targetIndices }) => {
+        let connected = 0;
+        const errors = [];
+        for (const targetIndex of targetIndices) {
+          try {
+            await connectQuicPeers(this.nodes[index].node, [this.nodes[targetIndex].address]);
+            connected += 1;
+          } catch (error) {
+            errors.push({ targetIndex, error: error.code || error.message });
+          }
+        }
+        return { index, attempted: targetIndices.length, connected, errors };
+      }));
+      outcomes.push(...batchOutcomes);
+    }
+    return outcomes;
+  }
+
+  async stabilizeTopology({ concurrency = 10, refreshRounds = 3 } = {}) {
+    const overlay = await this.connectOverlay({ concurrency });
+    await sleep(200);
+    const refresh = [];
+    for (let round = 0; round < refreshRounds; round += 1) {
+      refresh.push(await this.refreshAll({ concurrency, timeoutMs: 6_000 }));
+      await sleep(150);
+    }
+    const snapshot = this.snapshot();
+    return {
+      overlayConnectionsAttempted: overlay.reduce((sum, item) => sum + item.attempted, 0),
+      overlayConnectionsEstablished: overlay.reduce((sum, item) => sum + item.connected, 0),
+      overlayErrors: overlay.flatMap((item) => item.errors.map((error) => ({ sourceIndex: item.index, ...error }))),
+      refreshRounds,
+      refreshFailures: refresh.flat().filter((item) => !item.ok).length,
+      connectedPeers: snapshot.connectedPeers,
+      routingTableSize: snapshot.routingTableSize
+    };
   }
 
   async refreshAll({ indices = this.liveIndices(), concurrency = 10, timeoutMs = 6_000 } = {}) {
@@ -84,14 +144,61 @@ export class AdversarialScaleCluster {
     return states;
   }
 
-  async advertiseAssignments(assignments, { concurrency = 8 } = {}) {
+  async ensureProviderVisibility(assignment, {
+    witnessCount = Math.min(3, Math.max(1, this.liveIndices().length - 1)),
+    attempts = 4,
+    timeoutMs = 3_000
+  } = {}) {
+    const provider = this.nodes[assignment.providerIndex];
+    const candidates = this.liveIndices().filter((index) => index !== assignment.providerIndex);
+    const witnesses = this.shuffled(candidates).slice(0, Math.min(witnessCount, candidates.length));
+    const visible = new Set();
+    const evidence = [];
+
+    for (let attempt = 1; attempt <= attempts && visible.size < witnesses.length; attempt += 1) {
+      await provider.advertise(assignment.key, { timeoutMs: 8_000 }).catch(() => {});
+      for (const witnessIndex of witnesses) {
+        if (visible.has(witnessIndex)) continue;
+        const witness = this.nodes[witnessIndex];
+        const providers = await witness.findProviders(assignment.key, { timeoutMs, limit: 20 }).catch(() => []);
+        const found = providers.some((item) => item.id.toString() === provider.peerIdString);
+        evidence.push({ attempt, witnessIndex, found, providers: providers.length });
+        if (found) visible.add(witnessIndex);
+      }
+      if (visible.size < witnesses.length) {
+        await Promise.all([
+          provider.refresh({ timeoutMs: 5_000 }).catch(() => null),
+          ...witnesses.filter((index) => !visible.has(index)).map((index) => this.nodes[index].refresh({ timeoutMs: 5_000 }).catch(() => null))
+        ]);
+        await sleep(125 * attempt);
+      }
+    }
+
+    return {
+      providerIndex: assignment.providerIndex,
+      witnessCount: witnesses.length,
+      visibleWitnesses: visible.size,
+      ready: witnesses.length > 0 && visible.size === witnesses.length,
+      evidence
+    };
+  }
+
+  async advertiseAssignments(assignments, { concurrency = 8, verifyVisibility = false, witnessCount = 3 } = {}) {
     for (const batch of batches(assignments, concurrency)) {
       await Promise.all(batch.map(async (assignment) => {
         await this.nodes[assignment.providerIndex].advertise(assignment.key, { timeoutMs: 8_000 });
       }));
     }
+
+    let visibility = [];
+    if (verifyVisibility) {
+      for (const batch of batches(assignments, Math.max(1, Math.min(4, concurrency)))) {
+        const results = await Promise.all(batch.map((assignment) => this.ensureProviderVisibility(assignment, { witnessCount })));
+        visibility.push(...results);
+      }
+    }
     this.assignments.push(...assignments);
-    return assignments;
+    return { assignments, visibility, ready: !verifyVisibility || visibility.every((item) => item.ready) };
   }
 
   makeAssignments({ count = Math.min(20, this.count), prefix = 'baseline', candidateIndices = this.liveIndices() } = {}) {
@@ -102,7 +209,7 @@ export class AdversarialScaleCluster {
     }));
   }
 
-  async measureRouting(assignments, { samples = assignments.length, timeoutMs = 4_000 } = {}) {
+  async measureRouting(assignments, { samples = assignments.length, timeoutMs = 4_000, retryAfterRefresh = true } = {}) {
     const live = this.liveIndices();
     const routingLatencyMs = [];
     const probeLatencyMs = [];
@@ -112,17 +219,32 @@ export class AdversarialScaleCluster {
       const requesterCandidates = live.filter((index) => index !== assignment.providerIndex);
       const requesterIndex = this.pick(requesterCandidates);
       const requester = this.nodes[requesterIndex];
+      const expectedPeerId = this.nodes[assignment.providerIndex].peerIdString;
       const started = performance.now();
       let providers = [];
       let lookupError = null;
-      try {
-        providers = await requester.findProviders(assignment.key, { timeoutMs, limit: 20 });
-      } catch (error) {
-        lookupError = error.code || error.message;
+      let lookupAttempts = 0;
+      let firstAttemptFound = false;
+
+      for (let attempt = 1; attempt <= (retryAfterRefresh ? 2 : 1); attempt += 1) {
+        lookupAttempts = attempt;
+        try {
+          providers = await requester.findProviders(assignment.key, { timeoutMs, limit: 20 });
+        } catch (error) {
+          lookupError = error.code || error.message;
+          providers = [];
+        }
+        const found = providers.some((item) => item.id.toString() === expectedPeerId);
+        if (attempt === 1) firstAttemptFound = found;
+        if (found) break;
+        if (attempt === 1 && retryAfterRefresh) {
+          await requester.refresh({ timeoutMs: Math.min(6_000, timeoutMs + 2_000) }).catch(() => null);
+          await sleep(75);
+        }
       }
+
       const routingLatency = performance.now() - started;
       routingLatencyMs.push(routingLatency);
-      const expectedPeerId = this.nodes[assignment.providerIndex].peerIdString;
       const provider = providers.find((item) => item.id.toString() === expectedPeerId);
       let probe = null;
       if (provider) {
@@ -135,15 +257,19 @@ export class AdversarialScaleCluster {
         providers: providers.map((item) => item.id.toString()),
         routingLatencyMs: routingLatency,
         lookupError,
+        lookupAttempts,
+        firstAttemptFound,
         providerFound: Boolean(provider),
         probeOk: Boolean(probe?.ok),
         probe
       });
     }
+    const firstAttemptSuccesses = results.filter((item) => item.firstAttemptFound).length;
     const routeSuccesses = results.filter((item) => item.providerFound).length;
     const integritySuccesses = results.filter((item) => item.probeOk).length;
     return {
       samples: results.length,
+      firstAttemptRoutingSuccessRatio: ratio(firstAttemptSuccesses, results.length),
       routingSuccessRatio: ratio(routeSuccesses, results.length),
       endToEndIntegritySuccessRatio: ratio(integritySuccesses, results.length),
       routingLatencyMs: distribution(routingLatencyMs),
@@ -168,7 +294,12 @@ export class AdversarialScaleCluster {
       });
       await Promise.all(cross.map((peer) => node.node.hangUp(peer).catch(() => {})));
     }));
-    await sleep(100);
+    await sleep(125);
+    await Promise.all([
+      this.connectOverlay({ indices: leftIndices, concurrency: 8 }),
+      this.connectOverlay({ indices: rightIndices, concurrency: 8 })
+    ]);
+    await this.refreshAll({ concurrency: 10, timeoutMs: 5_000 });
   }
 
   async healPartition({ leftIndices = [], rightIndices = [] } = {}) {
@@ -179,6 +310,9 @@ export class AdversarialScaleCluster {
     await Promise.all(bridgePairs.map(async ([left, right]) => {
       await connectQuicPeers(this.nodes[left].node, [this.nodes[right].address]).catch(() => {});
     }));
+    await this.connectOverlay({ concurrency: 10 });
+    await this.refreshAll({ concurrency: 10, timeoutMs: 6_000 });
+    await sleep(125);
     await this.refreshAll({ concurrency: 10, timeoutMs: 6_000 });
   }
 
@@ -209,7 +343,11 @@ export class AdversarialScaleCluster {
         const probe = await this.nodes[left[0]].probe(remote.id, rightAssignment.value, { timeoutMs: 2_000 });
         recovered = probe.ok;
       }
-      if (!recovered) await sleep(100);
+      if (!recovered) {
+        await this.nodes[left[0]].refresh({ timeoutMs: 4_000 }).catch(() => null);
+        await this.nodes[rightAssignment.providerIndex].advertise(rightAssignment.key, { timeoutMs: 4_000 }).catch(() => null);
+        await sleep(100);
+      }
     }
     return {
       samePartitionRoutingSucceeded: sameFound,
@@ -232,10 +370,14 @@ export class AdversarialScaleCluster {
     const forgedValue = { immutable: 'coordinated-forgery', seed: this.seed };
     this.nodes[honestProviderIndex].setFault({ mode: 'honest' });
     for (const index of attackers) this.nodes[index].setFault({ mode: 'colluding', value: forgedValue });
-    await this.advertiseAssignments([
+    const assignments = [
       { key, providerIndex: honestProviderIndex, value: expectedValue },
       ...attackers.map((providerIndex) => ({ key, providerIndex, value: forgedValue }))
-    ]);
+    ];
+    await this.advertiseAssignments(assignments);
+    await this.nodes[requesterIndex].refresh({ timeoutMs: 5_000 }).catch(() => null);
+    for (const assignment of assignments) await this.nodes[assignment.providerIndex].advertise(key, { timeoutMs: 5_000 }).catch(() => null);
+
     const providers = await this.nodes[requesterIndex].findProviders(key, { timeoutMs, limit: maliciousCount + 8 }).catch(() => []);
     const peerToIndex = new Map(this.nodes.map((node) => [node.peerIdString, node.index]));
     const verdicts = [];
@@ -246,13 +388,15 @@ export class AdversarialScaleCluster {
       verdicts.push({ providerIndex, malicious: attackers.includes(providerIndex), accepted: probe.ok, probe });
     }
     for (const index of attackers) this.nodes[index].setFault({ mode: 'honest' });
+    const maliciousObserved = verdicts.filter((item) => item.malicious).length;
     return {
       attackerCount: attackers.length,
       providerResponses: verdicts.length,
-      maliciousResponsesObserved: verdicts.filter((item) => item.malicious).length,
+      maliciousResponsesObserved: maliciousObserved,
       maliciousAccepted: verdicts.filter((item) => item.malicious && item.accepted).length,
       honestAccepted: verdicts.filter((item) => !item.malicious && item.accepted).length,
-      integrityPreserved: verdicts.every((item) => !item.malicious || !item.accepted),
+      attackExercised: maliciousObserved > 0,
+      integrityPreserved: maliciousObserved > 0 && verdicts.every((item) => !item.malicious || !item.accepted),
       verdicts
     };
   }
@@ -264,21 +408,32 @@ export class AdversarialScaleCluster {
     const expectedValue = { committed: 'honest-value', seed: this.seed };
     const forgedValue = { committed: 'sybil-value', seed: this.seed };
     for (const index of attackers) this.nodes[index].setFault({ mode: 'colluding', value: forgedValue });
-    await this.advertiseAssignments([
+    const assignments = [
       { key, providerIndex: honestProviderIndex, value: expectedValue },
       ...attackers.map((providerIndex) => ({ key, providerIndex, value: forgedValue }))
-    ]);
+    ];
+    await this.advertiseAssignments(assignments);
+    for (const assignment of assignments) await this.nodes[assignment.providerIndex].advertise(key, { timeoutMs: 5_000 }).catch(() => null);
+
     const attackerPeers = new Set(attackers.map((index) => this.nodes[index].peerIdString));
     const requesters = this.liveIndices().filter((index) => index !== honestProviderIndex && !attackers.includes(index)).slice(0, requesterSamples);
     let returned = 0;
     let attackerReturned = 0;
+    let attackerResponsesObserved = 0;
+    let attackerResponsesAccepted = 0;
     let acceptedValid = 0;
     for (const requesterIndex of requesters) {
+      await this.nodes[requesterIndex].refresh({ timeoutMs: 5_000 }).catch(() => null);
       const providers = await this.nodes[requesterIndex].findProviders(key, { timeoutMs, limit: sybilCount + 8 }).catch(() => []);
       returned += providers.length;
       attackerReturned += providers.filter((provider) => attackerPeers.has(provider.id.toString())).length;
       for (const provider of providers) {
+        const malicious = attackerPeers.has(provider.id.toString());
         const probe = await this.nodes[requesterIndex].probe(provider.id, expectedValue, { timeoutMs: 2_000, expectedDigest: scaleValueDigest(expectedValue) });
+        if (malicious) {
+          attackerResponsesObserved += 1;
+          if (probe.ok) attackerResponsesAccepted += 1;
+        }
         if (probe.ok) acceptedValid += 1;
       }
     }
@@ -287,9 +442,13 @@ export class AdversarialScaleCluster {
       sybilIdentities: attackers.length,
       requesterSamples: requesters.length,
       providersReturned: returned,
+      attackerProvidersReturned: attackerReturned,
       attackerProviderShare: ratio(attackerReturned, returned),
+      attackerResponsesObserved,
+      attackerResponsesAccepted,
       acceptedValidResponses: acceptedValid,
-      integrityPreserved: acceptedValid > 0 || returned === 0,
+      attackExercised: attackerResponsesObserved > 0,
+      integrityPreserved: attackerResponsesObserved > 0 && attackerResponsesAccepted === 0,
       routingAvailabilityUnderPressure: acceptedValid > 0
     };
   }
@@ -314,15 +473,23 @@ export class AdversarialScaleCluster {
     const honestPeerSet = new Set(honest.map((index) => this.nodes[index].peerIdString));
     await Promise.all(victim.node.getPeers().filter((peer) => honestPeerSet.has(peer.toString())).map((peer) => victim.node.hangUp(peer).catch(() => {})));
     await Promise.all(attackers.slice(0, 3).map((index) => connectQuicPeers(victim.node, [this.nodes[index].address]).catch(() => {})));
-    await sleep(100);
+    for (const index of attackers) await this.nodes[index].advertise(key, { timeoutMs: 5_000 }).catch(() => null);
+    await sleep(125);
 
     const providers = await victim.findProviders(key, { timeoutMs, limit: attackerCount + 8 }).catch(() => []);
+    const attackerPeers = new Set(attackers.map((index) => this.nodes[index].peerIdString));
     let validDuringEclipse = 0;
+    let attackerResponsesObserved = 0;
+    let attackerResponsesAccepted = 0;
     for (const provider of providers) {
+      const malicious = attackerPeers.has(provider.id.toString());
       const probe = await victim.probe(provider.id, expectedValue, { timeoutMs: 1_500, expectedDigest: scaleValueDigest(expectedValue) });
+      if (malicious) {
+        attackerResponsesObserved += 1;
+        if (probe.ok) attackerResponsesAccepted += 1;
+      }
       if (probe.ok) validDuringEclipse += 1;
     }
-    const eclipseSucceeded = validDuringEclipse === 0;
 
     const recoveryStarted = performance.now();
     for (const node of this.nodes) node.gater.heal();
@@ -334,16 +501,23 @@ export class AdversarialScaleCluster {
       const found = await victim.findProviders(key, { timeoutMs: 2_000, limit: attackerCount + 8 }).catch(() => []);
       const honestProvider = found.find((provider) => provider.id.toString() === this.nodes[honestProviderIndex].peerIdString);
       if (honestProvider) recovered = (await victim.probe(honestProvider.id, expectedValue, { timeoutMs: 2_000 })).ok;
-      if (!recovered) await sleep(100);
+      if (!recovered) {
+        await victim.refresh({ timeoutMs: 4_000 }).catch(() => null);
+        await this.nodes[honestProviderIndex].advertise(key, { timeoutMs: 4_000 }).catch(() => null);
+        await sleep(100);
+      }
     }
     for (const index of attackers) this.nodes[index].setFault({ mode: 'honest' });
     return {
       victimIndex,
       attackerCount: attackers.length,
       providersObservedDuringEclipse: providers.length,
+      attackerResponsesObserved,
+      attackerResponsesAccepted,
       validResponsesDuringEclipse: validDuringEclipse,
-      eclipseSucceeded,
-      integrityForged: validDuringEclipse > 0,
+      attackExercised: attackerResponsesObserved > 0,
+      eclipseAvailabilityLost: validDuringEclipse === 0,
+      integrityForged: attackerResponsesAccepted > 0,
       healed: recovered,
       recoveryMs: performance.now() - recoveryStarted
     };
@@ -357,9 +531,10 @@ export class AdversarialScaleCluster {
     const oldPeers = new Map(stopped.map((index) => [index, this.nodes[index].peerIdString]));
     await Promise.all(stopped.map((index) => this.nodes[index].stop()));
     const survivors = this.liveIndices();
+    await this.connectOverlay({ indices: survivors, concurrency: 10 });
     await this.refreshAll({ indices: survivors, concurrency: 10, timeoutMs: 5_000 });
     const survivorAssignments = this.makeAssignments({ count: Math.min(10, survivors.length), prefix: 'churn-survivor', candidateIndices: survivors });
-    await this.advertiseAssignments(survivorAssignments);
+    const warmup = await this.advertiseAssignments(survivorAssignments, { verifyVisibility: true, witnessCount: Math.min(2, survivors.length - 1) });
     const duringChurn = await this.measureRouting(survivorAssignments, { samples: Math.min(10, survivorAssignments.length), timeoutMs });
 
     const bootstrap = this.nodes.filter((node) => node.node?.status === 'started').slice(0, this.bootstrapCount).map((node) => node.address);
@@ -374,10 +549,12 @@ export class AdversarialScaleCluster {
         peerRotations.push(oldPeers.get(index) !== this.nodes[index].peerIdString);
       }));
     }
+    await this.connectOverlay({ concurrency: 10 });
     await this.refreshAll({ concurrency: 10, timeoutMs: 6_000 });
     return {
       stoppedNodes: stopped.length,
       stoppedFraction: ratio(stopped.length, this.count),
+      providerWarmupReady: warmup.ready,
       duringChurn,
       recoveredNodes: stopped.length,
       peerIdentityRotations: peerRotations.filter(Boolean).length,
@@ -428,13 +605,15 @@ export async function runAdversarialScaleGate({
   try {
     await cluster.start();
     const baselineAssignments = cluster.makeAssignments({ count: baselineProviders, prefix: 'baseline' });
-    await cluster.advertiseAssignments(baselineAssignments);
+    const baselineWarmup = await cluster.advertiseAssignments(baselineAssignments, { verifyVisibility: true, witnessCount: Math.min(3, count - 1) });
     const baseline = await cluster.measureRouting(baselineAssignments, { samples: baselineSamples });
     const report = {
       schema: 'truyn-adversarial-scale-gate-v1',
       startedAt,
       nodeCount: count,
       seed,
+      topologyReadiness: cluster.topologyReadiness,
+      baselineWarmup,
       baseline,
       partition: includePartition ? await cluster.partitionScenario() : null,
       churn: includeChurn ? await cluster.churnScenario() : null,
@@ -447,14 +626,19 @@ export async function runAdversarialScaleGate({
     report.finishedAt = new Date().toISOString();
     report.gates = {
       uniqueNodeIdentities: report.finalNetwork.uniqueLibp2pPeerIds === count && report.finalNetwork.uniqueTruynNodeIds === count,
+      providerVisibilityWarmup: report.baselineWarmup.ready,
+      baselineFirstAttemptRouting: report.baseline.firstAttemptRoutingSuccessRatio >= 0.95,
       baselineRouting: report.baseline.routingSuccessRatio >= 0.95,
       baselineIntegrity: report.baseline.endToEndIntegritySuccessRatio >= 0.95,
       partitionIsolation: report.partition == null || (report.partition.samePartitionRoutingSucceeded && report.partition.crossPartitionRoutingBlocked),
       partitionRecovery: report.partition == null || report.partition.healed,
-      churnRecovery: report.churn == null || report.churn.recoveredNodes === report.churn.stoppedNodes,
+      churnRecovery: report.churn == null || (report.churn.recoveredNodes === report.churn.stoppedNodes && report.churn.peerIdentityRotations === report.churn.stoppedNodes),
+      eclipseExercised: report.eclipse == null || report.eclipse.attackExercised,
       eclipseIntegrity: report.eclipse == null || !report.eclipse.integrityForged,
       eclipseRecovery: report.eclipse == null || report.eclipse.healed,
+      sybilExercised: report.sybilPressure == null || report.sybilPressure.attackExercised,
       sybilIntegrity: report.sybilPressure == null || report.sybilPressure.integrityPreserved,
+      collusionExercised: report.byzantineCollusion == null || report.byzantineCollusion.attackExercised,
       collusionIntegrity: report.byzantineCollusion == null || report.byzantineCollusion.integrityPreserved
     };
     report.passed = Object.values(report.gates).every(Boolean);
