@@ -1,5 +1,6 @@
 import { createIdentity } from '../core/identity/index.js';
 import { createEnvelope } from '../core/protocol/index.js';
+import { DurableAcceptedWorkInbox } from './admission/durable-inbox.js';
 import { KademliaRecordStore, createDhtRecord } from './dht/kademlia.js';
 import { PeerDiscovery, createPeerRecord, verifyPeerRecord } from './discovery/peer-discovery.js';
 import { QuicDiscoveryRpc, createQuicDiscoveryControlHandler } from './discovery/quic-rpc.js';
@@ -14,7 +15,7 @@ export class TruynNetworkNode {
     identity = createIdentity(), host = '0.0.0.0', port = 0, advertiseHost = null, tls,
     k = 20, alpha = 3, relayFallback = null, nat = null, capabilities = [], peerRecordTtlMs = 300_000,
     maxInFlight = 64, maxQueued = 256, statePath = null, dhtReplicationFactor = 3, dhtWriteQuorum = 2,
-    dhtRpcTimeoutMs = 5_000, faultController = null
+    dhtRpcTimeoutMs = 5_000, faultController = null, workInboxPath = null, workInboxMaxCompleted = 10_000
   } = {}) {
     if (!tls?.key || !tls?.cert) throw new Error('network runtime TLS key/certificate are required');
     this.identity = identity;
@@ -31,7 +32,9 @@ export class TruynNetworkNode {
     this.sequence = 0;
     this.started = false;
     this.localPeerRecord = null;
+    this.envelopeHandler = null;
     this.stateStore = statePath ? new DurableNetworkState({ filePath: statePath }) : null;
+    this.workInbox = workInboxPath ? new DurableAcceptedWorkInbox({ filePath: workInboxPath, maxCompleted: workInboxMaxCompleted }) : null;
     this.stateReady = false;
     this.persistQueue = Promise.resolve();
     this.faults = faultController || new NetworkFaultController();
@@ -96,7 +99,30 @@ export class TruynNetworkNode {
     return state;
   }
 
-  onEnvelope(handler) { this.quic.onEnvelope(handler); return this; }
+  async #dispatchEnvelope(envelope, context) {
+    if (!this.envelopeHandler) {
+      const error = new Error('no_envelope_handler');
+      error.code = 'TRUYN_NO_ENVELOPE_HANDLER';
+      throw error;
+    }
+    if (!this.workInbox) return this.envelopeHandler(envelope, context);
+    return this.workInbox.run(envelope, context, this.envelopeHandler);
+  }
+
+  onEnvelope(handler) {
+    this.envelopeHandler = typeof handler === 'function' ? handler : null;
+    this.quic.onEnvelope(this.envelopeHandler ? (envelope, context) => this.#dispatchEnvelope(envelope, context) : null);
+    return this;
+  }
+
+  async recoverAcceptedWork() {
+    if (!this.workInbox || !this.envelopeHandler) return [];
+    return this.workInbox.recover(this.envelopeHandler);
+  }
+
+  acceptedWorkSnapshot() {
+    return this.workInbox?.snapshot() || null;
+  }
 
   envelope(type, payload, { to = null, id, time, trace, deadline, priority } = {}) {
     return createEnvelope({ type, from: this.identity.nodeId, to, payload, id, time, trace, deadline, priority,
@@ -106,6 +132,7 @@ export class TruynNetworkNode {
   async start() {
     if (this.started) return this.localPeerRecord;
     await this.hydrateState();
+    await this.workInbox?.load();
     const endpoint = await this.quic.start();
     const advertisedHost = this.advertiseHost || (endpoint.host === '0.0.0.0' ? '127.0.0.1' : endpoint.host);
     this.sequence += 1;
@@ -113,6 +140,7 @@ export class TruynNetworkNode {
       sequence: this.sequence, ttlMs: this.peerRecordTtlMs, capabilities: this.capabilities, nat: this.nat });
     this.started = true;
     await this.persistState();
+    await this.recoverAcceptedWork();
     return structuredClone(this.localPeerRecord);
   }
 
