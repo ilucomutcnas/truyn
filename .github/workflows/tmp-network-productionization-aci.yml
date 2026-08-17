@@ -170,7 +170,7 @@ jobs:
           jq -s '.' /tmp/records.ndjson >/tmp/records.json
           [[ "$(jq length /tmp/records.json)" == 4 ]] || { echo 'TRUYN_ACI_GATE=FAIL reason=record_count'; exit 23; }
 
-          cat >/tmp/aci-operator.mjs <<'NODE'
+          cat >"$GITHUB_WORKSPACE/aci-operator.mjs" <<'NODE'
           import { readFile } from 'node:fs/promises';
           import { TestnetNetworkOperator } from './network/testnet/operator.js';
           const identity = JSON.parse(await readFile('/tmp/operator.json', 'utf8'));
@@ -218,5 +218,5 @@ jobs:
             })}\n`);
           } finally { await operator.close().catch(() => {}); }
           NODE
-          node /tmp/aci-operator.mjs
+          node "$GITHUB_WORKSPACE/aci-operator.mjs"
           gate_ok=1
