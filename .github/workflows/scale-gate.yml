@@ -16,6 +16,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: truyn-adversarial-scale-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   scale-100-scenario:
     name: scale-100 / ${{ matrix.scenario }}
