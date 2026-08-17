@@ -54,11 +54,12 @@ export async function createQuicKademliaNode({
     services
   });
 
-  node.addEventListener('peer:disconnect', (event) => {
-    const peerId = event.detail;
-    if (!peerId || node.status !== 'started') return;
-    void node.services.dht.routingTable.remove(peerId, { signal: AbortSignal.timeout(5_000) }).catch(() => {});
-  });
+  // A transport disconnect is not evidence that a Kademlia peer should be erased.
+  // At large sparse scale, QUIC connections naturally churn while the DHT must keep
+  // learned routing state so later queries can redial peers by their stored addresses.
+  // Explicit fault scenarios already purge peers when semantics require it (hard
+  // partition isolation and stale pre-restart PeerIds), while normal liveness and
+  // routing-table eviction remain owned by the Kademlia implementation itself.
 
   if (start) await node.start();
   for (const address of bootstrap) {
