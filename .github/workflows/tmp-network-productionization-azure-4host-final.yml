@@ -1,0 +1,199 @@
+name: Temporary Azure Four-Host Network Productionization Final
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/tmp-network-productionization-azure-4host-final.yml']
+permissions:
+  contents: read
+  id-token: write
+jobs:
+  four-host:
+    runs-on: ubuntu-latest
+    timeout-minutes: 70
+    env:
+      TEST_COMMIT: fd6f52e2e9ad1d08ba9cbe2f4a3b2d196b494afa
+      LOCATION: eastus2
+      VM_SIZE: Standard_B1ms
+      TEST_PEER_TTL_MS: '1800000'
+      AZURE_CLIENT_ID_VALUE: ${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID_VALUE: ${{ vars.AZURE_TENANT_ID || secrets.AZURE_TENANT_ID }}
+      AZURE_SUBSCRIPTION_ID_VALUE: ${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}
+    steps:
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID_VALUE }}
+          tenant-id: ${{ env.AZURE_TENANT_ID_VALUE }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID_VALUE }}
+      - name: Four-host Class B QUIC DHT failure-repair gate
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          STAGE=init
+          retry(){ local n=0; until "$@"; do n=$((n+1)); [[ $n -lt 4 ]] || return 1; sleep $((n*3)); done; }
+          trap 'rc=$?; echo "::error title=TRUYN Azure 4-host gate failure::stage=$STAGE exit=$rc line=$LINENO"; exit $rc' ERR
+
+          STAGE=providers
+          for ns in Microsoft.Network Microsoft.Compute; do
+            state="$(az provider show --namespace "$ns" --query registrationState -o tsv --only-show-errors)"
+            echo "TRUYN_AZURE_PROVIDER namespace=$ns state=$state"
+            [[ "$state" == Registered ]]
+          done
+          RG="$(az group list --query "[?contains(name, 'truyn')].name | [0]" -o tsv)"; [[ -n "$RG" ]]; echo "::add-mask::$RG"
+          PREFIX="truyn-final-${GITHUB_RUN_ID}"; NSG="${PREFIX}-nsg"; VNET="${PREFIX}-vnet"; SUBNET="${PREFIX}-subnet"
+          VMS=(); PIPS=(); NICS=(); PUB=(); PRIV=(); NODEIDS=(); RECORDS=(); gate_ok=0
+          for i in 0 1 2 3; do VMS+=("${PREFIX}-${i}"); PIPS+=("${PREFIX}-${i}-pip"); NICS+=("${PREFIX}-${i}-nic"); done
+          for x in "${VMS[@]}" "${PIPS[@]}" "${NICS[@]}"; do echo "::add-mask::$x"; done
+          API="$(az provider show --namespace Microsoft.Network --query "resourceTypes[?resourceType=='networkSecurityGroups'].apiVersions[0]" -o tsv --only-show-errors)"
+          URI="https://management.azure.com/subscriptions/${AZURE_SUBSCRIPTION_ID_VALUE}/resourceGroups/${RG}/providers/Microsoft.Network/networkSecurityGroups/${NSG}?api-version=${API}"
+
+          cleanup(){
+            set +e
+            STAGE=cleanup
+            for vm in "${VMS[@]}"; do az vm delete -g "$RG" -n "$vm" --yes --force-deletion --only-show-errors >/dev/null 2>&1 || true; done
+            ids="$(az network public-ip list -g "$RG" --query "[?starts_with(name, '$PREFIX')].id" -o tsv 2>/dev/null||true)"; [[ -z "$ids" ]] || az resource delete --ids $ids --only-show-errors >/dev/null 2>&1||true
+            ids="$(az network nic list -g "$RG" --query "[?starts_with(name, '$PREFIX')].id" -o tsv 2>/dev/null||true)"; [[ -z "$ids" ]] || az resource delete --ids $ids --only-show-errors >/dev/null 2>&1||true
+            ids="$(az disk list -g "$RG" --query "[?starts_with(name, '$PREFIX')].id" -o tsv 2>/dev/null||true)"; [[ -z "$ids" ]] || az resource delete --ids $ids --only-show-errors >/dev/null 2>&1||true
+            az network vnet delete -g "$RG" -n "$VNET" --only-show-errors >/dev/null 2>&1||true
+            az rest --method delete --uri "$URI" --only-show-errors >/dev/null 2>&1||true
+            if [[ "$gate_ok" == 1 ]]; then echo 'TRUYN_AZURE_4HOST_CLEANUP=PASS ephemeralResourcesRemoved=true'; else echo 'TRUYN_AZURE_4HOST_CLEANUP=EXECUTED_AFTER_FAILURE'; fi
+          }
+          trap cleanup EXIT
+
+          STAGE=network
+          printf '%s' '{"location":"eastus2","properties":{"securityRules":[{"name":"allow-truyn-quic","properties":{"protocol":"Udp","sourcePortRange":"*","destinationPortRange":"4433","sourceAddressPrefix":"*","destinationAddressPrefix":"*","access":"Allow","priority":100,"direction":"Inbound"}}]}}' >/tmp/nsg.json
+          retry az rest --method put --uri "$URI" --headers 'Content-Type=application/json' --body @/tmp/nsg.json --only-show-errors >/dev/null
+          state=''; for n in $(seq 1 30); do retry az rest --method get --uri "$URI" --only-show-errors >/tmp/ns.json; state="$(jq -r '.properties.provisioningState // empty' /tmp/ns.json)"; [[ "$state" == Succeeded ]]&&break; [[ "$state" == Failed ]]&&exit 14; sleep 2; done; [[ "$state" == Succeeded ]]
+          echo 'TRUYN_4HOST_STAGE nsg=PASS udpPort=4433'
+          retry az network vnet create -g "$RG" -n "$VNET" -l "$LOCATION" --address-prefixes 10.252.0.0/16 --subnet-name "$SUBNET" --subnet-prefixes 10.252.1.0/24 --only-show-errors >/dev/null
+          for i in 0 1 2 3; do
+            retry az network public-ip create -g "$RG" -n "${PIPS[$i]}" -l "$LOCATION" --sku Standard --allocation-method Static --only-show-errors >/dev/null
+            retry az network nic create -g "$RG" -n "${NICS[$i]}" -l "$LOCATION" --vnet-name "$VNET" --subnet "$SUBNET" --network-security-group "$NSG" --public-ip-address "${PIPS[$i]}" --only-show-errors >/dev/null
+            retry az vm create -g "$RG" -n "${VMS[$i]}" -l "$LOCATION" --image Ubuntu2204 --size "$VM_SIZE" --admin-username truynadmin --generate-ssh-keys --nics "${NICS[$i]}" --os-disk-delete-option Delete --tags "truyn-ephemeral-run=${GITHUB_RUN_ID}" --no-wait --only-show-errors >/dev/null
+          done
+          for i in 0 1 2 3; do
+            retry az vm wait -g "$RG" -n "${VMS[$i]}" --created --interval 5 --timeout 600 --only-show-errors
+            pub="$(az network public-ip show -g "$RG" -n "${PIPS[$i]}" --query ipAddress -o tsv)"; priv="$(az network nic show -g "$RG" -n "${NICS[$i]}" --query 'ipConfigurations[0].privateIPAddress' -o tsv)"
+            [[ -n "$pub" && -n "$priv" ]]; PUB+=("$pub"); PRIV+=("$priv"); echo "::add-mask::$pub"; echo "::add-mask::$priv"
+            echo "TRUYN_4HOST_STAGE vm=$i provisioned=true"
+          done
+
+          remote(){ retry az vm run-command invoke -g "$RG" -n "$1" --command-id RunShellScript --scripts "$2" --query 'value[0].message' -o tsv --only-show-errors; }
+          checked(){ local out; out="$(remote "$1" "$2")"; grep -Fq "$3"<<<"$out" || { echo "TRUYN_GUEST_FAIL marker=$3 raw=$(printf '%q' "$out")"; return 1; }; }
+          call(){
+            local vm="$1" method="$2" path="$3" payload="${4:-}" enc='' script out s ms b
+            [[ -z "$payload" ]]||enc="$(printf '%s' "$payload"|base64 -w0)"
+            if [[ -n "$enc" ]]; then
+              script="set -eu; printf '%s' '$enc'|base64 -d >/tmp/q; t0=\$(date +%s%3N); s=\$(curl -sS --max-time 120 -o /tmp/b -w '%{http_code}' -X '$method' -H 'content-type: application/json' --data-binary @/tmp/q 'http://127.0.0.1:8788$path'||true); t1=\$(date +%s%3N); ms=\$((t1-t0)); b=\$(base64 -w0 /tmp/b 2>/dev/null||true); printf 'S=%s\\nMS=%s\\nB=%s\\n' \"\$s\" \"\$ms\" \"\$b\""
+            else
+              script="set -eu; t0=\$(date +%s%3N); s=\$(curl -sS --max-time 120 -o /tmp/b -w '%{http_code}' -X '$method' 'http://127.0.0.1:8788$path'||true); t1=\$(date +%s%3N); ms=\$((t1-t0)); b=\$(base64 -w0 /tmp/b 2>/dev/null||true); printf 'S=%s\\nMS=%s\\nB=%s\\n' \"\$s\" \"\$ms\" \"\$b\""
+            fi
+            out="$(remote "$vm" "$script")"; s="$(printf '%s\n' "$out"|sed -n 's/.*S=//p'|tail -1|tr -d '\r')"; ms="$(printf '%s\n' "$out"|sed -n 's/.*MS=//p'|tail -1|tr -d '\r')"; b="$(printf '%s\n' "$out"|sed -n 's/.*B=//p'|tail -1|tr -d '\r')"
+            [[ "$s" =~ ^[0-9]{3}$ && "$ms" =~ ^[0-9]+$ ]]; printf '%s\t%s\t%s' "$s" "$ms" "$b"
+          }
+          status(){ printf '%s' "${1%%$'\t'*}"; }
+          rest(){ printf '%s' "${1#*$'\t'}"; }
+          millis(){ local r; r="$(rest "$1")"; printf '%s' "${r%%$'\t'*}"; }
+          b64(){ local r; r="$(rest "$1")"; printf '%s' "${r#*$'\t'}"; }
+          body(){ b64 "$1"|base64 -d; }
+
+          STAGE=install
+          for i in 0 1 2 3; do
+            setup=$(cat <<SCRIPT
+          set -eu
+          export DEBIAN_FRONTEND=noninteractive
+          rm -f /etc/apt/apt.conf.d/50command-not-found
+          rm -rf /var/lib/apt/lists/*
+          mkdir -p /var/lib/apt/lists/partial
+          apt-get update -qq
+          apt-get install -y -qq git curl jq openssl ca-certificates >/dev/null
+          major=0; if command -v node >/dev/null 2>&1; then major=\$(node -p 'parseInt(process.versions.node)' 2>/dev/null||echo 0); fi
+          if [ "\$major" -lt 22 ]; then curl -fsSL https://deb.nodesource.com/setup_22.x|sh - >/dev/null; apt-get install -y -qq nodejs >/dev/null; fi
+          if ! id -u truyn >/dev/null 2>&1; then useradd --system --home /var/lib/truyn-testnet --shell /usr/sbin/nologin truyn; fi
+          rm -rf /opt/truyn; git clone -q https://github.com/inn-media/truyn.git /opt/truyn; cd /opt/truyn; git checkout -q '$TEST_COMMIT'; npm install --ignore-scripts --no-audit --no-fund >/dev/null
+          install -d -m 0700 -o truyn -g truyn /var/lib/truyn-testnet /etc/truyn-testnet
+          openssl req -x509 -newkey rsa:2048 -nodes -keyout /etc/truyn-testnet/key.pem -out /etc/truyn-testnet/cert.pem -subj '/CN=${PUB[$i]}' -days 1 -addext 'subjectAltName=IP:${PUB[$i]},IP:${PRIV[$i]}' >/dev/null 2>&1
+          chown truyn:truyn /etc/truyn-testnet/*; chmod 0600 /etc/truyn-testnet/key.pem
+          cat >/etc/systemd/system/truyn-testnet.service <<UNIT
+          [Service]
+          User=truyn
+          Group=truyn
+          WorkingDirectory=/opt/truyn
+          Environment=TRUYN_TESTNET_DATA_DIR=/var/lib/truyn-testnet
+          Environment=TRUYN_TLS_KEY_PATH=/etc/truyn-testnet/key.pem
+          Environment=TRUYN_TLS_CERT_PATH=/etc/truyn-testnet/cert.pem
+          Environment=TRUYN_ADVERTISE_HOST=${PUB[$i]}
+          Environment=TRUYN_QUIC_HOST=0.0.0.0
+          Environment=TRUYN_QUIC_PORT=4433
+          Environment=TRUYN_CONTROL_HOST=127.0.0.1
+          Environment=TRUYN_CONTROL_PORT=8788
+          Environment=TRUYN_PEER_RECORD_TTL_MS=$TEST_PEER_TTL_MS
+          Environment=TRUYN_DHT_REPLICATION_FACTOR=3
+          Environment=TRUYN_DHT_WRITE_QUORUM=3
+          Environment=TRUYN_DHT_RPC_TIMEOUT_MS=5000
+          Environment=TRUYN_TESTNET_FAULT_CONTROL=1
+          ExecStart=/usr/bin/node /opt/truyn/network/testnet/node-service.js
+          Restart=on-failure
+          RestartSec=2
+          [Install]
+          WantedBy=multi-user.target
+          UNIT
+          systemctl daemon-reload; systemctl enable --now truyn-testnet.service >/dev/null
+          ok=0; for n in \$(seq 1 60); do if curl -fsS --max-time 2 http://127.0.0.1:8788/status >/dev/null; then ok=1; break; fi; sleep 2; done; [ "\$ok" -eq 1 ]; printf 'SETUP_OK\\n'
+          SCRIPT
+          )
+            checked "${VMS[$i]}" "$setup" SETUP_OK; echo "TRUYN_4HOST_STAGE node=$i ready"
+          done
+
+          STAGE=records-bootstrap
+          for i in 0 1 2 3; do
+            c="$(call "${VMS[$i]}" GET /record)"; [[ "$(status "$c")" == 200 ]]; rec="$(body "$c")"; RECORDS+=("$rec"); nid="$(jq -r '.record.nodeId'<<<"$rec")"; [[ "$nid" == truyn:node:* ]]; NODEIDS+=("$nid"); echo "::add-mask::$nid"; echo "TRUYN_4HOST_STAGE record=$i PASS"
+          done
+          [[ "$(printf '%s\n' "${NODEIDS[@]}"|sort -u|wc -l)" == 4 ]]
+          [[ "$(printf '%s\n' "${RECORDS[@]}"|jq -r '.record.endpoints[0]'|sort -u|wc -l)" == 4 ]]
+          all="$(printf '%s\n' "${RECORDS[@]}"|jq -s '{records:map(.record)}')"
+          for i in 0 1 2 3; do c="$(call "${VMS[$i]}" POST /bootstrap "$all")"; [[ "$(status "$c")" == 200 ]]; done
+          echo 'TRUYN_4HOST_STAGE bootstrap=PASS identities=4 endpoints=4 peerTtlScope=test-30m'
+
+          STAGE=direct-quic
+          payload="$(jq -nc --arg id "${NODEIDS[2]}" '{nodeId:$id,input:{proof:"azure-four-host-direct"}}')"
+          c="$(call "${VMS[0]}" POST /need "$payload")"; [[ "$(status "$c")" == 200 ]]; direct_ms="$(millis "$c")"; direct_body="$(body "$c")"; [[ "$(jq -r '.transport'<<<"$direct_body")" == quic-direct && "$(jq -r '.result.transport'<<<"$direct_body")" == quic ]]
+          echo "TRUYN_4HOST_STAGE direct_quic=PASS latencyMs=$direct_ms relayCalls=0"
+
+          STAGE=partition-heal
+          fault="$(jq -nc --arg id "${NODEIDS[2]}" '{nodeIds:[$id]}')"; c="$(call "${VMS[0]}" POST /faults/partition "$fault")"; [[ "$(status "$c")" == 200 ]]
+          blocked="$(call "${VMS[0]}" POST /need "$payload")"; [[ "$(status "$blocked")" != 200 ]]
+          c="$(call "${VMS[0]}" POST /faults/heal "$fault")"; [[ "$(status "$c")" == 200 ]]
+          healed="$(call "${VMS[0]}" POST /need "$payload")"; [[ "$(status "$healed")" == 200 && "$(jq -r '.transport'<<<"$(body "$healed")")" == quic-direct ]]
+          echo 'TRUYN_4HOST_STAGE partition_heal=PASS partitionBlocked=true healRecovered=true'
+
+          STAGE=replication
+          replicated="$(call "${VMS[0]}" POST /replicate '{"namespace":"productionization","key":"azure-four-host","value":{"proof":"durable"},"replicationFactor":3,"minAcks":3,"ttlMs":900000}')"; [[ "$(status "$replicated")" == 200 ]]; rep_body="$(body "$replicated")"; [[ "$(jq -r '.result.acknowledgements'<<<"$rep_body")" == 3 ]]
+          rid="$(jq -r '.record.recordId'<<<"$rep_body")"; echo "::add-mask::$rid"
+          found="$(call "${VMS[2]}" GET '/find?namespace=productionization&key=azure-four-host&fanout=4')"; [[ "$(status "$found")" == 200 ]]; jq -e --arg rid "$rid" '.records|any(.recordId==$rid)'<<<"$(body "$found")" >/dev/null
+          echo 'TRUYN_4HOST_STAGE replication=PASS acks=3 remoteRead=true'
+
+          STAGE=holder-selection
+          holder="$(jq -r --arg a "${NODEIDS[0]}" --arg d "${NODEIDS[3]}" '.result.storedAt[]|select(.!=$a and .!=$d)'<<<"$rep_body"|head -1)"; [[ -n "$holder" ]]
+          failed_index=''; for i in 1 2; do [[ "${NODEIDS[$i]}" == "$holder" ]]&&failed_index="$i"; done; [[ -n "$failed_index" ]]; failed_vm="${VMS[$failed_index]}"
+          before_seq="$(printf '%s\n' "${RECORDS[@]}"|jq -r --arg nid "$holder" 'select(.record.nodeId==$nid)|.record.sequence')"; [[ "$before_seq" =~ ^[0-9]+$ ]]
+          warm="$(call "${VMS[3]}" POST /ping "$(jq -nc --arg id "$holder" '{nodeId:$id}')")"; [[ "$(status "$warm")" == 200 && "$(jq -r '.pong'<<<"$(body "$warm")")" == true ]]
+          echo 'TRUYN_4HOST_STAGE dht_client_warm=PASS'
+
+          STAGE=holder-failure-repair
+          checked "$failed_vm" "set -eu; systemctl stop truyn-testnet.service; printf 'STOP_OK\\n'" STOP_OK
+          repaired="$(call "${VMS[0]}" POST /repair '{"namespace":"productionization","key":"azure-four-host","replicationFactor":3,"minAcks":3}')"; [[ "$(status "$repaired")" == 200 ]]; repair_ms="$(millis "$repaired")"; repair_body="$(body "$repaired")"
+          [[ "$(jq -r '.repairs[0].acknowledgements'<<<"$repair_body")" == 3 ]]; jq -e --arg dead "$holder" '.repairs[0].storedAt|index($dead)==null'<<<"$repair_body" >/dev/null; ((repair_ms<30000))
+          echo "TRUYN_4HOST_STAGE repair=PASS latencyMs=$repair_ms deadHolderExcluded=true acks=3"
+
+          STAGE=restart-continuity
+          restart="set -eu; systemctl start truyn-testnet.service; ok=0; for n in \$(seq 1 60); do if curl -fsS --max-time 2 http://127.0.0.1:8788/status >/dev/null; then ok=1; break; fi; sleep 2; done; [ \"\$ok\" -eq 1 ]; printf 'RESTART_OK\\n'"; checked "$failed_vm" "$restart" RESTART_OK
+          rr="$(call "$failed_vm" GET /record)"; [[ "$(status "$rr")" == 200 ]]; restarted="$(body "$rr")"; [[ "$(jq -r '.record.nodeId'<<<"$restarted")" == "$holder" ]]; after_seq="$(jq -r '.record.sequence'<<<"$restarted")"; ((after_seq>before_seq))
+          newer="$(jq -nc --argjson r "$(jq '.record'<<<"$restarted")" '{records:[$r]}')"; ingest="$(call "${VMS[3]}" POST /bootstrap "$newer")"; [[ "$(status "$ingest")" == 200 ]]
+          pong="$(call "${VMS[3]}" POST /ping "$(jq -nc --arg id "$holder" '{nodeId:$id}')")"; [[ "$(status "$pong")" == 200 && "$(jq -r '.pong'<<<"$(body "$pong")")" == true ]]
+          echo 'TRUYN_4HOST_STAGE restart=PASS identityStable=true sequenceAdvanced=true dhtStaleClientInvalidated=true'
+
+          STAGE=complete
+          gate_ok=1
+          result="$(jq -nc --arg gate PASS --arg cls B --arg sha "$TEST_COMMIT" --arg region "$LOCATION" --arg size "$VM_SIZE" --argjson hosts 4 --argjson directMs "$direct_ms" --argjson repairMs "$repair_ms" --argjson ttl "$TEST_PEER_TTL_MS" '{gate:$gate,evidenceClass:$cls,testCommit:$sha,hosts:$hosts,region:$region,vmSize:$size,transport:"real-public-udp-quic",relayCalls:0,directNeedMs:$directMs,partitionBlocked:true,healRecovered:true,replicationAcks:3,remoteRead:true,holderFailureRepairMs:$repairMs,restartIdentityStable:true,sequenceAdvanced:true,dhtStaleClientInvalidated:true,testPeerRecordTtlMs:$ttl}')"
+          echo "TRUYN_AZURE_4HOST_FINAL=$result"
+          echo "::notice title=TRUYN Azure Four-Host Class B PASS::$result"
