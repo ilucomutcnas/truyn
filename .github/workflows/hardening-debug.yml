@@ -21,7 +21,7 @@ jobs:
         with:
           node-version: '22'
       - run: npm install --ignore-scripts --no-audit --no-fund
-      - name: Apply patch and update expiring-token fixture
+      - name: Apply patch and update fixtures
         shell: bash
         run: |
           PATCH_B64="$(sed -n 's/^      PATCH_B64: "\(.*\)"$/\1/p' .github/workflows/security-hardening-apply.yml)"
@@ -30,13 +30,30 @@ jobs:
           node /tmp/apply-security-hardening.mjs
           node --input-type=module <<'NODE'
           import fs from 'node:fs';
-          const path = 'tests/runtime-combined-perimeter.test.js';
-          const original = fs.readFileSync(path, 'utf8');
-          const needle = "      TRUYN_ORIGIN_GUARD_TOKEN: 'edge-proof',\n";
-          if (!original.includes(needle)) throw new Error('origin guard fixture anchor missing');
-          fs.writeFileSync(path, original.replace(needle, `${needle}      TRUYN_ORIGIN_GUARD_TOKEN_EXPIRES_AT: '2099-01-01T00:00:00.000Z',\n`));
+
+          {
+            const path = 'tests/runtime-combined-perimeter.test.js';
+            const original = fs.readFileSync(path, 'utf8');
+            const needle = "      TRUYN_ORIGIN_GUARD_TOKEN: 'edge-proof',\n";
+            if (!original.includes(needle)) throw new Error('origin guard fixture anchor missing');
+            fs.writeFileSync(path, original.replace(needle, `${needle}      TRUYN_ORIGIN_GUARD_TOKEN_EXPIRES_AT: '2099-01-01T00:00:00.000Z',\n`));
+          }
+
+          {
+            const path = 'tests/mvp.test.js';
+            let text = fs.readFileSync(path, 'utf8');
+            const importNeedle = "import { createFunctionAdapter, TruynAdapterHost } from '../adapters/sdk/index.js';\n";
+            if (!text.includes(importNeedle)) throw new Error('mvp import anchor missing');
+            text = text.replace(importNeedle, `${importNeedle}import { createProviderAccessPolicy } from '../core/security/provider-access.js';\n`);
+            const researchNeedle = "  const researchHost = new TruynAdapterHost({\n    node: researchNode,\n";
+            const reviewNeedle = "  const reviewHost = new TruynAdapterHost({\n    node: reviewNode,\n";
+            if (!text.includes(researchNeedle) || !text.includes(reviewNeedle)) throw new Error('mvp host anchors missing');
+            text = text.replace(researchNeedle, `${researchNeedle}    accessPolicy: createProviderAccessPolicy({ mode: 'public' }),\n`);
+            text = text.replace(reviewNeedle, `${reviewNeedle}    accessPolicy: createProviderAccessPolicy({ mode: 'public' }),\n`);
+            fs.writeFileSync(path, text);
+          }
           NODE
-      - name: MVP integration without dev bypass
+      - name: MVP integration with explicit public opt-in
         run: timeout 90s node --test tests/mvp.test.js
       - name: Combined perimeter with expiring secret
         run: timeout 60s node --test tests/runtime-combined-perimeter.test.js
