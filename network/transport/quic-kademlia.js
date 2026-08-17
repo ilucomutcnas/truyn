@@ -14,10 +14,23 @@ export async function createQuicKademliaNode({
   kBucketSize = 20,
   connectionGater = undefined,
   connectionManager = undefined,
+  pingEnabled = true,
   start = true
 } = {}) {
   const addresses = { listen };
   if (Array.isArray(announce) && announce.length > 0) addresses.announce = announce;
+
+  const services = {
+    identify: identify(),
+    dht: kadDHT({
+      protocol: TRUYN_KAD_PROTOCOL,
+      clientMode: false,
+      kBucketSize,
+      peerInfoMapper: passthroughMapper,
+      allowQueryWithZeroPeers: true
+    })
+  };
+  if (pingEnabled) services.ping = ping();
 
   const node = await createLibp2p({
     start: false,
@@ -25,17 +38,7 @@ export async function createQuicKademliaNode({
     transports: [quic()],
     ...(connectionGater ? { connectionGater } : {}),
     ...(connectionManager ? { connectionManager } : {}),
-    services: {
-      identify: identify(),
-      ping: ping(),
-      dht: kadDHT({
-        protocol: TRUYN_KAD_PROTOCOL,
-        clientMode: false,
-        kBucketSize,
-        peerInfoMapper: passthroughMapper,
-        allowQueryWithZeroPeers: true
-      })
-    }
+    services
   });
 
   node.addEventListener('peer:disconnect', (event) => {
