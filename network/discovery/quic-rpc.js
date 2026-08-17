@@ -3,6 +3,7 @@ import { verifyDhtRecord } from '../dht/kademlia.js';
 
 export const QUIC_DHT_METHOD_PING = 'dht.ping';
 export const QUIC_DISCOVERY_METHOD_FIND_NODE = 'dht.find-node';
+export const QUIC_DISCOVERY_METHOD_PUBLISH_PEER = 'dht.peer-publish';
 export const QUIC_DHT_METHOD_STORE = 'dht.store';
 export const QUIC_DHT_METHOD_FIND_VALUE = 'dht.find-value';
 
@@ -94,6 +95,15 @@ export class QuicDiscoveryRpc {
     });
   }
 
+  async publishPeer(peer, record) {
+    const verification = verifyPeerRecord(record);
+    if (!verification.ok) throw new Error(`invalid peer record: ${verification.reason}`);
+    return this.bounded(peer, async () => {
+      const client = await this.client(peer);
+      return this.quic.requestControl(client, QUIC_DISCOVERY_METHOD_PUBLISH_PEER, { record });
+    });
+  }
+
   async store(peer, record) {
     const verification = verifyDhtRecord(record);
     if (!verification.ok) throw new Error(`invalid DHT record: ${verification.reason}`);
@@ -155,6 +165,13 @@ export function createQuicDiscoveryControlHandler(discovery, { maxRecords = null
         if (record) records.push(record);
       }
       return { records };
+    }
+
+    if (method === QUIC_DISCOVERY_METHOD_PUBLISH_PEER) {
+      const record = payload?.record;
+      const verification = verifyPeerRecord(record);
+      if (!verification.ok) return { accepted: false, reason: verification.reason };
+      return discovery.ingest(record);
     }
 
     if (method === QUIC_DHT_METHOD_STORE) {
