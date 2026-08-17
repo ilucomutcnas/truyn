@@ -1,0 +1,49 @@
+name: Temporary Class C Main OIDC Runner
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/tmp-network-class-c-main-runner.yml'
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  class-c:
+    runs-on: ubuntu-latest
+    timeout-minutes: 100
+    env:
+      AZURE_LOCATION: eastus2
+      AZURE_VM_SIZE: Standard_B1ms
+      AZURE_CLIENT_ID_VALUE: ${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID_VALUE: ${{ vars.AZURE_TENANT_ID || secrets.AZURE_TENANT_ID }}
+      AZURE_SUBSCRIPTION_ID_VALUE: ${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}
+      GCP_WIF_PROVIDER_VALUE: ${{ vars.GCP_WIF_PROVIDER || secrets.GCP_WIF_PROVIDER }}
+      GCP_DEPLOYER_SERVICE_ACCOUNT_EMAIL_VALUE: ${{ vars.GCP_DEPLOYER_SERVICE_ACCOUNT_EMAIL || secrets.GCP_DEPLOYER_SERVICE_ACCOUNT_EMAIL }}
+      GCP_RUNTIME_SERVICE_ACCOUNT_EMAIL_VALUE: ${{ vars.GCP_RUNTIME_SERVICE_ACCOUNT_EMAIL || secrets.GCP_RUNTIME_SERVICE_ACCOUNT_EMAIL }}
+      GCP_REGION_VALUE: ${{ vars.GCP_REGION || secrets.GCP_REGION }}
+      PEER_TTL_MS: '30000'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: network/class-c-verify-close
+          persist-credentials: false
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID_VALUE }}
+          tenant-id: ${{ env.AZURE_TENANT_ID_VALUE }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID_VALUE }}
+
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ env.GCP_WIF_PROVIDER_VALUE }}
+          service_account: ${{ env.GCP_DEPLOYER_SERVICE_ACCOUNT_EMAIL_VALUE }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Execute Class C cross-cloud proof
+        shell: bash
+        run: bash scripts/class-c-cross-cloud-proof.sh
