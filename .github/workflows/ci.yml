@@ -17,7 +17,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
       - run: npm install --ignore-scripts --no-audit --no-fund
       - run: npm test
         env:
