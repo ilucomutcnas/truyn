@@ -85,7 +85,12 @@ export class QuicDiscoveryRpc {
     return this.bounded(peer, async () => {
       const client = await this.client(peer);
       const result = await this.quic.requestControl(client, QUIC_DHT_METHOD_PING, null);
-      if (verifyPeerRecord(result?.peerRecord).ok) this.ingestPeerRecord?.(result.peerRecord);
+      if (verifyPeerRecord(result?.peerRecord).ok && this.ingestPeerRecord) {
+        const record = structuredClone(result.peerRecord);
+        // A newer record may invalidate this exact cached RPC client. Do not tear it down
+        // re-entrantly while the native QUIC control-response stack is still unwinding.
+        setImmediate(() => this.ingestPeerRecord?.(record));
+      }
       return Boolean(result?.pong);
     });
   }
