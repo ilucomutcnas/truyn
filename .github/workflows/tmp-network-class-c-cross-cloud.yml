@@ -1,0 +1,316 @@
+name: Temporary Class C Cross-Cloud Network Gate
+
+on:
+  push:
+    branches: [network/class-c]
+    paths:
+      - '.github/workflows/tmp-network-class-c-cross-cloud.yml'
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  class-c:
+    runs-on: ubuntu-latest
+    timeout-minutes: 100
+    env:
+      TEST_COMMIT: 18f58acadd77ca85768917c328ee212949890981
+      AZURE_LOCATION: eastus2
+      AZURE_VM_SIZE: Standard_B1ms
+      AZURE_CLIENT_ID_VALUE: ${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID_VALUE: ${{ vars.AZURE_TENANT_ID || secrets.AZURE_TENANT_ID }}
+      AZURE_SUBSCRIPTION_ID_VALUE: ${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}
+      GCP_WIF_PROVIDER_VALUE: ${{ vars.GCP_WIF_PROVIDER || secrets.GCP_WIF_PROVIDER }}
+      GCP_DEPLOYER_SERVICE_ACCOUNT_EMAIL_VALUE: ${{ vars.GCP_DEPLOYER_SERVICE_ACCOUNT_EMAIL || secrets.GCP_DEPLOYER_SERVICE_ACCOUNT_EMAIL }}
+      GCP_REGION_VALUE: ${{ vars.GCP_REGION || secrets.GCP_REGION }}
+      PEER_TTL_MS: '30000'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID_VALUE }}
+          tenant-id: ${{ env.AZURE_TENANT_ID_VALUE }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID_VALUE }}
+
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ env.GCP_WIF_PROVIDER_VALUE }}
+          service_account: ${{ env.GCP_DEPLOYER_SERVICE_ACCOUNT_EMAIL_VALUE }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Run Class C cross-cloud network gate
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          STAGE=init
+          gate_ok=0
+          retry(){ local n=0; until "$@"; do n=$((n+1)); [[ $n -lt 5 ]] || return 1; sleep $((n*3)); done; }
+          mask(){ [[ -z "${1:-}" ]] || echo "::add-mask::$1"; }
+          fail(){ echo "TRUYN_CLASS_C=FAIL stage=$STAGE reason=$1"; exit "${2:-90}"; }
+          trap 'rc=$?; echo "::error title=TRUYN Class C gate failure::stage=$STAGE exit=$rc line=$LINENO"; exit $rc' ERR
+
+          # ---------- resolve cloud contexts ----------
+          STAGE=cloud-context
+          AZ_RG="$(az group list --query "[?contains(name, 'truyn')].name | [0]" -o tsv --only-show-errors)"
+          [[ -n "$AZ_RG" ]] || fail azure_resource_group_missing 10
+          mask "$AZ_RG"
+          GCP_PROJECT="$(gcloud config get-value project 2>/dev/null || true)"
+          if [[ -z "$GCP_PROJECT" || "$GCP_PROJECT" == '(unset)' ]]; then
+            GCP_PROJECT="${GCP_DEPLOYER_SERVICE_ACCOUNT_EMAIL_VALUE#*@}"; GCP_PROJECT="${GCP_PROJECT%.iam.gserviceaccount.com}"
+            gcloud config set project "$GCP_PROJECT" >/dev/null
+          fi
+          [[ -n "$GCP_PROJECT" ]] || fail gcp_project_missing 11
+          mask "$GCP_PROJECT"
+          GCP_R1="${GCP_REGION_VALUE:-us-central1}"
+          if [[ "$GCP_R1" == us-east1 ]]; then GCP_R2=us-west1; else GCP_R2=us-east1; fi
+          GCP_Z1="$(gcloud compute zones list --filter="region:($GCP_R1)" --format='value(name)' --limit=1)"
+          GCP_Z2="$(gcloud compute zones list --filter="region:($GCP_R2)" --format='value(name)' --limit=1)"
+          [[ -n "$GCP_Z1" && -n "$GCP_Z2" ]] || fail gcp_zone_missing 12
+          mask "$GCP_R1"; mask "$GCP_R2"; mask "$GCP_Z1"; mask "$GCP_Z2"
+
+          PREFIX="truyn-c-${GITHUB_RUN_ID}"
+          AZ_VNET="${PREFIX}-vnet"; AZ_PUB_SUB="${PREFIX}-pub"; AZ_NAT_SUB="${PREFIX}-nat"; AZ_NSG="${PREFIX}-nsg"
+          AZ_A0="${PREFIX}-a0"; AZ_AN="${PREFIX}-an"; AZ_A0_PIP="${PREFIX}-a0-pip"; AZ_A0_NIC="${PREFIX}-a0-nic"; AZ_AN_NIC="${PREFIX}-an-nic"
+          AZ_NAT_PIP="${PREFIX}-nat-pip"; AZ_NAT_GW="${PREFIX}-natgw"
+          G_NET="${PREFIX}-net"; G_SUB1="${PREFIX}-s1"; G_SUB2="${PREFIX}-s2"; G_FWQ="${PREFIX}-quic"; G_FWS="${PREFIX}-ssh"; G0="${PREFIX}-g0"; G1="${PREFIX}-g1"; G_TAG="${PREFIX}-node"
+          for v in "$AZ_VNET" "$AZ_PUB_SUB" "$AZ_NAT_SUB" "$AZ_NSG" "$AZ_A0" "$AZ_AN" "$AZ_A0_PIP" "$AZ_A0_NIC" "$AZ_AN_NIC" "$AZ_NAT_PIP" "$AZ_NAT_GW" "$G_NET" "$G_SUB1" "$G_SUB2" "$G_FWQ" "$G_FWS" "$G0" "$G1" "$G_TAG"; do mask "$v"; done
+
+          cleanup(){
+            set +e
+            STAGE=cleanup
+            gcloud compute instances delete "$G0" --zone "$GCP_Z1" --quiet >/dev/null 2>&1 || true
+            gcloud compute instances delete "$G1" --zone "$GCP_Z2" --quiet >/dev/null 2>&1 || true
+            gcloud compute firewall-rules delete "$G_FWQ" "$G_FWS" --quiet >/dev/null 2>&1 || true
+            gcloud compute networks subnets delete "$G_SUB1" --region "$GCP_R1" --quiet >/dev/null 2>&1 || true
+            gcloud compute networks subnets delete "$G_SUB2" --region "$GCP_R2" --quiet >/dev/null 2>&1 || true
+            gcloud compute networks delete "$G_NET" --quiet >/dev/null 2>&1 || true
+            az vm delete -g "$AZ_RG" -n "$AZ_A0" --yes --force-deletion --only-show-errors >/dev/null 2>&1 || true
+            az vm delete -g "$AZ_RG" -n "$AZ_AN" --yes --force-deletion --only-show-errors >/dev/null 2>&1 || true
+            for kind in nic public-ip nat gateway nsg vnet; do :; done
+            az network nic delete -g "$AZ_RG" -n "$AZ_A0_NIC" --only-show-errors >/dev/null 2>&1 || true
+            az network nic delete -g "$AZ_RG" -n "$AZ_AN_NIC" --only-show-errors >/dev/null 2>&1 || true
+            az network nat gateway delete -g "$AZ_RG" -n "$AZ_NAT_GW" --only-show-errors >/dev/null 2>&1 || true
+            az network public-ip delete -g "$AZ_RG" -n "$AZ_A0_PIP" --only-show-errors >/dev/null 2>&1 || true
+            az network public-ip delete -g "$AZ_RG" -n "$AZ_NAT_PIP" --only-show-errors >/dev/null 2>&1 || true
+            az network nsg delete -g "$AZ_RG" -n "$AZ_NSG" --only-show-errors >/dev/null 2>&1 || true
+            az network vnet delete -g "$AZ_RG" -n "$AZ_VNET" --only-show-errors >/dev/null 2>&1 || true
+            if [[ "$gate_ok" == 1 ]]; then echo 'TRUYN_CLASS_C_CLEANUP=PASS ephemeralResourcesRemoved=true'; else echo 'TRUYN_CLASS_C_CLEANUP=EXECUTED gateFailed=true'; fi
+          }
+          trap cleanup EXIT
+
+          # ---------- Azure: one public node + one private node behind real NAT Gateway ----------
+          STAGE=azure-network
+          az network nsg create -g "$AZ_RG" -n "$AZ_NSG" -l "$AZURE_LOCATION" --only-show-errors >/dev/null
+          az network nsg rule create -g "$AZ_RG" --nsg-name "$AZ_NSG" -n allow-truyn-quic --priority 100 --direction Inbound --access Allow --protocol Udp --destination-port-ranges 4433 --source-address-prefixes '*' --only-show-errors >/dev/null
+          az network vnet create -g "$AZ_RG" -n "$AZ_VNET" -l "$AZURE_LOCATION" --address-prefixes 10.253.0.0/16 --subnet-name "$AZ_PUB_SUB" --subnet-prefixes 10.253.1.0/24 --only-show-errors >/dev/null
+          az network public-ip create -g "$AZ_RG" -n "$AZ_NAT_PIP" -l "$AZURE_LOCATION" --sku Standard --allocation-method Static --only-show-errors >/dev/null
+          az network nat gateway create -g "$AZ_RG" -n "$AZ_NAT_GW" -l "$AZURE_LOCATION" --public-ip-addresses "$AZ_NAT_PIP" --idle-timeout 10 --only-show-errors >/dev/null
+          az network vnet subnet create -g "$AZ_RG" --vnet-name "$AZ_VNET" -n "$AZ_NAT_SUB" --address-prefixes 10.253.2.0/24 --nat-gateway "$AZ_NAT_GW" --network-security-group "$AZ_NSG" --only-show-errors >/dev/null
+          az network vnet subnet update -g "$AZ_RG" --vnet-name "$AZ_VNET" -n "$AZ_PUB_SUB" --network-security-group "$AZ_NSG" --only-show-errors >/dev/null
+          az network public-ip create -g "$AZ_RG" -n "$AZ_A0_PIP" -l "$AZURE_LOCATION" --sku Standard --allocation-method Static --only-show-errors >/dev/null
+          az network nic create -g "$AZ_RG" -n "$AZ_A0_NIC" -l "$AZURE_LOCATION" --vnet-name "$AZ_VNET" --subnet "$AZ_PUB_SUB" --public-ip-address "$AZ_A0_PIP" --only-show-errors >/dev/null
+          az network nic create -g "$AZ_RG" -n "$AZ_AN_NIC" -l "$AZURE_LOCATION" --vnet-name "$AZ_VNET" --subnet "$AZ_NAT_SUB" --only-show-errors >/dev/null
+          az vm create -g "$AZ_RG" -n "$AZ_A0" -l "$AZURE_LOCATION" --image Ubuntu2204 --size "$AZURE_VM_SIZE" --admin-username truynadmin --generate-ssh-keys --nics "$AZ_A0_NIC" --os-disk-delete-option Delete --tags "truyn-ephemeral-run=${GITHUB_RUN_ID}" --no-wait --only-show-errors >/dev/null
+          az vm create -g "$AZ_RG" -n "$AZ_AN" -l "$AZURE_LOCATION" --image Ubuntu2204 --size "$AZURE_VM_SIZE" --admin-username truynadmin --generate-ssh-keys --nics "$AZ_AN_NIC" --os-disk-delete-option Delete --tags "truyn-ephemeral-run=${GITHUB_RUN_ID}" --no-wait --only-show-errors >/dev/null
+          retry az vm wait -g "$AZ_RG" -n "$AZ_A0" --created --interval 5 --timeout 600 --only-show-errors
+          retry az vm wait -g "$AZ_RG" -n "$AZ_AN" --created --interval 5 --timeout 600 --only-show-errors
+          A0_PUB="$(az network public-ip show -g "$AZ_RG" -n "$AZ_A0_PIP" --query ipAddress -o tsv)"
+          A0_PRIV="$(az network nic show -g "$AZ_RG" -n "$AZ_A0_NIC" --query 'ipConfigurations[0].privateIPAddress' -o tsv)"
+          AN_PRIV="$(az network nic show -g "$AZ_RG" -n "$AZ_AN_NIC" --query 'ipConfigurations[0].privateIPAddress' -o tsv)"
+          NAT_PUB="$(az network public-ip show -g "$AZ_RG" -n "$AZ_NAT_PIP" --query ipAddress -o tsv)"
+          [[ -n "$A0_PUB" && -n "$A0_PRIV" && -n "$AN_PRIV" && -n "$NAT_PUB" ]] || fail azure_address_missing 20
+          [[ -z "$(az network nic show -g "$AZ_RG" -n "$AZ_AN_NIC" --query 'ipConfigurations[0].publicIPAddress.id' -o tsv)" ]] || fail nat_node_unexpected_public_ip 21
+          for v in "$A0_PUB" "$A0_PRIV" "$AN_PRIV" "$NAT_PUB"; do mask "$v"; done
+          echo 'TRUYN_CLASS_C_STAGE azureNat=PASS privateNodePublicIp=false'
+
+          # ---------- GCP: two public nodes in two regions ----------
+          STAGE=gcp-network
+          RUNNER_IP="$(curl -fsS https://api.ipify.org)"; mask "$RUNNER_IP"
+          gcloud compute networks create "$G_NET" --subnet-mode=custom --quiet >/dev/null
+          gcloud compute networks subnets create "$G_SUB1" --network "$G_NET" --region "$GCP_R1" --range 10.242.1.0/24 --quiet >/dev/null
+          gcloud compute networks subnets create "$G_SUB2" --network "$G_NET" --region "$GCP_R2" --range 10.242.2.0/24 --quiet >/dev/null
+          gcloud compute firewall-rules create "$G_FWQ" --network "$G_NET" --direction INGRESS --action ALLOW --rules udp:4433 --source-ranges 0.0.0.0/0 --target-tags "$G_TAG" --quiet >/dev/null
+          gcloud compute firewall-rules create "$G_FWS" --network "$G_NET" --direction INGRESS --action ALLOW --rules tcp:22 --source-ranges "${RUNNER_IP}/32" --target-tags "$G_TAG" --quiet >/dev/null
+          gcloud compute instances create "$G0" --zone "$GCP_Z1" --machine-type e2-small --subnet "$G_SUB1" --tags "$G_TAG" --image-family ubuntu-2204-lts --image-project ubuntu-os-cloud --boot-disk-size 10GB --quiet >/dev/null
+          gcloud compute instances create "$G1" --zone "$GCP_Z2" --machine-type e2-small --subnet "$G_SUB2" --tags "$G_TAG" --image-family ubuntu-2204-lts --image-project ubuntu-os-cloud --boot-disk-size 10GB --quiet >/dev/null
+          G0_PUB="$(gcloud compute instances describe "$G0" --zone "$GCP_Z1" --format='get(networkInterfaces[0].accessConfigs[0].natIP)')"
+          G1_PUB="$(gcloud compute instances describe "$G1" --zone "$GCP_Z2" --format='get(networkInterfaces[0].accessConfigs[0].natIP)')"
+          [[ -n "$G0_PUB" && -n "$G1_PUB" ]] || fail gcp_public_ip_missing 22
+          mask "$G0_PUB"; mask "$G1_PUB"
+          echo 'TRUYN_CLASS_C_STAGE multicloud=PASS providers=2 publicNodes=3 regions=3'
+
+          az_remote(){ retry az vm run-command invoke -g "$AZ_RG" -n "$1" --command-id RunShellScript --scripts "$2" --query 'value[0].message' -o tsv --only-show-errors; }
+          g_remote(){ local vm="$1" zone="$2" script="$3" out=''; for n in $(seq 1 20); do if out="$(gcloud compute ssh "$vm" --zone "$zone" --quiet --ssh-flag='-o ConnectTimeout=10' --command "$script" 2>/dev/null)"; then printf '%s' "$out"; return 0; fi; sleep 3; done; return 1; }
+          extract_marker(){ printf '%s\n' "$1" | sed -n "s/^$2=//p" | tail -1; }
+
+          az_call(){
+            local vm="$1" method="$2" path="$3" payload="${4:-}" enc='' script out b
+            [[ -z "$payload" ]] || enc="$(printf '%s' "$payload" | base64 -w0)"
+            if [[ -n "$enc" ]]; then script="set -eu; printf '%s' '$enc'|base64 -d >/tmp/truyn-q; curl -fsS --max-time 60 -X '$method' -H 'content-type: application/json' --data-binary @/tmp/truyn-q 'http://127.0.0.1:8788$path' >/tmp/truyn-b; printf 'TRUYN_BODY_B64=%s\\n' \"\$(base64 -w0 /tmp/truyn-b)\""; else script="set -eu; curl -fsS --max-time 60 -X '$method' 'http://127.0.0.1:8788$path' >/tmp/truyn-b; printf 'TRUYN_BODY_B64=%s\\n' \"\$(base64 -w0 /tmp/truyn-b)\""; fi
+            out="$(az_remote "$vm" "$script")"; b="$(printf '%s\n' "$out" | sed -n 's/.*TRUYN_BODY_B64=//p' | tail -1 | tr -d '\r')"; [[ -n "$b" ]] || return 1; printf '%s' "$b" | base64 -d
+          }
+          g_call(){
+            local vm="$1" zone="$2" method="$3" path="$4" payload="${5:-}" enc='' script out b
+            [[ -z "$payload" ]] || enc="$(printf '%s' "$payload" | base64 -w0)"
+            if [[ -n "$enc" ]]; then script="set -eu; printf '%s' '$enc'|base64 -d >/tmp/truyn-q; curl -fsS --max-time 60 -X '$method' -H 'content-type: application/json' --data-binary @/tmp/truyn-q 'http://127.0.0.1:8788$path' | base64 -w0"; else script="set -eu; curl -fsS --max-time 60 -X '$method' 'http://127.0.0.1:8788$path' | base64 -w0"; fi
+            out="$(g_remote "$vm" "$zone" "$script")"; b="$(printf '%s\n' "$out" | tail -1 | tr -d '\r')"; [[ -n "$b" ]] || return 1; printf '%s' "$b" | base64 -d
+          }
+
+          install_script(){
+            local adv="$1" sudo_prefix="$2"
+            cat <<SCRIPT
+          set -Eeuo pipefail
+          export DEBIAN_FRONTEND=noninteractive
+          ${sudo_prefix}apt-get update -qq
+          ${sudo_prefix}apt-get install -y -qq git curl jq openssl ca-certificates iproute2 iptables >/dev/null
+          major=0; command -v node >/dev/null 2>&1 && major=\$(node -p 'parseInt(process.versions.node)' 2>/dev/null || echo 0)
+          if [[ "\$major" -lt 22 ]]; then curl -fsSL https://deb.nodesource.com/setup_22.x | ${sudo_prefix}bash - >/dev/null; ${sudo_prefix}apt-get install -y -qq nodejs >/dev/null; fi
+          id -u truyn >/dev/null 2>&1 || ${sudo_prefix}useradd --system --home /var/lib/truyn-testnet --shell /usr/sbin/nologin truyn
+          ${sudo_prefix}rm -rf /opt/truyn; ${sudo_prefix}git clone -q https://github.com/inn-media/truyn.git /opt/truyn; cd /opt/truyn; ${sudo_prefix}git checkout -q '$TEST_COMMIT'; ${sudo_prefix}npm install --ignore-scripts --no-audit --no-fund >/dev/null
+          ${sudo_prefix}install -d -m 0700 -o truyn -g truyn /var/lib/truyn-testnet /etc/truyn-testnet
+          ${sudo_prefix}openssl req -x509 -newkey rsa:2048 -nodes -keyout /etc/truyn-testnet/key.pem -out /etc/truyn-testnet/cert.pem -subj '/CN=${adv}' -days 1 -addext 'subjectAltName=IP:${adv}' >/dev/null 2>&1
+          ${sudo_prefix}chown truyn:truyn /etc/truyn-testnet/key.pem /etc/truin-testnet/cert.pem 2>/dev/null || true
+          ${sudo_prefix}chown truyn:truyn /etc/truyn-testnet/key.pem /etc/truyn-testnet/cert.pem; ${sudo_prefix}chmod 0600 /etc/truyn-testnet/key.pem
+          cat <<UNIT | ${sudo_prefix}tee /etc/systemd/system/truyn-testnet.service >/dev/null
+          [Unit]
+          After=network-online.target
+          Wants=network-online.target
+          [Service]
+          User=truyn
+          Group=truyn
+          WorkingDirectory=/opt/truyn
+          Environment=TRUYN_TESTNET_DATA_DIR=/var/lib/truyn-testnet
+          Environment=TRUYN_TLS_KEY_PATH=/etc/truyn-testnet/key.pem
+          Environment=TRUYN_TLS_CERT_PATH=/etc/truyn-testnet/cert.pem
+          Environment=TRUYN_ADVERTISE_HOST=${adv}
+          Environment=TRUYN_QUIC_HOST=0.0.0.0
+          Environment=TRUYN_QUIC_PORT=4433
+          Environment=TRUYN_CONTROL_HOST=127.0.0.1
+          Environment=TRUYN_CONTROL_PORT=8788
+          Environment=TRUYN_PEER_RECORD_TTL_MS=$PEER_TTL_MS
+          Environment=TRUYN_DHT_REPLICATION_FACTOR=3
+          Environment=TRUYN_DHT_WRITE_QUORUM=2
+          Environment=TRUYN_DHT_RPC_TIMEOUT_MS=5000
+          ExecStart=/usr/bin/node /opt/truyn/network/testnet/node-service.js
+          Restart=on-failure
+          RestartSec=2
+          [Install]
+          WantedBy=multi-user.target
+          UNIT
+          ${sudo_prefix}systemctl daemon-reload; ${sudo_prefix}systemctl enable --now truyn-testnet.service >/dev/null
+          for n in \$(seq 1 60); do curl -fsS --max-time 2 http://127.0.0.1:8788/status >/dev/null && { echo TRUYN_NODE_READY; exit 0; }; sleep 2; done
+          ${sudo_prefix}systemctl --no-pager status truyn-testnet.service || true; exit 31
+          SCRIPT
+          }
+
+          # ---------- install four real nodes ----------
+          STAGE=install
+          out="$(az_remote "$AZ_A0" "$(install_script "$A0_PUB" '')")"; grep -Fq TRUYN_NODE_READY <<<"$out" || fail azure_public_node_start 30
+          out="$(az_remote "$AZ_AN" "$(install_script "$AN_PRIV" '')")"; grep -Fq TRUYN_NODE_READY <<<"$out" || fail azure_nat_node_start 31
+          out="$(g_remote "$G0" "$GCP_Z1" "$(install_script "$G0_PUB" 'sudo ')")"; grep -Fq TRUYN_NODE_READY <<<"$out" || fail gcp0_node_start 32
+          out="$(g_remote "$G1" "$GCP_Z2" "$(install_script "$G1_PUB" 'sudo ')")"; grep -Fq TRUYN_NODE_READY <<<"$out" || fail gcp1_node_start 33
+
+          STAGE=records
+          RA0="$(az_call "$AZ_A0" GET /record)"; RAN="$(az_call "$AZ_AN" GET /record)"; RG0="$(g_call "$G0" "$GCP_Z1" GET /record)"; RG1="$(g_call "$G1" "$GCP_Z2" GET /record)"
+          A0_ID="$(jq -r '.record.nodeId' <<<"$RA0")"; AN_ID="$(jq -r '.record.nodeId' <<<"$RAN")"; G0_ID="$(jq -r '.record.nodeId' <<<"$RG0")"; G1_ID="$(jq -r '.record.nodeId' <<<"$RG1")"
+          for v in "$A0_ID" "$AN_ID" "$G0_ID" "$G1_ID"; do [[ "$v" == truyn:node:* ]] || fail node_identity_missing 34; mask "$v"; done
+          [[ "$(printf '%s\n' "$A0_ID" "$AN_ID" "$G0_ID" "$G1_ID" | sort -u | wc -l)" == 4 ]] || fail node_identity_collision 35
+          S0="$(jq -r '.record.sequence' <<<"$RA0")"; SN="$(jq -r '.record.sequence' <<<"$RAN")"; SG0="$(jq -r '.record.sequence' <<<"$RG0")"; SG1="$(jq -r '.record.sequence' <<<"$RG1")"
+          ALL="$(printf '%s\n' "$RA0" "$RAN" "$RG0" "$RG1" | jq -s '{records:map(.record)}')"
+          az_call "$AZ_A0" POST /bootstrap "$ALL" >/dev/null
+          az_call "$AZ_AN" POST /bootstrap "$ALL" >/dev/null
+          g_call "$G0" "$GCP_Z1" POST /bootstrap "$ALL" >/dev/null
+          g_call "$G1" "$GCP_Z2" POST /bootstrap "$ALL" >/dev/null
+          echo 'TRUYN_CLASS_C_STAGE bootstrap=PASS identities=4'
+
+          # ---------- relay-free cross-cloud + cross-region QUIC ----------
+          STAGE=cross-cloud-direct
+          P="$(jq -nc --arg id "$G0_ID" '{nodeId:$id,input:{proof:"azure-to-gcp"}}')"; D1="$(az_call "$AZ_A0" POST /need "$P")"
+          [[ "$(jq -r '.transport' <<<"$D1")" == quic-direct ]] || fail azure_to_gcp_direct 40
+          P="$(jq -nc --arg id "$A0_ID" '{nodeId:$id,input:{proof:"gcp-to-azure"}}')"; D2="$(g_call "$G1" "$GCP_Z2" POST /need "$P")"
+          [[ "$(jq -r '.transport' <<<"$D2")" == quic-direct ]] || fail gcp_to_azure_direct 41
+          P="$(jq -nc --arg id "$G1_ID" '{nodeId:$id,input:{proof:"gcp-inter-region"}}')"; D3="$(g_call "$G0" "$GCP_Z1" POST /need "$P")"
+          [[ "$(jq -r '.transport' <<<"$D3")" == quic-direct ]] || fail gcp_interregion_direct 42
+          echo 'TRUYN_CLASS_C_STAGE direct=PASS crossCloud=true crossRegion=true relayCalls=0'
+
+          # ---------- autonomous signed lease renewal + gossip beyond one lease ----------
+          STAGE=lease-gossip
+          sleep 42
+          NA0="$(az_call "$AZ_A0" GET /record)"; NAN="$(az_call "$AZ_AN" GET /record)"; NG0="$(g_call "$G0" "$GCP_Z1" GET /record)"; NG1="$(g_call "$G1" "$GCP_Z2" GET /record)"
+          N0="$(jq -r '.record.sequence' <<<"$NA0")"; NN="$(jq -r '.record.sequence' <<<"$NAN")"; N2="$(jq -r '.record.sequence' <<<"$NG0")"; N3="$(jq -r '.record.sequence' <<<"$NG1")"
+          (( N0 > S0 && NN > SN && N2 > SG0 && N3 > SG1 )) || fail autonomous_renewal_missing 50
+          G0_STATE="$(g_remote "$G0" "$GCP_Z1" 'sudo jq -c .peerRecords /var/lib/truyn-testnet/network-state.json')"
+          OBS_AN="$(jq -r --arg id "$AN_ID" '[.[] | select(.nodeId==$id) | .sequence] | max // 0' <<<"$G0_STATE")"
+          OBS_A0="$(jq -r --arg id "$A0_ID" '[.[] | select(.nodeId==$id) | .sequence] | max // 0' <<<"$G0_STATE")"
+          (( OBS_AN > SN && OBS_A0 > S0 )) || fail remote_gossip_convergence_missing 51
+          echo 'TRUYN_CLASS_C_STAGE leases=PASS autonomous=true signedGossip=true survivedLease=true natNodeGossipedOutbound=true'
+
+          # ---------- real packet-path WAN partition using guest firewall ----------
+          STAGE=packet-partition
+          g_remote "$G0" "$GCP_Z1" "sudo iptables -I INPUT 1 -p udp -s '$A0_PUB' --dport 4433 -j DROP" >/dev/null
+          NEG_PAY="$(jq -nc --arg id "$G0_ID" '{nodeId:$id,input:{proof:"packet-partition"}}')"; NEG64="$(printf '%s' "$NEG_PAY" | base64 -w0)"
+          NEG_OUT="$(az_remote "$AZ_A0" "set +e; printf '%s' '$NEG64'|base64 -d >/tmp/q; code=\$(curl -sS --max-time 40 -o /tmp/b -w '%{http_code}' -X POST -H 'content-type: application/json' --data-binary @/tmp/q http://127.0.0.1:8788/need); rc=\$?; printf 'TRUYN_NEG_CODE=%s\\nTRUYN_NEG_RC=%s\\n' \"\$code\" \"\$rc\"; exit 0")"
+          NEG_CODE="$(printf '%s\n' "$NEG_OUT" | sed -n 's/.*TRUYN_NEG_CODE=//p' | tail -1 | tr -d '\r')"
+          [[ "$NEG_CODE" != 200 ]] || fail packet_partition_did_not_block 60
+          DROP_PKTS="$(g_remote "$G0" "$GCP_Z1" "sudo iptables -L INPUT -v -n -x --line-numbers | awk '\$1==1 {print \$2}'")"; DROP_PKTS="$(printf '%s' "$DROP_PKTS" | tr -dc '0-9')"
+          [[ -n "$DROP_PKTS" && "$DROP_PKTS" -gt 0 ]] || fail packet_drop_counter_zero 61
+          g_remote "$G0" "$GCP_Z1" "sudo iptables -D INPUT -p udp -s '$A0_PUB' --dport 4433 -j DROP" >/dev/null
+          sleep 3
+          t0="$(date +%s%3N)"; HEAL="$(az_call "$AZ_A0" POST /need "$NEG_PAY")"; heal_ms=$(( $(date +%s%3N) - t0 ))
+          [[ "$(jq -r '.transport' <<<"$HEAL")" == quic-direct ]] || fail packet_heal_failed 62
+          echo "TRUYN_CLASS_C_STAGE packetPartition=PASS droppedPackets=$DROP_PKTS healMs=$heal_ms"
+
+          # ---------- real Azure NAT Gateway: private host has no public IP ----------
+          STAGE=real-cloud-nat
+          NAT_PAY="$(jq -nc --arg id "$G0_ID" '{nodeId:$id,input:{proof:"real-cloud-nat-outbound"}}')"; NAT_OK="$(az_call "$AZ_AN" POST /need "$NAT_PAY")"
+          [[ "$(jq -r '.transport' <<<"$NAT_OK")" == quic-direct ]] || fail cloud_nat_outbound_quic_failed 70
+          IN_PAY="$(jq -nc --arg id "$AN_ID" '{nodeId:$id,input:{proof:"cloud-nat-inbound-negative"}}')"; IN64="$(printf '%s' "$IN_PAY" | base64 -w0)"
+          IN_NEG="$(g_remote "$G0" "$GCP_Z1" "set +e; printf '%s' '$IN64'|base64 -d >/tmp/q; code=\$(curl -sS --max-time 38 -o /tmp/b -w '%{http_code}' -X POST -H 'content-type: application/json' --data-binary @/tmp/q http://127.0.0.1:8788/need); printf 'TRUYN_IN_CODE=%s\\n' \"\$code\"; exit 0")"
+          IN_CODE="$(printf '%s\n' "$IN_NEG" | sed -n 's/^TRUYN_IN_CODE=//p' | tail -1 | tr -d '\r')"
+          [[ "$IN_CODE" != 200 ]] || fail cloud_nat_unexpected_inbound_direct 71
+          echo 'TRUYN_CLASS_C_STAGE cloudNat=PASS privateNodePublicIp=false outboundDirect=true inboundDirect=false fallbackRequired=true'
+
+          # ---------- controlled double-NAT / CGNAT-like topology ----------
+          STAGE=double-nat
+          INNER_SETUP=$(cat <<'SCRIPT'
+          set -Eeuo pipefail
+          ip netns del truyn-cgnat >/dev/null 2>&1 || true
+          ip link del truyn-cgnat-host >/dev/null 2>&1 || true
+          ip netns add truyn-cgnat
+          ip link add truyn-cgnat-host type veth peer name truyn-cgnat-inner
+          ip link set truyn-cgnat-inner netns truyn-cgnat
+          ip addr add 192.168.55.1/24 dev truyn-cgnat-host
+          ip link set truyn-cgnat-host up
+          ip netns exec truyn-cgnat ip addr add 192.168.55.2/24 dev truyn-cgnat-inner
+          ip netns exec truyn-cgnat ip link set lo up
+          ip netns exec truyn-cgnat ip link set truyn-cgnat-inner up
+          ip netns exec truyn-cgnat ip route add default via 192.168.55.1
+          sysctl -w net.ipv4.ip_forward=1 >/dev/null
+          iptables -I FORWARD 1 -s 192.168.55.0/24 -j ACCEPT
+          iptables -I FORWARD 1 -d 192.168.55.0/24 -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+          iptables -t nat -I POSTROUTING 1 -s 192.168.55.0/24 -j MASQUERADE
+          install -d -m 0700 -o truyn -g truyn /var/lib/truyn-cgnat /etc/truyn-cgnat
+          openssl req -x509 -newkey rsa:2048 -nodes -keyout /etc/truyn-cgnat/key.pem -out /etc/truyn-cgnat/cert.pem -subj '/CN=192.168.55.2' -days 1 -addext 'subjectAltName=IP:192.168.55.2' >/dev/null 2>&1
+          chown truyn:truyn /etc/truyn-cgnat/*; chmod 0600 /etc/truin-cgnat/key.pem 2>/dev/null || true; chmod 0600 /etc/truyn-cgnat/key.pem
+          ip netns exec truyn-cgnat runuser -u truyn -- env TRUYN_TESTNET_DATA_DIR=/var/lib/truyn-cgnat TRUYN_TLS_KEY_PATH=/etc/truyn-cgnat/key.pem TRUYN_TLS_CERT_PATH=/etc/truyn-cgnat/cert.pem TRUYN_ADVERTISE_HOST=192.168.55.2 TRUYN_QUIC_HOST=0.0.0.0 TRUYN_QUIC_PORT=4433 TRUYN_CONTROL_HOST=127.0.0.1 TRUYN_CONTROL_PORT=8788 TRUYN_PEER_RECORD_TTL_MS=30000 nohup node /opt/truyn/network/testnet/node-service.js >/var/lib/truin-cgnat.log 2>&1 &
+          for n in $(seq 1 40); do ip netns exec truyn-cgnat curl -fsS --max-time 2 http://127.0.0.1:8788/status >/dev/null && { echo TRUYN_INNER_READY; exit 0; }; sleep 2; done
+          cat /var/lib/truin-cgnat.log 2>/dev/null || true; exit 1
+          SCRIPT
+          )
+          DOUB="$(az_remote "$AZ_AN" "$INNER_SETUP")"; grep -Fq TRUYN_INNER_READY <<<"$DOUB" || fail double_nat_inner_start 80
+          INNER_REC_OUT="$(az_remote "$AZ_AN" "ip netns exec truyn-cgnat curl -fsS http://127.0.0.1:8788/record | base64 -w0")"; INNER_REC="$(printf '%s\n' "$INNER_REC_OUT" | tail -1 | tr -d '\r' | base64 -d)"
+          INNER_ID="$(jq -r '.record.nodeId' <<<"$INNER_REC")"; [[ "$INNER_ID" == truyn:node:* ]] || fail double_nat_identity 81; mask "$INNER_ID"
+          BOOT_G0="$(jq -nc --argjson r "$(jq -c '.record' <<<"$NG0")" '{records:[$r]}')"; BOOT64="$(printf '%s' "$BOOT_G0" | base64 -w0)"
+          az_remote "$AZ_AN" "printf '%s' '$BOOT64'|base64 -d >/tmp/q; ip netns exec truyn-cgnat curl -fsS -X POST -H 'content-type: application/json' --data-binary @/tmp/q http://127.0.0.1:8788/bootstrap >/dev/null" >/dev/null
+          DPAY="$(jq -nc --arg id "$G0_ID" '{nodeId:$id,input:{proof:"double-nat-cgnat-like-outbound"}}')"; DP64="$(printf '%s' "$DPAY" | base64 -w0)"
+          DOUT="$(az_remote "$AZ_AN" "printf '%s' '$DP64'|base64 -d >/tmp/q; ip netns exec truyn-cgnat curl -fsS --max-time 60 -X POST -H 'content-type: application/json' --data-binary @/tmp/q http://127.0.0.1:8788/need | base64 -w0")"; DB64="$(printf '%s\n' "$DOUT" | tail -1 | tr -d '\r')"; DJSON="$(printf '%s' "$DB64" | base64 -d)"
+          [[ "$(jq -r '.transport' <<<"$DJSON")" == quic-direct ]] || fail double_nat_outbound_quic 82
+          echo 'TRUYN_CLASS_C_STAGE doubleNat=PASS layers=2 outboundDirect=true classification=cgnat-like-emulation carrierFieldClaim=false'
+
+          gate_ok=1
+          jq -nc --arg gate PASS --arg tested "$TEST_COMMIT" --argjson hosts 5 --argjson publicNodes 3 --argjson providers 2 --argjson regions 3 --argjson healMs "$heal_ms" --argjson dropped "$DROP_PKTS" '{gate:$gate,testedCommit:$tested,realNodeRuntimes:$hosts,publicNodes:$publicNodes,cloudProviders:$providers,cloudRegions:$regions,autonomousPeerLease:true,signedPeerGossip:true,crossCloudDirectQuic:true,relayCalls:0,packetPathPartition:true,packetDropCount:$dropped,packetHealMs:$healMs,realCloudNatOutbound:true,privateNatNodePublicIp:false,doubleNatCgnatLikeOutbound:true,carrierCgnatFieldValidated:false}' | sed 's/^/TRUYN_CLASS_C=/'
