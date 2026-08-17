@@ -70,6 +70,12 @@ function transportBinding(connection) {
   return `quic:${endpoints.join('|')}`;
 }
 
+function boundedHandlerError(error, fallback) {
+  const code = typeof error?.code === 'string' && /^[A-Z0-9_:-]{1,96}$/.test(error.code) ? error.code : null;
+  const message = typeof error?.message === 'string' && /^[a-zA-Z0-9_.:-]{1,128}$/.test(error.message) ? error.message : null;
+  return code || message || fallback;
+}
+
 export class TruynQuicTransport {
   constructor({ identity, host = '0.0.0.0', port = 0, tls, maxMessageBytes = 1_048_576 } = {}) {
     if (!identity?.nodeId || !identity?.publicKeyPem || !identity?.privateKeyPem) throw new Error('QUIC transport identity is required');
@@ -149,13 +155,17 @@ export class TruynQuicTransport {
     if (message?.kind === 'control') {
       if (typeof message.method !== 'string' || !message.method.trim()) { await writeJson(stream, { ok: false, error: 'quic_control_method_required' }); return; }
       if (!this.controlHandler) { await writeJson(stream, { ok: false, error: 'no_control_handler' }); return; }
-      const result = await this.controlHandler(message.method, message.payload ?? null, {
-        peerNodeId: session.peerNodeId,
-        peerPublicKey: session.peerPublicKey,
-        transport: 'quic',
-        connection
-      });
-      await writeJson(stream, { ok: true, result: result ?? null });
+      try {
+        const result = await this.controlHandler(message.method, message.payload ?? null, {
+          peerNodeId: session.peerNodeId,
+          peerPublicKey: session.peerPublicKey,
+          transport: 'quic',
+          connection
+        });
+        await writeJson(stream, { ok: true, result: result ?? null });
+      } catch (error) {
+        await writeJson(stream, { ok: false, error: boundedHandlerError(error, 'quic_control_handler_failed') });
+      }
       return;
     }
 
@@ -164,8 +174,12 @@ export class TruynQuicTransport {
       if (!verification.ok) { await writeJson(stream, { ok: false, error: verification.reason }); return; }
       if (message.envelope.from !== session.peerNodeId || message.envelope.publicKey !== session.peerPublicKey) { await writeJson(stream, { ok: false, error: 'quic_session_sender_mismatch' }); return; }
       if (!this.envelopeHandler) { await writeJson(stream, { ok: false, error: 'no_envelope_handler' }); return; }
-      const result = await this.envelopeHandler(message.envelope, { peerNodeId: session.peerNodeId, transport: 'quic', connection });
-      await writeJson(stream, { ok: true, result: result ?? null });
+      try {
+        const result = await this.envelopeHandler(message.envelope, { peerNodeId: session.peerNodeId, transport: 'quic', connection });
+        await writeJson(stream, { ok: true, result: result ?? null });
+      } catch (error) {
+        await writeJson(stream, { ok: false, error: boundedHandlerError(error, 'quic_envelope_handler_failed') });
+      }
       return;
     }
 
@@ -215,7 +229,11 @@ export class TruynQuicTransport {
     if (!verification.ok) throw new Error(`invalid envelope: ${verification.reason}`);
     if (envelope.from !== this.identity.nodeId) throw new Error('outbound envelope sender mismatch');
     const response = await requestJson(client.connection, { kind: 'envelope', sessionId: session.id, envelope }, this.maxMessageBytes);
-    if (!response?.ok) throw new Error(response?.error || 'quic_envelope_rejected');
+    if (!response?.ok) {
+      const error = new Error(response?.error || 'quic_envelope_rejected');
+      error.code = response?.error || 'TRUYN_QUIC_ENVELOPE_REJECTED';
+      throw error;
+    }
     return response.result;
   }
 
