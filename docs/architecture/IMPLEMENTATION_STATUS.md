@@ -27,6 +27,7 @@ Architecture documents define contracts. Benchmark reports prove bounded claims.
 | Node identity / signed envelopes | Defined | Implemented | CI-proven | protocol still draft |
 | QUIC underlay | Defined | Implemented | CI-proven | multi-host/WAN productionization still open |
 | Authenticated peer sessions | Defined | Implemented | CI-proven | Internet churn/reachability scale open |
+| Signed peer-record lifecycle | Defined | Implemented | CI-proven renewal, durable sequence-before-dissemination, authenticated announce/PING repair and stale-client invalidation | heterogeneous WAN/NAT lifecycle evidence still open |
 | Kademlia discovery/state RPC | Defined | Implemented | CI-proven | durability/repair/large real-node scale open |
 | Direct-first P2P + relay fallback | Defined | Implemented | CI-proven | heterogeneous NAT matrix open |
 | STUN / same-port hole punching | Defined | Implemented reference path | CI-proven bounded path | universal NAT traversal is not claimed |
@@ -76,14 +77,16 @@ A claim is only promoted to a proven maturity when a durable public benchmark/se
 
 ## Current priority
 
-The primary architecture/engineering priority is **network productionization**, not additional semantic sophistication:
+The primary architecture/engineering priority is **network productionization**, not additional semantic sophistication. Class B real multi-host proof is closed and the signed peer-record lifecycle prerequisite is now CI-proven; the next evidence class remains heterogeneous WAN/reachability:
 
 ```text
 bounded working decentralized primitives
         ↓
-repeatable real multi-host testnet
+Class B real multi-host testnet — closed
         ↓
-churn / crash / restart / partition / heal
+signed peer-record lifecycle — CI-proven
+        ↓
+packet-path WAN partition / heal + heterogeneous failure domains
         ↓
 real NAT and relay-failure matrix
         ↓

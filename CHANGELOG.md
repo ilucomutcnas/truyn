@@ -19,7 +19,10 @@ All notable factual repository changes should be recorded here without publishin
 
 - Closed v0.1 Connect as an implemented/CI-proven reference underlay with real QUIC/UDP, authenticated peer sessions, Kademlia discovery/state RPC, direct-first P2P, STUN/same-port hole punching, relay fallback and bounded backpressure.
 - Added bounded real libp2p QUIC/Kademlia trust-testnet evidence covering decentralized verifier discovery, durable replicated signed transparency/revocation state, bootstrap loss, transport-ID rotation, stale-record tolerance, revocation convergence, stale-receipt rejection and zero relay calls in the tested trust path.
-- Began real multi-host cloud network productionization exercises; temporary operational workflows/results are not promoted to durable productionized evidence until a completed reproducible report closes the gate.
+- Closed the signed peer-record lifecycle prerequisite at CI evidence level: automatic renewal before expiry, renewed sequence durability before dissemination, authenticated `peer.announce`, later-contact PING repair and stale P2P/DHT-RPC client invalidation.
+- Prevented re-entrant stale-client teardown when a newer signed peer record arrives inside an active PING control response by deferring ingestion until the native QUIC response stack has unwound.
+- Class B real multi-host proof remains historical evidence; the later peer-lifecycle CI slice does not relabel that run as renewal/WAN/NAT evidence.
+- Class C heterogeneous packet-path WAN, NAT/CGNAT and relay-failure evidence remains open.
 
 ### Security hardening — 2026-08-17
 
@@ -32,6 +35,7 @@ All notable factual repository changes should be recorded here without publishin
 ### Security sanitization
 
 - Removed public privileged cloud provisioning/bootstrap/smoke/deployment workflows where they exposed unnecessary operational execution details and kept safe public CI/read-only boundaries.
+- Removed temporary Class C cloud IAM/runner workflows after their operational use; public CI now again contains only allowlisted non-privileged workflow surface.
 - Removed obsolete experimental privileged provider/bootstrap paths from the public repository.
 - Made production-style relay node registration explicit-enrollment only by default.
 - Made provider dispatch trusted/authorized requester only by default while preserving separately explicit public-network/provider opt-ins.
@@ -73,7 +77,7 @@ All notable factual repository changes should be recorded here without publishin
 - Added generic custom HTTP JSON provider and stateless MCP HTTP tool provider reference paths without exposing endpoint/token details in normalized results.
 - BYOK requester and provider use separate cryptographic identities; remote providers publish private owner-only access for configured requester and run with billing mode `byok`.
 - Non-loopback official CLI AI-workload entry points require a verified private BYOK profile as defense in depth.
-- Defined sponsored/free owner-funded access as explicit entitlement, not implicit public-network behavior.
+- Defined sponsored/free owner-funded access as explicit entitlement, not implicit public-network/provider behavior.
 
 ### AI interoperability MVP / multi-cloud reference providers
 
