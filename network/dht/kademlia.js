@@ -55,6 +55,8 @@ export class KademliaRoutingTable {
       .map((peer) => ({ ...peer }));
   }
 
+  snapshot() { return this.buckets.flat().map((peer) => ({ ...peer })); }
+  restore(peers = []) { for (const peer of peers) this.upsert(peer); return this.size(); }
   size() { return this.buckets.reduce((sum, bucket) => sum + bucket.length, 0); }
 }
 
@@ -109,16 +111,18 @@ export function verifyDhtRecord(record, { now = Date.now(), allowExpired = false
 }
 
 export class KademliaRecordStore {
-  constructor() { this.records = new Map(); }
+  constructor({ onChange = null } = {}) { this.records = new Map(); this.onChange = onChange; }
 
   put(record, options = {}) {
-    const verification = verifyDhtRecord(record, options);
+    const { notify = true, ...verifyOptions } = options;
+    const verification = verifyDhtRecord(record, verifyOptions);
     if (!verification.ok) return { accepted: false, reason: verification.reason };
     const key = `${record.namespace}:${record.key}:${record.publisherNodeId}`;
     const existing = this.records.get(key);
     if (existing && existing.sequence > record.sequence) return { accepted: false, reason: 'dht_older_sequence' };
     if (existing && existing.sequence === record.sequence && existing.recordId !== record.recordId) return { accepted: false, reason: 'dht_equivocation' };
     this.records.set(key, structuredClone(record));
+    if (notify) this.onChange?.();
     return { accepted: true, recordId: record.recordId };
   }
 
@@ -129,11 +133,22 @@ export class KademliaRecordStore {
       .map((record) => structuredClone(record));
   }
 
-  sweep({ now = Date.now() } = {}) {
+  snapshot({ now = Date.now() } = {}) {
+    return [...this.records.values()].filter((record) => verifyDhtRecord(record, { now }).ok).map((record) => structuredClone(record));
+  }
+
+  restore(records = [], options = {}) {
+    let accepted = 0;
+    for (const record of records) if (this.put(record, { ...options, notify: false }).accepted) accepted += 1;
+    return accepted;
+  }
+
+  sweep({ now = Date.now(), notify = true } = {}) {
     let removed = 0;
     for (const [key, record] of this.records) {
       if (!verifyDhtRecord(record, { now }).ok) { this.records.delete(key); removed += 1; }
     }
+    if (removed && notify) this.onChange?.();
     return removed;
   }
 }
