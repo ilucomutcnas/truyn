@@ -2,6 +2,7 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import '../../network/testnet/scale-probe-transport-v3.js';
+import '../../network/testnet/scale-rejoin-v3.js';
 
 const output = process.env.TRUYN_SCALE_REPORT ? resolve(process.env.TRUYN_SCALE_REPORT) : null;
 const scenario = process.env.TRUYN_SCALE_SCENARIO || 'baseline';
@@ -20,6 +21,7 @@ if (!output || !existsSync(output)) {
     routing: 'libp2p Kademlia peerRouting.findPeer',
     integrity: 'signed TRUYN probe over DHT-resolved multiaddr',
     transportRepair: 'one bounded DHT/address repair retry on transport failure only',
+    restartRejoin: 'rotated PeerId rejoins through multiple stable survivor QUIC neighbors before independent routing measurement',
     cryptographicRetry: false
   };
 
