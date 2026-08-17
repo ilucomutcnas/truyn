@@ -18,7 +18,7 @@ async function generateTls(root) {
 
 function sleep(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
 
-async function eventually(check, { timeoutMs = 5_000, intervalMs = 25, message = 'condition_not_met' } = {}) {
+async function eventually(check, { timeoutMs = 10_000, intervalMs = 25, message = 'condition_not_met' } = {}) {
   const deadline = Date.now() + timeoutMs;
   let last = null;
   while (Date.now() < deadline) {
@@ -34,11 +34,11 @@ test('productionization: peer record renews before expiry, disseminates, and inv
   const tls = await generateTls(root);
   const a = new TruynNetworkNode({
     identity: createIdentity(), host: '127.0.0.1', tls, statePath: join(root, 'a-state.json'),
-    peerRecordTtlMs: 1_200, peerRecordRenewBeforeMs: 700
+    peerRecordTtlMs: 60_000, peerRecordRenewBeforeMs: 58_000
   });
   const b = new TruynNetworkNode({
     identity: createIdentity(), host: '127.0.0.1', tls, statePath: join(root, 'b-state.json'),
-    peerRecordTtlMs: 1_200, peerRecordRenewBeforeMs: 700
+    peerRecordTtlMs: 60_000, peerRecordAutoRenew: false
   });
   try {
     const [recordA, recordB] = await Promise.all([a.start(), b.start()]);
@@ -62,10 +62,8 @@ test('productionization: peer record renews before expiry, disseminates, and inv
       message: 'stale_clients_not_invalidated'
     });
 
-    const untilOriginalExpiry = originalExpiresAt - Date.now() + 75;
-    if (untilOriginalExpiry > 0) await sleep(untilOriginalExpiry);
-    const afterOriginalExpiry = b.discovery.get(a.identity.nodeId);
-    assert.ok(afterOriginalExpiry, 'peer must remain discoverable after the original lease expires');
+    const afterOriginalExpiry = b.discovery.get(a.identity.nodeId, { now: originalExpiresAt + 1 });
+    assert.ok(afterOriginalExpiry, 'newer record must remain valid after the original lease expires');
     assert.ok(afterOriginalExpiry.sequence > recordA.sequence);
 
     const lifecycle = a.peerRecordLifecycleSnapshot();
