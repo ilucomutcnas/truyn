@@ -66,10 +66,12 @@ test('productionization: peer record renews before expiry, disseminates, and inv
     assert.ok(afterOriginalExpiry, 'newer record must remain valid after the original lease expires');
     assert.ok(afterOriginalExpiry.sequence > recordA.sequence);
 
-    const lifecycle = a.peerRecordLifecycleSnapshot();
-    assert.ok(lifecycle.lastRenewedAt);
-    assert.ok(lifecycle.lastSequence > recordA.sequence);
-    assert.ok(lifecycle.lastAnnouncement?.delivered >= 1);
+    const lifecycle = await eventually(() => {
+      const current = a.peerRecordLifecycleSnapshot();
+      return current.lastRenewedAt && current.lastSequence > recordA.sequence && current.lastAnnouncement?.delivered >= 1
+        ? current
+        : null;
+    }, { message: 'renewal_lifecycle_not_completed' });
     assert.equal(lifecycle.lastError, null);
   } finally {
     await Promise.allSettled([a.close(), b.close()]);
