@@ -119,25 +119,25 @@ test('productionization: PING piggyback repairs a missed proactive renewal annou
   const tls = await generateTls(root);
   const a = new TruynNetworkNode({
     identity: createIdentity(), host: '127.0.0.1', tls,
-    peerRecordTtlMs: 1_200, peerRecordRenewBeforeMs: 700, peerRecordPublishFanout: 0
+    peerRecordTtlMs: 60_000, peerRecordAutoRenew: false, peerRecordPublishFanout: 0
   });
   const b = new TruynNetworkNode({
     identity: createIdentity(), host: '127.0.0.1', tls,
-    peerRecordTtlMs: 5_000, peerRecordAutoRenew: false
+    peerRecordTtlMs: 60_000, peerRecordAutoRenew: false
   });
   try {
     const [recordA, recordB] = await Promise.all([a.start(), b.start()]);
     a.bootstrap([recordB]);
     b.bootstrap([recordA]);
 
-    await eventually(() => a.localPeerRecord.sequence > recordA.sequence ? a.localPeerRecord.sequence : null, {
-      message: 'local_auto_renewal_not_observed'
-    });
-    assert.equal(b.discovery.get(a.identity.nodeId)?.sequence, recordA.sequence, 'fanout=0 must leave the remote peer on the old record');
+    const renewed = await a.renewPeerRecord();
+    assert.ok(renewed.record.sequence > recordA.sequence);
+    assert.equal(renewed.announcement.attempted, 0, 'fanout=0 must model a missed proactive announcement');
+    assert.equal(b.discovery.get(a.identity.nodeId)?.sequence, recordA.sequence, 'remote peer must still hold the previous valid record before PING');
 
     assert.equal(await b.pingPeer(a.identity.nodeId), true);
     const repaired = b.discovery.get(a.identity.nodeId);
-    assert.ok(repaired.sequence > recordA.sequence, 'PING response must carry and ingest the current self record');
+    assert.ok(repaired?.sequence > recordA.sequence, 'PING response must carry and ingest the current self record');
   } finally {
     await Promise.allSettled([a.close(), b.close()]);
     await rm(root, { recursive: true, force: true });
