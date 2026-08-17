@@ -1,0 +1,216 @@
+name: Temporary Azure Two-Host QUIC Diagnostic
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/tmp-network-productionization-azure-2host-diagnostic.yml']
+permissions:
+  contents: read
+  id-token: write
+jobs:
+  two-host-diagnostic:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      TEST_COMMIT: 7f953cd764db0f3816a18d7bbffdaf7ae16eb3ad
+      LOCATION: eastus2
+      VM_SIZE: Standard_B1ms
+      AZURE_CLIENT_ID_VALUE: ${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID_VALUE: ${{ vars.AZURE_TENANT_ID || secrets.AZURE_TENANT_ID }}
+      AZURE_SUBSCRIPTION_ID_VALUE: ${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}
+    steps:
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID_VALUE }}
+          tenant-id: ${{ env.AZURE_TENANT_ID_VALUE }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID_VALUE }}
+      - name: Two-host public-vs-private QUIC diagnostic
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          STAGE=init
+          retry(){ local n=0; until "$@"; do n=$((n+1)); [[ $n -lt 4 ]] || return 1; sleep $((n*3)); done; }
+          trap 'rc=$?; echo "::error title=TRUYN 2-host diagnostic harness failure::stage=$STAGE exit=$rc line=$LINENO"; exit $rc' ERR
+
+          STAGE=providers
+          for ns in Microsoft.Network Microsoft.Compute; do
+            state="$(az provider show --namespace "$ns" --query registrationState -o tsv --only-show-errors)"
+            echo "TRUYN_AZURE_PROVIDER namespace=$ns state=$state"
+            [[ "$state" == Registered ]]
+          done
+          RG="$(az group list --query "[?contains(name, 'truyn')].name | [0]" -o tsv)"
+          [[ -n "$RG" ]]; echo "::add-mask::$RG"
+          PREFIX="truyn-diag-${GITHUB_RUN_ID}"
+          NSG="${PREFIX}-nsg"; VNET="${PREFIX}-vnet"; SUBNET="${PREFIX}-subnet"
+          VMS=("${PREFIX}-a" "${PREFIX}-b")
+          PIPS=("${PREFIX}-a-pip" "${PREFIX}-b-pip")
+          NICS=("${PREFIX}-a-nic" "${PREFIX}-b-nic")
+          PUB=(); PRIV=(); cleanup_ok=0
+          for value in "${VMS[@]}" "${PIPS[@]}" "${NICS[@]}"; do echo "::add-mask::$value"; done
+          NSG_API="$(az provider show --namespace Microsoft.Network --query "resourceTypes[?resourceType=='networkSecurityGroups'].apiVersions[0]" -o tsv --only-show-errors)"
+          NSG_URI="https://management.azure.com/subscriptions/${AZURE_SUBSCRIPTION_ID_VALUE}/resourceGroups/${RG}/providers/Microsoft.Network/networkSecurityGroups/${NSG}?api-version=${NSG_API}"
+          cleanup(){
+            set +e
+            STAGE=cleanup
+            for vm in "${VMS[@]}"; do az vm delete -g "$RG" -n "$vm" --yes --force-deletion --only-show-errors >/dev/null 2>&1 || true; done
+            ids="$(az network public-ip list -g "$RG" --query "[?starts_with(name, '$PREFIX')].id" -o tsv 2>/dev/null || true)"; [[ -z "$ids" ]] || az resource delete --ids $ids --only-show-errors >/dev/null 2>&1 || true
+            ids="$(az network nic list -g "$RG" --query "[?starts_with(name, '$PREFIX')].id" -o tsv 2>/dev/null || true)"; [[ -z "$ids" ]] || az resource delete --ids $ids --only-show-errors >/dev/null 2>&1 || true
+            ids="$(az disk list -g "$RG" --query "[?starts_with(name, '$PREFIX')].id" -o tsv 2>/dev/null || true)"; [[ -z "$ids" ]] || az resource delete --ids $ids --only-show-errors >/dev/null 2>&1 || true
+            az network vnet delete -g "$RG" -n "$VNET" --only-show-errors >/dev/null 2>&1 || true
+            az rest --method delete --uri "$NSG_URI" --only-show-errors >/dev/null 2>&1 || true
+            if [[ "$cleanup_ok" == 1 ]]; then echo 'TRUYN_AZURE_2HOST_CLEANUP=PASS'; else echo 'TRUYN_AZURE_2HOST_CLEANUP=EXECUTED_AFTER_FAILURE'; fi
+          }
+          trap cleanup EXIT
+
+          STAGE=nsg
+          printf '%s' '{"location":"eastus2","properties":{"securityRules":[{"name":"allow-truyn-quic","properties":{"protocol":"Udp","sourcePortRange":"*","destinationPortRange":"4433","sourceAddressPrefix":"*","destinationAddressPrefix":"*","access":"Allow","priority":100,"direction":"Inbound"}}]}}' >/tmp/nsg.json
+          retry az rest --method put --uri "$NSG_URI" --headers 'Content-Type=application/json' --body @/tmp/nsg.json --only-show-errors >/dev/null
+          state=''; for n in $(seq 1 30); do retry az rest --method get --uri "$NSG_URI" --only-show-errors >/tmp/nsg-state.json; state="$(jq -r '.properties.provisioningState // empty' /tmp/nsg-state.json)"; [[ "$state" == Succeeded ]] && break; [[ "$state" == Failed ]] && exit 14; sleep 2; done
+          [[ "$state" == Succeeded ]]; echo 'TRUYN_DIAG_STAGE nsg=PASS udpPort=4433'
+
+          STAGE=network
+          retry az network vnet create -g "$RG" -n "$VNET" -l "$LOCATION" --address-prefixes 10.249.0.0/16 --subnet-name "$SUBNET" --subnet-prefixes 10.249.1.0/24 --only-show-errors >/dev/null
+          for i in 0 1; do
+            retry az network public-ip create -g "$RG" -n "${PIPS[$i]}" -l "$LOCATION" --sku Standard --allocation-method Static --only-show-errors >/dev/null
+            retry az network nic create -g "$RG" -n "${NICS[$i]}" -l "$LOCATION" --vnet-name "$VNET" --subnet "$SUBNET" --network-security-group "$NSG" --public-ip-address "${PIPS[$i]}" --only-show-errors >/dev/null
+            retry az vm create -g "$RG" -n "${VMS[$i]}" -l "$LOCATION" --image Ubuntu2204 --size "$VM_SIZE" --admin-username truynadmin --generate-ssh-keys --nics "${NICS[$i]}" --os-disk-delete-option Delete --tags "truyn-ephemeral-run=${GITHUB_RUN_ID}" --no-wait --only-show-errors >/dev/null
+          done
+          for i in 0 1; do
+            retry az vm wait -g "$RG" -n "${VMS[$i]}" --created --interval 5 --timeout 600 --only-show-errors
+            pub="$(az network public-ip show -g "$RG" -n "${PIPS[$i]}" --query ipAddress -o tsv)"
+            priv="$(az network nic show -g "$RG" -n "${NICS[$i]}" --query 'ipConfigurations[0].privateIPAddress' -o tsv)"
+            [[ -n "$pub" && -n "$priv" ]]; PUB+=("$pub"); PRIV+=("$priv"); echo "::add-mask::$pub"; echo "::add-mask::$priv"
+            echo "TRUYN_DIAG_STAGE vm=$i provisioned=true"
+          done
+
+          remote_raw(){ retry az vm run-command invoke -g "$RG" -n "$1" --command-id RunShellScript --scripts "$2" --query 'value[0].message' -o tsv --only-show-errors; }
+          remote_checked(){ local out; out="$(remote_raw "$1" "$2")"; grep -Fq "$3" <<<"$out" || { echo "TRUYN_REMOTE_CHECK_FAIL marker=$3 raw=$(printf '%q' "$out")"; return 1; }; }
+          control_call(){
+            local vm="$1" method="$2" path="$3" payload="${4:-}" enc='' script out status b64
+            [[ -z "$payload" ]] || enc="$(printf '%s' "$payload" | base64 -w0)"
+            if [[ -n "$enc" ]]; then
+              script="set -eu; printf '%s' '$enc' | base64 -d >/tmp/truyn-request.json; status=\$(curl -sS --max-time 90 -o /tmp/truyn-body -w '%{http_code}' -X '$method' -H 'content-type: application/json' --data-binary @/tmp/truyn-request.json 'http://127.0.0.1:8788$path' || true); b64=\$(base64 -w0 /tmp/truyn-body 2>/dev/null || true); printf 'TRUYN_HTTP=%s\\nTRUYN_BODY_B64=%s\\n' \"\$status\" \"\$b64\""
+            else
+              script="set -eu; status=\$(curl -sS --max-time 90 -o /tmp/truyn-body -w '%{http_code}' -X '$method' 'http://127.0.0.1:8788$path' || true); b64=\$(base64 -w0 /tmp/truyn-body 2>/dev/null || true); printf 'TRUYN_HTTP=%s\\nTRUYN_BODY_B64=%s\\n' \"\$status\" \"\$b64\""
+            fi
+            out="$(remote_raw "$vm" "$script")"
+            status="$(printf '%s\n' "$out" | sed -n 's/.*TRUYN_HTTP=//p' | tail -1 | tr -d '\r')"
+            b64="$(printf '%s\n' "$out" | sed -n 's/.*TRUYN_BODY_B64=//p' | tail -1 | tr -d '\r')"
+            [[ "$status" =~ ^[0-9]{3}$ ]] || { echo "TRUYN_CONTROL_PARSE_FAIL raw=$(printf '%q' "$out")" >&2; return 1; }
+            printf '%s\t%s' "$status" "$b64"
+          }
+          decode_body(){ printf '%s' "$1" | base64 -d; }
+          diag_guest(){
+            local vm="$1" peer="$2" out
+            out="$(remote_raw "$vm" "set +e; echo TRUYN_DIAG_GUEST_BEGIN; systemctl is-active truyn-testnet.service; ss -lunp | grep ':4433' || true; ip route get '$peer' || true; journalctl -u truyn-testnet.service -n 80 --no-pager || true; echo TRUYN_DIAG_GUEST_END")"
+            printf '%s\n' "$out"
+          }
+
+          STAGE=install
+          for i in 0 1; do
+            setup=$(cat <<SCRIPT
+          set -eu
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update -qq
+          apt-get install -y -qq git curl jq openssl ca-certificates iproute2 >/dev/null
+          major=0
+          if command -v node >/dev/null 2>&1; then major=\$(node -p 'parseInt(process.versions.node)' 2>/dev/null || echo 0); fi
+          if [ "\$major" -lt 22 ]; then curl -fsSL https://deb.nodesource.com/setup_22.x | sh - >/dev/null; apt-get install -y -qq nodejs >/dev/null; fi
+          if ! id -u truyn >/dev/null 2>&1; then useradd --system --home /var/lib/truyn-testnet --shell /usr/sbin/nologin truyn; fi
+          rm -rf /opt/truyn
+          git clone -q https://github.com/inn-media/truyn.git /opt/truyn
+          cd /opt/truyn
+          git checkout -q '$TEST_COMMIT'
+          npm install --ignore-scripts --no-audit --no-fund >/dev/null
+          install -d -m 0700 -o truyn -g truyn /var/lib/truyn-testnet /etc/truyn-testnet
+          openssl req -x509 -newkey rsa:2048 -nodes -keyout /etc/truyn-testnet/key.pem -out /etc/truyn-testnet/cert.pem -subj '/CN=${PUB[$i]}' -days 1 -addext 'subjectAltName=IP:${PUB[$i]},IP:${PRIV[$i]}' >/dev/null 2>&1
+          chown truyn:truyn /etc/truyn-testnet/key.pem /etc/truyn-testnet/cert.pem
+          chmod 0600 /etc/truyn-testnet/key.pem
+          cat >/etc/systemd/system/truyn-testnet.service <<UNIT
+          [Unit]
+          After=network-online.target
+          Wants=network-online.target
+          [Service]
+          Type=simple
+          User=truyn
+          Group=truyn
+          WorkingDirectory=/opt/truyn
+          Environment=TRUYN_TESTNET_DATA_DIR=/var/lib/truyn-testnet
+          Environment=TRUYN_TLS_KEY_PATH=/etc/truyn-testnet/key.pem
+          Environment=TRUYN_TLS_CERT_PATH=/etc/truyn-testnet/cert.pem
+          Environment=TRUYN_ADVERTISE_HOST=${PUB[$i]}
+          Environment=TRUYN_QUIC_HOST=0.0.0.0
+          Environment=TRUYN_QUIC_PORT=4433
+          Environment=TRUYN_CONTROL_HOST=127.0.0.1
+          Environment=TRUYN_CONTROL_PORT=8788
+          ExecStart=/usr/bin/node /opt/truyn/network/testnet/node-service.js
+          Restart=on-failure
+          RestartSec=2
+          [Install]
+          WantedBy=multi-user.target
+          UNIT
+          systemctl daemon-reload
+          systemctl enable --now truyn-testnet.service >/dev/null
+          ready=0
+          for n in \$(seq 1 60); do if curl -fsS --max-time 2 http://127.0.0.1:8788/status >/dev/null; then ready=1; break; fi; sleep 2; done
+          [ "\$ready" -eq 1 ] || { journalctl -u truyn-testnet.service -n 100 --no-pager; exit 21; }
+          printf 'TRUYN_SETUP_OK\n'
+          SCRIPT
+          )
+            remote_checked "${VMS[$i]}" "$setup" TRUYN_SETUP_OK
+            echo "TRUYN_DIAG_STAGE node=$i service=ready"
+          done
+
+          STAGE=public-records
+          ca="$(control_call "${VMS[0]}" GET /record)"; cb="$(control_call "${VMS[1]}" GET /record)"
+          [[ "${ca%%$'\t'*}" == 200 && "${cb%%$'\t'*}" == 200 ]]
+          rec_a="$(decode_body "${ca#*$'\t'}")"; rec_b="$(decode_body "${cb#*$'\t'}")"
+          node_a="$(jq -r '.record.nodeId' <<<"$rec_a")"; node_b="$(jq -r '.record.nodeId' <<<"$rec_b")"; seq_b_public="$(jq -r '.record.sequence' <<<"$rec_b")"
+          echo "::add-mask::$node_a"; echo "::add-mask::$node_b"
+          records="$(printf '%s\n%s\n' "$rec_a" "$rec_b" | jq -s '{records: map(.record)}')"
+          for i in 0 1; do r="$(control_call "${VMS[$i]}" POST /bootstrap "$records")"; [[ "${r%%$'\t'*}" == 200 ]]; done
+          echo 'TRUYN_DIAG_STAGE bootstrap_public=PASS'
+
+          STAGE=public-need
+          payload="$(jq -nc --arg id "$node_b" '{nodeId:$id,input:{proof:"azure-two-host-public"}}')"
+          pub_call="$(control_call "${VMS[0]}" POST /need "$payload")"; pub_status="${pub_call%%$'\t'*}"; pub_body="$(decode_body "${pub_call#*$'\t'}")"
+          pub_transport="$(jq -r '.transport // empty' <<<"$pub_body" 2>/dev/null || true)"; pub_error="$(jq -r '.error // empty' <<<"$pub_body" 2>/dev/null || true)"
+          echo "TRUYN_2HOST_PUBLIC status=$pub_status transport=${pub_transport:-none} error=${pub_error:-none}"
+          if [[ "$pub_status" != 200 || "$pub_transport" != quic-direct ]]; then
+            echo "::warning title=TRUYN public QUIC diagnostic::status=$pub_status error=${pub_error:-unknown}"
+            diag_guest "${VMS[0]}" "${PUB[1]}"
+            diag_guest "${VMS[1]}" "${PUB[0]}"
+          fi
+
+          STAGE=private-republish
+          switch_script="set -eu; mkdir -p /etc/systemd/system/truyn-testnet.service.d; printf '[Service]\\nEnvironment=TRUYN_ADVERTISE_HOST=${PRIV[1]}\\n' >/etc/systemd/system/truyn-testnet.service.d/advertise.conf; systemctl daemon-reload; systemctl restart truyn-testnet.service; ready=0; for n in \$(seq 1 60); do if curl -fsS --max-time 2 http://127.0.0.1:8788/status >/dev/null; then ready=1; break; fi; sleep 2; done; [ \"\$ready\" -eq 1 ] || exit 1; printf 'TRUYN_PRIVATE_RECORD_READY\\n'"
+          remote_checked "${VMS[1]}" "$switch_script" TRUYN_PRIVATE_RECORD_READY
+          cb2="$(control_call "${VMS[1]}" GET /record)"; [[ "${cb2%%$'\t'*}" == 200 ]]; rec_b2="$(decode_body "${cb2#*$'\t'}")"
+          [[ "$(jq -r '.record.nodeId' <<<"$rec_b2")" == "$node_b" ]]
+          seq_b_private="$(jq -r '.record.sequence' <<<"$rec_b2")"; (( seq_b_private > seq_b_public ))
+          new_endpoint="$(jq -r '.record.endpoints[0]' <<<"$rec_b2")"; [[ "$new_endpoint" == "quic://${PRIV[1]}:4433" ]]
+          rb2="$(jq -nc --argjson r "$(jq '.record' <<<"$rec_b2")" '{records:[$r]}')"
+          br="$(control_call "${VMS[0]}" POST /bootstrap "$rb2")"; [[ "${br%%$'\t'*}" == 200 ]]
+          echo 'TRUYN_DIAG_STAGE bootstrap_private=PASS sequenceAdvanced=true'
+
+          STAGE=private-need
+          priv_call="$(control_call "${VMS[0]}" POST /need "$payload")"; priv_status="${priv_call%%$'\t'*}"; priv_body="$(decode_body "${priv_call#*$'\t'}")"
+          priv_transport="$(jq -r '.transport // empty' <<<"$priv_body" 2>/dev/null || true)"; priv_error="$(jq -r '.error // empty' <<<"$priv_body" 2>/dev/null || true)"
+          echo "TRUYN_2HOST_PRIVATE status=$priv_status transport=${priv_transport:-none} error=${priv_error:-none}"
+          if [[ "$priv_status" != 200 || "$priv_transport" != quic-direct ]]; then
+            echo "::warning title=TRUYN private QUIC diagnostic::status=$priv_status error=${priv_error:-unknown}"
+            diag_guest "${VMS[0]}" "${PRIV[1]}"
+            diag_guest "${VMS[1]}" "${PRIV[0]}"
+          fi
+
+          STAGE=classify
+          pub_ok=0; priv_ok=0
+          [[ "$pub_status" == 200 && "$pub_transport" == quic-direct ]] && pub_ok=1
+          [[ "$priv_status" == 200 && "$priv_transport" == quic-direct ]] && priv_ok=1
+          if [[ "$pub_ok" == 1 && "$priv_ok" == 1 ]]; then classification=PUBLIC_AND_PRIVATE_QUIC_PASS
+          elif [[ "$pub_ok" == 0 && "$priv_ok" == 1 ]]; then classification=AZURE_PUBLIC_PATH_HAIRPIN_OR_PUBLIC_ROUTE_FAILURE
+          elif [[ "$pub_ok" == 1 && "$priv_ok" == 0 ]]; then classification=PRIVATE_ROUTE_SPECIFIC_FAILURE
+          else classification=TRUYN_QUIC_OR_COMMON_UDP_FAILURE
+          fi
+          echo "TRUYN_AZURE_2HOST_DIAGNOSTIC classification=$classification publicStatus=$pub_status privateStatus=$priv_status publicError=${pub_error:-none} privateError=${priv_error:-none}"
+          echo "::notice title=TRUYN Azure 2-host verdict::$classification"
+          cleanup_ok=1
