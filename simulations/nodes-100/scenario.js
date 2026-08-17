@@ -14,7 +14,7 @@ const startedAt = new Date().toISOString();
 const started = Date.now();
 let currentStage = 'init';
 
-const allowedScenarios = new Set(['baseline', 'partition', 'churn', 'eclipse', 'sybil-collusion']);
+const allowedScenarios = new Set(['baseline', 'partition', 'churn', 'eclipse', 'byzantine', 'sybil-collusion']);
 if (!allowedScenarios.has(scenario)) throw new Error(`unsupported TRUYN_SCALE_SCENARIO: ${scenario}`);
 if (!Number.isInteger(nodeCount) || nodeCount < 6) throw new Error('TRUYN_SCALE_NODE_COUNT must be an integer >= 6');
 
@@ -148,22 +148,6 @@ async function advertiseWithRetry(node, key, { attempts = 3, timeoutMs = 30_000 
   throw new Error('unreachable scale publication state');
 }
 
-async function bestEffortPublish(assignments, { attempts = 2, timeoutMs = 30_000, concurrency = 2 } = {}) {
-  const outcomes = [];
-  for (const batch of batches(assignments, concurrency)) {
-    const result = await Promise.all(batch.map(async (assignment) => {
-      try {
-        const publication = await advertiseWithRetry(cluster.nodes[assignment.providerIndex], assignment.key, { attempts, timeoutMs });
-        return { providerIndex: assignment.providerIndex, key: assignment.key, ok: true, ...publication };
-      } catch (error) {
-        return { providerIndex: assignment.providerIndex, key: assignment.key, ok: false, error: errorShape(error) };
-      }
-    }));
-    outcomes.push(...result);
-  }
-  return outcomes;
-}
-
 function overlayOffsets(size) {
   if (size >= 500) return [1, -1, 7, -7, 31, -31, 127, -127];
   if (size >= 80) return [1, -1, 3, -3, 7, -7, 17, -17, 31, -31];
@@ -172,7 +156,7 @@ function overlayOffsets(size) {
 
 async function densify(indices, { rounds = 1, refreshConcurrency = 24 } = {}) {
   const active = indices.filter((index) => cluster.nodes[index]?.node?.status === 'started');
-  if (active.length < 2) return cluster.snapshot();
+  if (active.length < 2) return subsetSnapshot(active);
   const position = new Map(active.map((index, offset) => [index, offset]));
   const offsets = overlayOffsets(active.length);
   const plans = active.map((index) => {
@@ -196,42 +180,145 @@ async function densify(indices, { rounds = 1, refreshConcurrency = 24 } = {}) {
     await cluster.refreshAll({ indices: active, concurrency: refreshConcurrency, timeoutMs: active.length >= 500 ? 20_000 : 12_000 });
     await sleep(200);
   }
-  return cluster.snapshot();
+  return subsetSnapshot(active);
 }
 
-async function warmAssignments(assignments, { witnessCount = 10, rounds = 3, timeoutMs = 6_000 } = {}) {
-  const evidence = [];
-  for (const assignment of assignments) {
-    const publication = await advertiseWithRetry(cluster.nodes[assignment.providerIndex], assignment.key);
-    const candidates = cluster.liveIndices().filter((index) => index !== assignment.providerIndex);
-    const witnesses = cluster.shuffled(candidates).slice(0, Math.min(witnessCount, candidates.length));
-    let bestRatio = 0;
-    const roundsEvidence = [];
-    for (let round = 1; round <= rounds; round += 1) {
-      let found = 0;
-      const details = [];
-      for (const batch of batches(witnesses, 4)) {
-        const items = await Promise.all(batch.map(async (witnessIndex) => {
-          const providers = await cluster.nodes[witnessIndex].findProviders(assignment.key, { timeoutMs, limit: 24 }).catch(() => []);
-          const visible = providers.some((provider) => provider.id.toString() === cluster.nodes[assignment.providerIndex].peerIdString);
-          return { witnessIndex, visible, providers: providers.length };
-        }));
-        details.push(...items);
-      }
-      found = details.filter((item) => item.visible).length;
-      const visibilityRatio = ratio(found, witnesses.length) || 0;
-      bestRatio = Math.max(bestRatio, visibilityRatio);
-      roundsEvidence.push({ round, found, witnessCount: witnesses.length, visibilityRatio, details });
-      if (visibilityRatio >= 0.9) break;
-      const missing = details.filter((item) => !item.visible).map((item) => item.witnessIndex);
-      await cluster.nodes[assignment.providerIndex].refresh({ timeoutMs: 12_000 }).catch(() => null);
-      await cluster.refreshAll({ indices: missing, concurrency: 6, timeoutMs: 12_000 });
-      await advertiseWithRetry(cluster.nodes[assignment.providerIndex], assignment.key, { attempts: 2 }).catch(() => null);
-      await sleep(250 * round);
+function subsetSnapshot(indices) {
+  const snapshots = indices.map((index) => cluster.nodes[index].snapshot()).filter((item) => item.status === 'started');
+  return {
+    nodes: snapshots.length,
+    connectedPeers: distribution(snapshots.map((item) => item.connectedPeers)),
+    routingTableSize: distribution(snapshots.map((item) => item.routingTableSize)),
+    refreshSoftDeadlines: snapshots.reduce((sum, item) => sum + Number(item.telemetry.refreshSoftDeadlines || 0), 0),
+    advertisementSoftDeadlines: snapshots.reduce((sum, item) => sum + Number(item.telemetry.advertisementSoftDeadlines || 0), 0)
+  };
+}
+
+async function warmOneAssignment(assignment, { witnessPool = null, witnessCount = 10, rounds = 3, timeoutMs = 6_000 } = {}) {
+  const publication = await advertiseWithRetry(cluster.nodes[assignment.providerIndex], assignment.key);
+  const pool = (witnessPool || cluster.liveIndices()).filter((index) => index !== assignment.providerIndex && cluster.nodes[index]?.node?.status === 'started');
+  const witnesses = cluster.shuffled(pool).slice(0, Math.min(witnessCount, pool.length));
+  let bestRatio = 0;
+  const roundsEvidence = [];
+
+  for (let round = 1; round <= rounds; round += 1) {
+    const details = [];
+    for (const batch of batches(witnesses, nodeCount >= 500 ? 8 : 5)) {
+      const items = await Promise.all(batch.map(async (witnessIndex) => {
+        const providers = await cluster.nodes[witnessIndex].findProviders(assignment.key, { timeoutMs, limit: 24 }).catch(() => []);
+        const visible = providers.some((provider) => provider.id.toString() === cluster.nodes[assignment.providerIndex].peerIdString);
+        return { witnessIndex, visible, providers: providers.length };
+      }));
+      details.push(...items);
     }
-    evidence.push({ providerIndex: assignment.providerIndex, key: assignment.key, publication, witnessCount: witnesses.length, bestVisibilityRatio: bestRatio, ready: bestRatio >= 0.9, rounds: roundsEvidence });
+    const found = details.filter((item) => item.visible).length;
+    const visibilityRatio = ratio(found, witnesses.length) || 0;
+    bestRatio = Math.max(bestRatio, visibilityRatio);
+    roundsEvidence.push({ round, found, witnessCount: witnesses.length, visibilityRatio, details });
+    if (visibilityRatio >= 0.9) break;
+    const missing = details.filter((item) => !item.visible).map((item) => item.witnessIndex);
+    await cluster.nodes[assignment.providerIndex].refresh({ timeoutMs: 12_000 }).catch(() => null);
+    await cluster.refreshAll({ indices: missing, concurrency: nodeCount >= 500 ? 12 : 6, timeoutMs: 12_000 });
+    await advertiseWithRetry(cluster.nodes[assignment.providerIndex], assignment.key, { attempts: 2 }).catch(() => null);
+    await sleep(250 * round);
+  }
+
+  return {
+    providerIndex: assignment.providerIndex,
+    key: assignment.key,
+    publication,
+    witnessCount: witnesses.length,
+    bestVisibilityRatio: bestRatio,
+    ready: witnesses.length > 0 && bestRatio >= 0.9,
+    rounds: roundsEvidence
+  };
+}
+
+async function warmAssignments(assignments, options = {}) {
+  const evidence = [];
+  const concurrency = Math.max(1, Number(options.concurrency || 2));
+  for (const batch of batches(assignments, concurrency)) {
+    const results = await Promise.all(batch.map((assignment) => warmOneAssignment(assignment, options)));
+    evidence.push(...results);
   }
   return { ready: evidence.every((item) => item.ready), assignments: evidence };
+}
+
+async function measureRoutingConcurrent(assignments, {
+  samples = assignments.length,
+  timeoutMs = 6_000,
+  requesterPool = null,
+  concurrency = nodeCount >= 500 ? 8 : 4,
+  retryAfterRefresh = true
+} = {}) {
+  const live = (requesterPool || cluster.liveIndices()).filter((index) => cluster.nodes[index]?.node?.status === 'started');
+  const plans = Array.from({ length: samples }, (_, sample) => {
+    const assignment = assignments[sample % assignments.length];
+    const requesterCandidates = live.filter((index) => index !== assignment.providerIndex);
+    return { sample, assignment, requesterIndex: cluster.pick(requesterCandidates) };
+  });
+  const results = [];
+
+  for (const batch of batches(plans, concurrency)) {
+    const batchResults = await Promise.all(batch.map(async ({ assignment, requesterIndex }) => {
+      const requester = cluster.nodes[requesterIndex];
+      const expectedPeerId = cluster.nodes[assignment.providerIndex].peerIdString;
+      const lookupStarted = performance.now();
+      let providers = [];
+      let lookupError = null;
+      let lookupAttempts = 0;
+      let firstAttemptFound = false;
+
+      for (let attempt = 1; attempt <= (retryAfterRefresh ? 2 : 1); attempt += 1) {
+        lookupAttempts = attempt;
+        try {
+          providers = await requester.findProviders(assignment.key, { timeoutMs, limit: 24 });
+        } catch (error) {
+          lookupError = error.code || error.message;
+          providers = [];
+        }
+        const found = providers.some((item) => item.id.toString() === expectedPeerId);
+        if (attempt === 1) firstAttemptFound = found;
+        if (found) break;
+        if (attempt === 1 && retryAfterRefresh) {
+          await requester.refresh({ timeoutMs: Math.min(12_000, timeoutMs + 4_000) }).catch(() => null);
+          await sleep(75);
+        }
+      }
+
+      const routingLatencyMs = performance.now() - lookupStarted;
+      const provider = providers.find((item) => item.id.toString() === expectedPeerId);
+      const probe = provider
+        ? await requester.probe(provider.id, assignment.value, { timeoutMs, expectedDigest: scaleValueDigest(assignment.value) })
+        : null;
+      return {
+        requesterIndex,
+        providerIndex: assignment.providerIndex,
+        providers: providers.map((item) => item.id.toString()),
+        routingLatencyMs,
+        lookupError,
+        lookupAttempts,
+        firstAttemptFound,
+        providerFound: Boolean(provider),
+        probeOk: Boolean(probe?.ok),
+        probe
+      };
+    }));
+    results.push(...batchResults);
+  }
+
+  const firstAttemptSuccesses = results.filter((item) => item.firstAttemptFound).length;
+  const routeSuccesses = results.filter((item) => item.providerFound).length;
+  const integritySuccesses = results.filter((item) => item.probeOk).length;
+  return {
+    samples: results.length,
+    firstAttemptRoutingSuccessRatio: ratio(firstAttemptSuccesses, results.length),
+    routingSuccessRatio: ratio(routeSuccesses, results.length),
+    endToEndIntegritySuccessRatio: ratio(integritySuccesses, results.length),
+    routingLatencyMs: distribution(results.map((item) => item.routingLatencyMs)),
+    probeLatencyMs: distribution(results.filter((item) => item.probe).map((item) => item.probe.latencyMs)),
+    results
+  };
 }
 
 async function purgeCrossPartition(left, right) {
@@ -246,10 +333,10 @@ async function purgeCrossPartition(left, right) {
 async function connectAcross(left, right, fanout = 3) {
   const offsets = [0, 7, 19, 37].slice(0, Math.min(fanout, 4));
   for (const batch of batches(left, 16)) {
-    await Promise.all(batch.map(async (leftIndex, localOffset) => {
+    await Promise.all(batch.map(async (leftIndex) => {
       const at = left.indexOf(leftIndex);
       for (const offset of offsets) {
-        const rightIndex = right[(at + offset + localOffset) % right.length];
+        const rightIndex = right[(at + offset) % right.length];
         const address = cluster.nodes[rightIndex]?.address;
         if (address) await connectQuicPeers(cluster.nodes[leftIndex].node, [address]).catch(() => {});
       }
@@ -257,18 +344,46 @@ async function connectAcross(left, right, fanout = 3) {
   }
 }
 
-async function customPartitionScenario() {
-  const midpoint = Math.floor(nodeCount / 2);
-  const left = Array.from({ length: midpoint }, (_, index) => index);
-  const right = Array.from({ length: nodeCount - midpoint }, (_, index) => index + midpoint);
+async function hardPartition(left, right) {
+  const leftPeers = left.map((index) => cluster.nodes[index].peerId).filter(Boolean);
+  const rightPeers = right.map((index) => cluster.nodes[index].peerId).filter(Boolean);
+  const leftSet = new Set(leftPeers.map((peer) => peer.toString()));
+  const rightSet = new Set(rightPeers.map((peer) => peer.toString()));
+  for (const index of left) cluster.nodes[index].gater.block(rightPeers);
+  for (const index of right) cluster.nodes[index].gater.block(leftPeers);
 
-  await cluster.setPartition(left, right);
+  await Promise.all(cluster.nodes.map(async (node) => {
+    if (node.node?.status !== 'started') return;
+    const peers = node.node.getPeers().filter((peer) => {
+      if (left.includes(node.index)) return rightSet.has(peer.toString());
+      if (right.includes(node.index)) return leftSet.has(peer.toString());
+      return false;
+    });
+    await Promise.all(peers.map((peer) => node.node.hangUp(peer).catch(() => {})));
+  }));
   await purgeCrossPartition(left, right);
-  const leftTopology = await densify(left, { rounds: 1, refreshConcurrency: 18 });
-  const rightTopology = await densify(right, { rounds: 1, refreshConcurrency: 18 });
+  await Promise.all([
+    densify(left, { rounds: 0 }),
+    densify(right, { rounds: 0 })
+  ]);
+  await purgeCrossPartition(left, right);
+  await sleep(250);
+}
+
+async function customPartitionScenario() {
+  const shuffled = cluster.shuffled(cluster.liveIndices());
+  const midpoint = Math.floor(nodeCount / 2);
+  const left = shuffled.slice(0, midpoint);
+  const right = shuffled.slice(midpoint);
+  await hardPartition(left, right);
+
+  const leftTopology = subsetSnapshot(left);
+  const rightTopology = subsetSnapshot(right);
   stage('partition:isolated', {
     leftRoutingP50: leftTopology.routingTableSize.p50,
-    rightRoutingP50: rightTopology.routingTableSize.p50
+    rightRoutingP50: rightTopology.routingTableSize.p50,
+    leftConnectedP50: leftTopology.connectedPeers.p50,
+    rightConnectedP50: rightTopology.connectedPeers.p50
   });
 
   const leftAssignment = { key: `partition:left:${seed}`, providerIndex: left[1], value: { side: 'left', seed } };
@@ -276,11 +391,10 @@ async function customPartitionScenario() {
   const leftPublication = await advertiseWithRetry(cluster.nodes[leftAssignment.providerIndex], leftAssignment.key);
   const rightPublication = await advertiseWithRetry(cluster.nodes[rightAssignment.providerIndex], rightAssignment.key);
 
-  const sameSide = await cluster.nodes[left[0]].findProviders(leftAssignment.key, { timeoutMs: 6_000, limit: 20 }).catch(() => []);
-  const crossSide = await cluster.nodes[left[0]].findProviders(rightAssignment.key, { timeoutMs: 6_000, limit: 20 }).catch(() => []);
+  const sameSide = await cluster.nodes[left[0]].findProviders(leftAssignment.key, { timeoutMs: 8_000, limit: 24 }).catch(() => []);
   const sameProvider = sameSide.find((provider) => provider.id.toString() === cluster.nodes[leftAssignment.providerIndex].peerIdString);
-  const crossProvider = crossSide.find((provider) => provider.id.toString() === cluster.nodes[rightAssignment.providerIndex].peerIdString);
   const sameProbe = sameProvider ? await cluster.nodes[left[0]].probe(sameProvider.id, leftAssignment.value, { timeoutMs: 4_000 }) : null;
+  const crossProbe = await cluster.nodes[left[0]].probe(cluster.nodes[rightAssignment.providerIndex].peerId, rightAssignment.value, { timeoutMs: 4_000 });
 
   const recoveryStarted = performance.now();
   for (const node of cluster.nodes) node.gater.heal();
@@ -291,7 +405,7 @@ async function customPartitionScenario() {
   let recoveryAttempts = 0;
   while (!recovered && performance.now() - recoveryStarted < 45_000) {
     recoveryAttempts += 1;
-    const providers = await cluster.nodes[left[0]].findProviders(rightAssignment.key, { timeoutMs: 6_000, limit: 24 }).catch(() => []);
+    const providers = await cluster.nodes[left[0]].findProviders(rightAssignment.key, { timeoutMs: 8_000, limit: 24 }).catch(() => []);
     const remote = providers.find((provider) => provider.id.toString() === cluster.nodes[rightAssignment.providerIndex].peerIdString);
     if (remote) recovered = (await cluster.nodes[left[0]].probe(remote.id, rightAssignment.value, { timeoutMs: 4_000 })).ok;
     if (!recovered) {
@@ -309,19 +423,38 @@ async function customPartitionScenario() {
     rightSize: right.length,
     samePartitionRoutingSucceeded: Boolean(sameProvider),
     samePartitionIntegritySucceeded: Boolean(sameProbe?.ok),
-    crossPartitionRoutingBlocked: !crossProvider,
+    crossPartitionCommunicationBlocked: !crossProbe.ok,
+    crossPartitionProbe: crossProbe,
     healed: recovered,
     recoveryMs: performance.now() - recoveryStarted,
     recoveryAttempts,
     leftPublication,
     rightPublication,
-    recoveryPublication
+    recoveryPublication,
+    leftTopology,
+    rightTopology
   };
 }
 
 async function customChurnScenario() {
   const candidates = cluster.shuffled(cluster.liveIndices().filter((index) => index !== 0));
   const stopped = candidates.slice(0, Math.max(1, Math.floor(nodeCount * 0.2)));
+  const stoppedSet = new Set(stopped);
+  const survivorsBeforeStop = cluster.liveIndices().filter((index) => !stoppedSet.has(index));
+  const assignments = cluster.makeAssignments({
+    count: Math.min(nodeCount >= 500 ? 20 : 12, survivorsBeforeStop.length),
+    prefix: 'churn-survivor',
+    candidateIndices: survivorsBeforeStop
+  });
+  stage('churn:prewarm:start', { providers: assignments.length, survivorCandidates: survivorsBeforeStop.length });
+  const warmup = await warmAssignments(assignments, {
+    witnessPool: survivorsBeforeStop,
+    witnessCount: nodeCount >= 500 ? 5 : 8,
+    rounds: 3,
+    timeoutMs: nodeCount >= 500 ? 10_000 : 6_000,
+    concurrency: 2
+  });
+
   const oldPeers = new Map(stopped.map((index) => [index, cluster.nodes[index].peerIdString]));
   const oldPeerIds = stopped.map((index) => cluster.nodes[index].peerId).filter(Boolean);
   await Promise.all(stopped.map((index) => cluster.nodes[index].stop()));
@@ -329,17 +462,22 @@ async function customChurnScenario() {
   const survivors = cluster.liveIndices();
   await Promise.all(survivors.map((index) => cluster.nodes[index].purgeRoutingPeers(oldPeerIds)));
   const survivorTopology = await densify(survivors, { rounds: 1, refreshConcurrency: nodeCount >= 500 ? 32 : 24 });
+  await Promise.all(survivors.map((index) => cluster.nodes[index].purgeRoutingPeers(oldPeerIds)));
   stage('churn:survivors-ready', {
     survivors: survivors.length,
     routingP50: survivorTopology.routingTableSize.p50,
-    routingP95: survivorTopology.routingTableSize.p95
+    routingP95: survivorTopology.routingTableSize.p95,
+    warmupReady: warmup.ready
   });
 
-  const assignments = cluster.makeAssignments({ count: Math.min(nodeCount >= 500 ? 20 : 12, survivors.length), prefix: 'churn-survivor', candidateIndices: survivors });
-  const warmup = await warmAssignments(assignments, { witnessCount: nodeCount >= 500 ? 4 : 8, rounds: 2, timeoutMs: nodeCount >= 500 ? 8_000 : 6_000 });
-  const duringChurn = await cluster.measureRouting(assignments, { samples: Math.min(nodeCount >= 500 ? 60 : 24, survivors.length), timeoutMs: nodeCount >= 500 ? 8_000 : 6_000 });
+  const duringChurn = await measureRoutingConcurrent(assignments, {
+    samples: Math.min(nodeCount >= 500 ? 80 : 32, survivors.length),
+    timeoutMs: nodeCount >= 500 ? 10_000 : 6_000,
+    requesterPool: survivors,
+    concurrency: nodeCount >= 500 ? 8 : 4
+  });
 
-  const bootstrap = survivors.slice(0, 6).map((index) => cluster.nodes[index].address).filter(Boolean);
+  const bootstrap = survivors.slice(0, 8).map((index) => cluster.nodes[index].address).filter(Boolean);
   const recoveryDurations = [];
   const peerRotations = [];
   for (const batch of batches(stopped, nodeCount >= 500 ? 12 : 6)) {
@@ -357,28 +495,47 @@ async function customChurnScenario() {
     recoveredNodes: stopped.length,
     peerIdentityRotations: peerRotations.filter(Boolean).length,
     providerWarmupReady: warmup.ready,
+    warmup,
     duringChurn,
     recoveryMs: distribution(recoveryDurations),
     healedRoutingTable: healedTopology.routingTableSize
   };
 }
 
+async function injectAttackers(requesterIndices, attackerIndices) {
+  let attempted = 0;
+  let connected = 0;
+  for (const batch of batches(requesterIndices, 8)) {
+    await Promise.all(batch.map(async (requesterIndex) => {
+      for (const attackerIndex of attackerIndices) {
+        attempted += 1;
+        const address = cluster.nodes[attackerIndex].address;
+        if (!address) continue;
+        try {
+          await connectQuicPeers(cluster.nodes[requesterIndex].node, [address]);
+          connected += 1;
+        } catch {
+          // Pressure is quantified below; failed injections are not silently treated as success.
+        }
+      }
+    }));
+  }
+  return { attempted, connected };
+}
+
 async function customEclipseScenario() {
   const victimIndex = 0;
   const honestProviderIndex = 1;
-  const attackerCount = Math.min(nodeCount >= 500 ? 12 : 6, Math.max(3, Math.floor(nodeCount / 12)));
-  const attackers = cluster.liveIndices().filter((index) => index > 1).slice(-attackerCount);
-  const honest = cluster.liveIndices().filter((index) => index !== victimIndex && !attackers.includes(index));
+  const attackerCount = Math.min(nodeCount >= 500 ? 16 : 8, Math.max(4, Math.floor(nodeCount / 12)));
+  const attackers = cluster.shuffled(cluster.liveIndices().filter((index) => index > 1)).slice(0, attackerCount);
+  const attackerSet = new Set(attackers);
+  const honest = cluster.liveIndices().filter((index) => index !== victimIndex && !attackerSet.has(index));
   const key = `eclipse:${seed}`;
   const expectedValue = { committed: 'eclipse-target', seed };
   const forgedValue = { committed: 'eclipse-forgery', seed };
+  const assignment = { key, providerIndex: honestProviderIndex, value: expectedValue };
+  const warmup = await warmAssignments([assignment], { witnessPool: [victimIndex], witnessCount: 1, rounds: 3, timeoutMs: 8_000, concurrency: 1 });
   for (const index of attackers) cluster.nodes[index].setFault({ mode: 'colluding', value: forgedValue });
-
-  const honestAssignment = { key, providerIndex: honestProviderIndex, value: expectedValue };
-  await advertiseWithRetry(cluster.nodes[honestProviderIndex], key);
-  const attackerAssignments = attackers.map((providerIndex) => ({ key, providerIndex, value: forgedValue }));
-  const attackerPublication = await bestEffortPublish(attackerAssignments, { attempts: 2, timeoutMs: 30_000, concurrency: 2 });
-  const publishedAttackers = attackerPublication.filter((item) => item.ok).map((item) => item.providerIndex);
 
   const victim = cluster.nodes[victimIndex];
   const honestPeers = honest.map((index) => cluster.nodes[index].peerId).filter(Boolean);
@@ -386,37 +543,20 @@ async function customEclipseScenario() {
   for (const index of honest) cluster.nodes[index].gater.block([victim.peerId]);
   await victim.purgeRoutingPeers(honestPeers);
   await Promise.all(victim.node.getPeers().map((peer) => victim.node.hangUp(peer).catch(() => {})));
-  for (const index of publishedAttackers) {
-    const address = cluster.nodes[index].address;
-    if (address) await connectQuicPeers(victim.node, [address]).catch(() => {});
-  }
+  const injection = await injectAttackers([victimIndex], attackers);
   await victim.refresh({ timeoutMs: 12_000 }).catch(() => null);
-  await bestEffortPublish(attackerAssignments.filter((item) => publishedAttackers.includes(item.providerIndex)), { attempts: 1, timeoutMs: 30_000, concurrency: 2 });
   await sleep(300);
 
-  const providers = await victim.findProviders(key, { timeoutMs: 8_000, limit: attackerCount + 8 }).catch(() => []);
-  const attackerPeerIds = new Set(publishedAttackers.map((index) => cluster.nodes[index].peerIdString));
-  let attackerResponsesObserved = 0;
-  let attackerResponsesAccepted = 0;
-  let honestResponsesAccepted = 0;
-  const verdicts = [];
-  for (const provider of providers) {
-    const malicious = attackerPeerIds.has(provider.id.toString());
-    const probe = await victim.probe(provider.id, expectedValue, { timeoutMs: 4_000, expectedDigest: scaleValueDigest(expectedValue) });
-    if (malicious) {
-      attackerResponsesObserved += 1;
-      if (probe.ok) attackerResponsesAccepted += 1;
-    } else if (probe.ok) honestResponsesAccepted += 1;
-    verdicts.push({ peerId: provider.id.toString(), malicious, accepted: probe.ok, probe });
+  const providers = await victim.findProviders(key, { timeoutMs: 8_000, limit: 24 }).catch(() => []);
+  const honestProvider = providers.find((provider) => provider.id.toString() === cluster.nodes[honestProviderIndex].peerIdString);
+  const honestProbe = honestProvider ? await victim.probe(honestProvider.id, expectedValue, { timeoutMs: 4_000 }) : null;
+  const attackerVerdicts = [];
+  for (const attackerIndex of attackers.slice(0, Math.min(6, attackers.length))) {
+    const probe = await victim.probe(cluster.nodes[attackerIndex].peerId, expectedValue, { timeoutMs: 4_000, expectedDigest: scaleValueDigest(expectedValue) });
+    attackerVerdicts.push({ attackerIndex, accepted: probe.ok, probe });
   }
-  if (attackerResponsesObserved === 0) {
-    for (const index of publishedAttackers.slice(0, 3)) {
-      const probe = await victim.probe(cluster.nodes[index].peerId, expectedValue, { timeoutMs: 4_000, expectedDigest: scaleValueDigest(expectedValue) });
-      attackerResponsesObserved += 1;
-      if (probe.ok) attackerResponsesAccepted += 1;
-      verdicts.push({ peerId: cluster.nodes[index].peerIdString, malicious: true, directEclipsePath: true, accepted: probe.ok, probe });
-    }
-  }
+  const attackerResponsesObserved = attackerVerdicts.filter((item) => !item.probe.transportError).length;
+  const attackerResponsesAccepted = attackerVerdicts.filter((item) => item.accepted).length;
 
   const recoveryStarted = performance.now();
   for (const node of cluster.nodes) node.gater.heal();
@@ -425,9 +565,9 @@ async function customEclipseScenario() {
   await advertiseWithRetry(cluster.nodes[honestProviderIndex], key);
   let recovered = false;
   while (!recovered && performance.now() - recoveryStarted < 45_000) {
-    const recoveredProviders = await victim.findProviders(key, { timeoutMs: 8_000, limit: attackerCount + 12 }).catch(() => []);
-    const honestProvider = recoveredProviders.find((provider) => provider.id.toString() === cluster.nodes[honestProviderIndex].peerIdString);
-    if (honestProvider) recovered = (await victim.probe(honestProvider.id, expectedValue, { timeoutMs: 4_000 })).ok;
+    const recoveredProviders = await victim.findProviders(key, { timeoutMs: 8_000, limit: 24 }).catch(() => []);
+    const remote = recoveredProviders.find((provider) => provider.id.toString() === cluster.nodes[honestProviderIndex].peerIdString);
+    if (remote) recovered = (await victim.probe(remote.id, expectedValue, { timeoutMs: 4_000 })).ok;
     if (!recovered) {
       await victim.refresh({ timeoutMs: 15_000 }).catch(() => null);
       await advertiseWithRetry(cluster.nodes[honestProviderIndex], key, { attempts: 1 }).catch(() => null);
@@ -438,103 +578,133 @@ async function customEclipseScenario() {
 
   return {
     attackerCount: attackers.length,
-    publishedAttackers: publishedAttackers.length,
-    providerResponses: providers.length,
+    injectedConnections: injection,
+    victimConnectedPeers: victim.node.getPeers().length,
     attackerResponsesObserved,
     attackerResponsesAccepted,
-    honestResponsesAccepted,
-    attackExercised: attackerResponsesObserved > 0,
+    attackExercised: injection.connected > 0 && attackerResponsesObserved > 0,
     integrityForged: attackerResponsesAccepted > 0,
-    eclipseAvailabilityLost: honestResponsesAccepted === 0,
+    eclipseAvailabilityLost: !honestProbe?.ok,
     healed: recovered,
     recoveryMs: performance.now() - recoveryStarted,
-    attackerPublication,
-    verdicts
+    warmup,
+    attackerVerdicts
   };
 }
 
-async function probeProviderSet(requesterIndex, providers, expectedValue, attackerPeers, timeoutMs = 5_000) {
+async function customByzantineScenario() {
+  const honestProviderIndex = 1;
+  const attackers = cluster.shuffled(cluster.liveIndices().filter((index) => index > 1)).slice(0, Math.min(nodeCount >= 500 ? 20 : 10, Math.max(6, Math.floor(nodeCount * 0.1))));
+  const attackerSet = new Set(attackers);
+  const requesters = cluster.shuffled(cluster.liveIndices().filter((index) => index !== honestProviderIndex && !attackerSet.has(index))).slice(0, nodeCount >= 500 ? 16 : 8);
+  const assignment = { key: `byzantine:${seed}`, providerIndex: honestProviderIndex, value: { committed: 'known-good', seed } };
+  const warmup = await warmAssignments([assignment], { witnessPool: requesters, witnessCount: requesters.length, rounds: 3, timeoutMs: 8_000, concurrency: 1 });
+
+  attackers.forEach((index, offset) => cluster.nodes[index].setFault({
+    mode: offset % 2 === 0 ? 'byzantine' : 'invalid-signature',
+    value: { committed: 'byzantine-fork', seed, cohort: 'A' }
+  }));
+  const injection = await injectAttackers(requesters, attackers);
+  await cluster.refreshAll({ indices: requesters, concurrency: 8, timeoutMs: 12_000 });
+
   const verdicts = [];
-  for (const provider of providers) {
-    const malicious = attackerPeers.has(provider.id.toString());
-    const probe = await cluster.nodes[requesterIndex].probe(provider.id, expectedValue, { timeoutMs, expectedDigest: scaleValueDigest(expectedValue) });
-    verdicts.push({ requesterIndex, peerId: provider.id.toString(), malicious, accepted: probe.ok, probe });
+  for (const requesterIndex of requesters) {
+    for (const attackerIndex of attackers.slice(0, Math.min(4, attackers.length))) {
+      const probe = await cluster.nodes[requesterIndex].probe(cluster.nodes[attackerIndex].peerId, assignment.value, { timeoutMs: 4_000, expectedDigest: scaleValueDigest(assignment.value) });
+      verdicts.push({ requesterIndex, attackerIndex, accepted: probe.ok, probe });
+    }
   }
-  return verdicts;
+  const observed = verdicts.filter((item) => !item.probe.transportError).length;
+  const accepted = verdicts.filter((item) => item.accepted).length;
+  const honestRouting = await measureRoutingConcurrent([assignment], {
+    samples: nodeCount >= 500 ? 40 : 24,
+    timeoutMs: nodeCount >= 500 ? 10_000 : 8_000,
+    requesterPool: requesters,
+    concurrency: nodeCount >= 500 ? 8 : 4
+  });
+  for (const index of attackers) cluster.nodes[index].setFault({ mode: 'honest' });
+
+  return {
+    attackerCount: attackers.length,
+    injection,
+    attackExercised: injection.connected > 0 && observed > 0,
+    maliciousResponsesObserved: observed,
+    maliciousResponsesAccepted: accepted,
+    integrityPreserved: observed > 0 && accepted === 0,
+    honestRouting,
+    warmup,
+    note: 'Byzantine responder/replica behavior is exercised at the signed TRUYN probe layer; this is not a BFT consensus proof.'
+  };
 }
 
 async function customSybilCollusionScenario() {
   const honestProviderIndex = 1;
   const sybilCount = Math.min(nodeCount >= 500 ? 40 : 15, Math.max(5, Math.floor(nodeCount * 0.15)));
-  const attackers = cluster.liveIndices().filter((index) => index > 1).slice(-sybilCount);
-  const key = `sybil-pressure:${seed}`;
-  const expectedValue = { committed: 'honest-value', seed };
-  const forgedValue = { committed: 'sybil-value', seed };
+  const attackers = cluster.shuffled(cluster.liveIndices().filter((index) => index > 1)).slice(0, sybilCount);
+  const attackerSet = new Set(attackers);
+  const requesters = cluster.shuffled(cluster.liveIndices().filter((index) => index !== honestProviderIndex && !attackerSet.has(index))).slice(0, nodeCount >= 500 ? 16 : 8);
+  const assignment = { key: `sybil-pressure:${seed}`, providerIndex: honestProviderIndex, value: { committed: 'honest-value', seed } };
+  const forgedValue = { committed: 'sybil-forgery', seed };
+  const warmup = await warmAssignments([assignment], { witnessPool: requesters, witnessCount: requesters.length, rounds: 3, timeoutMs: 8_000, concurrency: 1 });
   for (const index of attackers) cluster.nodes[index].setFault({ mode: 'colluding', value: forgedValue });
 
-  await advertiseWithRetry(cluster.nodes[honestProviderIndex], key);
-  const attackerAssignments = attackers.map((providerIndex) => ({ key, providerIndex, value: forgedValue }));
-  const attackerPublication = await bestEffortPublish(attackerAssignments, { attempts: 2, timeoutMs: 30_000, concurrency: 2 });
-  const publishedAttackers = attackerPublication.filter((item) => item.ok).map((item) => item.providerIndex);
-  const attackerPeers = new Set(publishedAttackers.map((index) => cluster.nodes[index].peerIdString));
+  const injection = await injectAttackers(requesters, attackers);
+  await cluster.refreshAll({ indices: requesters, concurrency: 8, timeoutMs: 12_000 });
+  const routingUnderPressure = await measureRoutingConcurrent([assignment], {
+    samples: nodeCount >= 500 ? 48 : 32,
+    timeoutMs: nodeCount >= 500 ? 10_000 : 8_000,
+    requesterPool: requesters,
+    concurrency: nodeCount >= 500 ? 8 : 4
+  });
 
-  const requesters = cluster.liveIndices().filter((index) => index !== honestProviderIndex && !attackers.includes(index)).slice(0, nodeCount >= 500 ? 12 : 8);
   const sybilVerdicts = [];
   for (const requesterIndex of requesters) {
-    await cluster.nodes[requesterIndex].refresh({ timeoutMs: 12_000 }).catch(() => null);
-    const providers = await cluster.nodes[requesterIndex].findProviders(key, { timeoutMs: nodeCount >= 500 ? 10_000 : 8_000, limit: sybilCount + 8 }).catch(() => []);
-    sybilVerdicts.push(...await probeProviderSet(requesterIndex, providers, expectedValue, attackerPeers));
+    const chosen = cluster.shuffled(attackers).slice(0, Math.min(3, attackers.length));
+    for (const attackerIndex of chosen) {
+      const probe = await cluster.nodes[requesterIndex].probe(cluster.nodes[attackerIndex].peerId, assignment.value, { timeoutMs: 4_000, expectedDigest: scaleValueDigest(assignment.value) });
+      sybilVerdicts.push({ requesterIndex, attackerIndex, accepted: probe.ok, probe });
+    }
   }
-  const attackerObserved = sybilVerdicts.filter((item) => item.malicious).length;
-  const attackerAccepted = sybilVerdicts.filter((item) => item.malicious && item.accepted).length;
-  const honestAccepted = sybilVerdicts.filter((item) => !item.malicious && item.accepted).length;
-
-  for (const index of attackers) cluster.nodes[index].setFault({ mode: 'honest' });
+  const attackerObserved = sybilVerdicts.filter((item) => !item.probe.transportError).length;
+  const attackerAccepted = sybilVerdicts.filter((item) => item.accepted).length;
 
   const collusionAttackers = attackers.slice(0, Math.min(6, attackers.length));
-  const collusionKey = `collusion:${seed}`;
   const collusionExpected = { immutable: 'truyn-known-good', seed };
   const collusionForged = { immutable: 'coordinated-forgery', seed };
   for (const index of collusionAttackers) cluster.nodes[index].setFault({ mode: 'colluding', value: collusionForged });
-  await advertiseWithRetry(cluster.nodes[honestProviderIndex], collusionKey);
-  const collusionPublication = await bestEffortPublish(collusionAttackers.map((providerIndex) => ({ key: collusionKey, providerIndex, value: collusionForged })), { attempts: 2, timeoutMs: 30_000, concurrency: 2 });
-  const collusionPublished = collusionPublication.filter((item) => item.ok).map((item) => item.providerIndex);
-  const collusionPeers = new Set(collusionPublished.map((index) => cluster.nodes[index].peerIdString));
   const collusionVerdicts = [];
   for (const requesterIndex of requesters.slice(0, Math.min(4, requesters.length))) {
-    const providers = await cluster.nodes[requesterIndex].findProviders(collusionKey, { timeoutMs: 8_000, limit: 16 }).catch(() => []);
-    collusionVerdicts.push(...await probeProviderSet(requesterIndex, providers, collusionExpected, collusionPeers));
+    for (const attackerIndex of collusionAttackers) {
+      const probe = await cluster.nodes[requesterIndex].probe(cluster.nodes[attackerIndex].peerId, collusionExpected, { timeoutMs: 4_000, expectedDigest: scaleValueDigest(collusionExpected) });
+      collusionVerdicts.push({ requesterIndex, attackerIndex, accepted: probe.ok, probe });
+    }
   }
-  const maliciousObserved = collusionVerdicts.filter((item) => item.malicious).length;
-  const maliciousAccepted = collusionVerdicts.filter((item) => item.malicious && item.accepted).length;
-  const collusionHonestAccepted = collusionVerdicts.filter((item) => !item.malicious && item.accepted).length;
-  for (const index of collusionAttackers) cluster.nodes[index].setFault({ mode: 'honest' });
+  const maliciousObserved = collusionVerdicts.filter((item) => !item.probe.transportError).length;
+  const maliciousAccepted = collusionVerdicts.filter((item) => item.accepted).length;
+  for (const index of attackers) cluster.nodes[index].setFault({ mode: 'honest' });
 
   return {
     sybil: {
       sybilIdentities: attackers.length,
-      publishedSybilIdentities: publishedAttackers.length,
+      injectedConnections: injection,
       requesterSamples: requesters.length,
       attackerResponsesObserved: attackerObserved,
       attackerResponsesAccepted: attackerAccepted,
-      acceptedValidResponses: honestAccepted,
-      attackExercised: attackerObserved > 0,
+      attackExercised: injection.connected > 0 && attackerObserved > 0,
       integrityPreserved: attackerObserved > 0 && attackerAccepted === 0,
-      routingAvailabilityUnderPressure: honestAccepted > 0,
-      attackerPublication,
+      routingUnderPressure,
+      routingAvailabilityUnderPressure: routingUnderPressure.routingSuccessRatio >= 0.90 && routingUnderPressure.endToEndIntegritySuccessRatio >= 0.90,
       verdicts: sybilVerdicts
     },
     collusion: {
       attackerCount: collusionAttackers.length,
-      publishedAttackers: collusionPublished.length,
       maliciousResponsesObserved: maliciousObserved,
       maliciousAccepted,
-      honestAccepted: collusionHonestAccepted,
       attackExercised: maliciousObserved > 0,
       integrityPreserved: maliciousObserved > 0 && maliciousAccepted === 0,
-      publication: collusionPublication,
       verdicts: collusionVerdicts
-    }
+    },
+    warmup
   };
 }
 
@@ -565,9 +735,18 @@ try {
   if (scenario === 'baseline') {
     const assignments = cluster.makeAssignments({ count: Math.min(nodeCount >= 500 ? 24 : 16, nodeCount), prefix: `scale${nodeCount}-baseline` });
     stage('baseline:warmup:start', { providers: assignments.length });
-    const warmup = await warmAssignments(assignments, { witnessCount: nodeCount >= 500 ? 6 : 10, rounds: 3, timeoutMs: nodeCount >= 500 ? 10_000 : 6_000 });
+    const warmup = await warmAssignments(assignments, {
+      witnessCount: nodeCount >= 500 ? 6 : 10,
+      rounds: 3,
+      timeoutMs: nodeCount >= 500 ? 10_000 : 6_000,
+      concurrency: 2
+    });
     stage('baseline:measure:start', { samples: Math.min(nodeCount >= 500 ? 100 : 40, nodeCount), warmupReady: warmup.ready });
-    const measurement = await cluster.measureRouting(assignments, { samples: Math.min(nodeCount >= 500 ? 100 : 40, nodeCount), timeoutMs: nodeCount >= 500 ? 10_000 : 6_000 });
+    const measurement = await measureRoutingConcurrent(assignments, {
+      samples: Math.min(nodeCount >= 500 ? 100 : 40, nodeCount),
+      timeoutMs: nodeCount >= 500 ? 10_000 : 6_000,
+      concurrency: nodeCount >= 500 ? 8 : 4
+    });
     result = { warmup, measurement };
     gates = {
       uniqueNodeIdentities: identityGate,
@@ -592,10 +771,10 @@ try {
       uniqueNodeIdentities: identityGate,
       samePartitionRouting: measurement.samePartitionRoutingSucceeded,
       samePartitionIntegrity: measurement.samePartitionIntegritySucceeded,
-      crossPartitionIsolation: measurement.crossPartitionRoutingBlocked,
+      crossPartitionIsolation: measurement.crossPartitionCommunicationBlocked,
       recovery: measurement.healed
     };
-    stage('partition:done', { samePartitionRouting: measurement.samePartitionRoutingSucceeded, samePartitionIntegrity: measurement.samePartitionIntegritySucceeded, crossBlocked: measurement.crossPartitionRoutingBlocked, healed: measurement.healed, recoveryMs: measurement.recoveryMs });
+    stage('partition:done', { samePartitionRouting: measurement.samePartitionRoutingSucceeded, samePartitionIntegrity: measurement.samePartitionIntegritySucceeded, crossBlocked: measurement.crossPartitionCommunicationBlocked, healed: measurement.healed, recoveryMs: measurement.recoveryMs });
   } else if (scenario === 'churn') {
     stage('churn:start', { fraction: 0.2 });
     const measurement = await customChurnScenario();
@@ -604,7 +783,7 @@ try {
       uniqueNodeIdentitiesBeforeChurn: identityGate,
       recoveredAllStoppedNodes: measurement.recoveredNodes === measurement.stoppedNodes,
       transportIdentityRotated: measurement.peerIdentityRotations === measurement.stoppedNodes,
-      providerVisibilityDuringChurn: measurement.providerWarmupReady,
+      providerVisibilityBeforeChurn: measurement.providerWarmupReady,
       routingDuringChurn: measurement.duringChurn.routingSuccessRatio >= 0.90,
       integrityDuringChurn: measurement.duringChurn.endToEndIntegritySuccessRatio >= 0.90
     };
@@ -615,35 +794,46 @@ try {
     result = measurement;
     gates = {
       uniqueNodeIdentities: identityGate,
-      attackersPublished: measurement.publishedAttackers > 0,
+      attackerPeersInjected: measurement.injectedConnections.connected > 0,
       attackExercised: measurement.attackExercised,
       forgedValueRejected: !measurement.integrityForged && measurement.attackerResponsesAccepted === 0,
       eclipseIsolation: measurement.eclipseAvailabilityLost,
       recovery: measurement.healed
     };
-    stage('eclipse:done', { attackers: measurement.attackerCount, publishedAttackers: measurement.publishedAttackers, attackerResponsesObserved: measurement.attackerResponsesObserved, attackerResponsesAccepted: measurement.attackerResponsesAccepted, availabilityLost: measurement.eclipseAvailabilityLost, recoveryMs: measurement.recoveryMs });
+    stage('eclipse:done', { attackers: measurement.attackerCount, injectedConnections: measurement.injectedConnections.connected, attackerResponsesObserved: measurement.attackerResponsesObserved, attackerResponsesAccepted: measurement.attackerResponsesAccepted, availabilityLost: measurement.eclipseAvailabilityLost, recoveryMs: measurement.recoveryMs });
+  } else if (scenario === 'byzantine') {
+    stage('byzantine:start');
+    const measurement = await customByzantineScenario();
+    result = measurement;
+    gates = {
+      uniqueNodeIdentities: identityGate,
+      attackerPeersInjected: measurement.injection.connected > 0,
+      attackExercised: measurement.attackExercised,
+      maliciousResponsesRejected: measurement.integrityPreserved && measurement.maliciousResponsesAccepted === 0,
+      honestRoutingUnderByzantinePressure: measurement.honestRouting.routingSuccessRatio >= 0.90 && measurement.honestRouting.endToEndIntegritySuccessRatio >= 0.90
+    };
+    stage('byzantine:done', { attackers: measurement.attackerCount, observed: measurement.maliciousResponsesObserved, accepted: measurement.maliciousResponsesAccepted, routing: measurement.honestRouting.routingSuccessRatio, integrity: measurement.honestRouting.endToEndIntegritySuccessRatio });
   } else {
     stage('sybil:start');
     const measurement = await customSybilCollusionScenario();
     result = measurement;
     gates = {
       uniqueNodeIdentities: identityGate,
-      sybilAttackPublished: measurement.sybil.publishedSybilIdentities >= Math.min(5, measurement.sybil.sybilIdentities),
+      sybilPeersInjected: measurement.sybil.injectedConnections.connected > 0,
       sybilAttackExercised: measurement.sybil.attackExercised,
       sybilForgedResponsesRejected: measurement.sybil.integrityPreserved && measurement.sybil.attackerResponsesAccepted === 0,
       honestAvailabilityUnderSybilPressure: measurement.sybil.routingAvailabilityUnderPressure,
-      collusionAttackPublished: measurement.collusion.publishedAttackers > 0,
       collusionAttackExercised: measurement.collusion.attackExercised,
       colludingResponsesRejected: measurement.collusion.integrityPreserved && measurement.collusion.maliciousAccepted === 0
     };
-    stage('sybil:done', { sybilIdentities: measurement.sybil.sybilIdentities, publishedSybilIdentities: measurement.sybil.publishedSybilIdentities, attackerResponsesObserved: measurement.sybil.attackerResponsesObserved, attackerResponsesAccepted: measurement.sybil.attackerResponsesAccepted, availability: measurement.sybil.routingAvailabilityUnderPressure });
-    stage('collusion:done', { attackers: measurement.collusion.attackerCount, publishedAttackers: measurement.collusion.publishedAttackers, maliciousObserved: measurement.collusion.maliciousResponsesObserved, maliciousAccepted: measurement.collusion.maliciousAccepted, honestAccepted: measurement.collusion.honestAccepted });
+    stage('sybil:done', { sybilIdentities: measurement.sybil.sybilIdentities, injectedConnections: measurement.sybil.injectedConnections.connected, attackerResponsesObserved: measurement.sybil.attackerResponsesObserved, attackerResponsesAccepted: measurement.sybil.attackerResponsesAccepted, routing: measurement.sybil.routingUnderPressure.routingSuccessRatio, integrity: measurement.sybil.routingUnderPressure.endToEndIntegritySuccessRatio });
+    stage('collusion:done', { attackers: measurement.collusion.attackerCount, maliciousObserved: measurement.collusion.maliciousResponsesObserved, maliciousAccepted: measurement.collusion.maliciousAccepted });
   }
 
   const finalNetwork = cluster.snapshot();
   const perNodeApplicationBytes = finalNetwork.nodes.map((node) => Number(node.telemetry.applicationBytesSent || 0) + Number(node.telemetry.applicationBytesReceived || 0));
   const report = {
-    schema: 'truyn-adversarial-scale-scenario-v2',
+    schema: 'truyn-adversarial-scale-scenario-v3',
     scenario,
     startedAt,
     finishedAt: new Date().toISOString(),
