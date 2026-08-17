@@ -92,6 +92,13 @@ test('signed QUIC operator bootstraps remote peers, drives fault injection and o
     });
     assert.equal(replicated.result.acknowledgements, 3);
 
+    const forged = structuredClone(replicated.record);
+    forged.value = { proof: false, attacker: 'byzantine-replica' };
+    await assert.rejects(
+      operator.store(services[0].identity.nodeId, services[3].identity.nodeId, forged),
+      /record|signature|invalid|quic/i
+    );
+
     const found = await operator.find(services[3].identity.nodeId, {
       namespace: 'operator-test',
       key: 'replicated',
