@@ -32,3 +32,4 @@ jobs:
             exit "$rc"
           fi
           echo 'TRUYN_DURABLE_INBOX=PASS'
+          # rerun marker: numeric-port-fix
