@@ -168,7 +168,7 @@ export class AdversarialScaleNode {
         };
         if (this.faultMode === 'invalid-signature') response.signature = `${response.signature.slice(0, -4)}AAAA`;
         this.telemetry.applicationBytesSent += jsonBytes(response);
-        await writeJsonStream(stream, response, { timeoutMs: 3_000 });
+        await writeJsonStream(stream, response, { timeoutMs: 8_000 });
       } catch (error) {
         if (stream.status !== 'closed') stream.abort?.(error);
       }
@@ -232,38 +232,83 @@ export class AdversarialScaleNode {
     }
   }
 
-  async probe(targetPeerId, value, { expectedDigest = scaleValueDigest(value), timeoutMs = 3_000, requestId = null } = {}) {
-    const request = {
-      requestId: requestId || `scale-${this.index}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
-      value
-    };
+  async probe(targetPeerId, value, {
+    expectedDigest = scaleValueDigest(value),
+    timeoutMs = 3_000,
+    requestId = null,
+    transportRetries = 1
+  } = {}) {
     const started = performance.now();
-    this.telemetry.requestsSent += 1;
-    this.telemetry.applicationBytesSent += jsonBytes(request);
-    try {
-      const response = await requestJson(this.node, targetPeerId, SCALE_PROBE_PROTOCOL, request, { timeoutMs, maxBytes: 64_000 });
-      const latencyMs = performance.now() - started;
-      this.telemetry.responsesReceived += 1;
-      this.telemetry.applicationBytesReceived += jsonBytes(response);
-      const computedNodeId = response?.publicKey ? nodeIdFromPublicKey(response.publicKey) : null;
-      const signatureOk = Boolean(response?.body && response?.signature && response?.publicKey && verifyValue(response.body, response.signature, response.publicKey));
-      const selfDigestOk = Boolean(response?.body && response.body.valueDigest === scaleValueDigest(response.body.value));
-      const requestBound = response?.body?.requestId === request.requestId;
-      const identityBound = computedNodeId != null && computedNodeId === response?.body?.responderNodeId;
-      const expectedDigestOk = response?.body?.valueDigest === expectedDigest;
-      return {
-        ok: signatureOk && selfDigestOk && requestBound && identityBound && expectedDigestOk,
-        signatureOk,
-        selfDigestOk,
-        requestBound,
-        identityBound,
-        expectedDigestOk,
-        latencyMs,
-        response
+    const transportErrors = [];
+    const attempts = Math.max(1, Number(transportRetries) + 1);
+
+    for (let attempt = 1; attempt <= attempts; attempt += 1) {
+      const request = {
+        requestId: requestId || `scale-${this.index}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        value
       };
-    } catch (error) {
-      return { ok: false, transportError: error.code || error.message, latencyMs: performance.now() - started };
+      this.telemetry.requestsSent += 1;
+      this.telemetry.applicationBytesSent += jsonBytes(request);
+      try {
+        const response = await requestJson(this.node, targetPeerId, SCALE_PROBE_PROTOCOL, request, { timeoutMs, maxBytes: 64_000 });
+        if (response == null) {
+          transportErrors.push('empty_response');
+          if (attempt < attempts) {
+            await new Promise((resolve) => setTimeout(resolve, 50 * attempt));
+            continue;
+          }
+          return {
+            ok: false,
+            transportError: 'empty_response',
+            transportAttempts: attempt,
+            transportErrors,
+            latencyMs: performance.now() - started
+          };
+        }
+
+        this.telemetry.responsesReceived += 1;
+        this.telemetry.applicationBytesReceived += jsonBytes(response);
+        const computedNodeId = response?.publicKey ? nodeIdFromPublicKey(response.publicKey) : null;
+        const signatureOk = Boolean(response?.body && response?.signature && response?.publicKey && verifyValue(response.body, response.signature, response.publicKey));
+        const selfDigestOk = Boolean(response?.body && response.body.valueDigest === scaleValueDigest(response.body.value));
+        const requestBound = response?.body?.requestId === request.requestId;
+        const identityBound = computedNodeId != null && computedNodeId === response?.body?.responderNodeId;
+        const expectedDigestOk = response?.body?.valueDigest === expectedDigest;
+        return {
+          ok: signatureOk && selfDigestOk && requestBound && identityBound && expectedDigestOk,
+          signatureOk,
+          selfDigestOk,
+          requestBound,
+          identityBound,
+          expectedDigestOk,
+          transportAttempts: attempt,
+          transportErrors,
+          latencyMs: performance.now() - started,
+          response
+        };
+      } catch (error) {
+        transportErrors.push(error.code || error.message || error.name || 'transport_error');
+        if (attempt < attempts) {
+          await new Promise((resolve) => setTimeout(resolve, 50 * attempt));
+          continue;
+        }
+        return {
+          ok: false,
+          transportError: transportErrors[transportErrors.length - 1],
+          transportAttempts: attempt,
+          transportErrors,
+          latencyMs: performance.now() - started
+        };
+      }
     }
+
+    return {
+      ok: false,
+      transportError: 'probe_attempts_exhausted',
+      transportAttempts: attempts,
+      transportErrors,
+      latencyMs: performance.now() - started
+    };
   }
 
   async blockPeers(peerIds = []) {
