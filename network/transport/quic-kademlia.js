@@ -9,14 +9,22 @@ export const TRUYN_KAD_PROTOCOL = '/truyn/kad/1.0.0';
 
 export async function createQuicKademliaNode({
   listen = ['/ip4/127.0.0.1/udp/0/quic-v1'],
+  announce = [],
   bootstrap = [],
   kBucketSize = 20,
+  connectionGater = undefined,
+  connectionManager = undefined,
   start = true
 } = {}) {
+  const addresses = { listen };
+  if (Array.isArray(announce) && announce.length > 0) addresses.announce = announce;
+
   const node = await createLibp2p({
     start: false,
-    addresses: { listen },
+    addresses,
     transports: [quic()],
+    ...(connectionGater ? { connectionGater } : {}),
+    ...(connectionManager ? { connectionManager } : {}),
     services: {
       identify: identify(),
       ping: ping(),
