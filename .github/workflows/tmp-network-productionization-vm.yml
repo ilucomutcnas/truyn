@@ -34,7 +34,8 @@ jobs:
           set -Eeuo pipefail
           PREFIX="truyn-vm-${GITHUB_RUN_ID}"
           NSG="${PREFIX}-nsg"
-          VMS=(); IPS=(); NODEIDS=(); RECORDS=()
+          VMS=(); IPS=(); NODEIDS=(); RECORDS=(); VM_SIZES=()
+          SKU_CANDIDATES=(Standard_B1ms Standard_B2s Standard_D2as_v5 Standard_D2s_v5 Standard_D2as_v6)
           RG=''; LOCATION=''; gate_ok=0
           mask(){ [[ -n "${1:-}" ]] && echo "::add-mask::$1"; }
           cleanup(){
@@ -65,6 +66,11 @@ jobs:
           LOCATION="$(az group show -g "$RG" --query location -o tsv)"
           mask "$RG"; mask "$LOCATION"; mask "$NSG"
 
+          for ns in Microsoft.Network Microsoft.Compute; do
+            state="$(az provider show --namespace "$ns" --query registrationState -o tsv --only-show-errors)"
+            [[ "$state" == Registered ]] || { echo "TRUYN_VM_GATE=BLOCKED provider=$ns state=$state"; exit 9; }
+          done
+
           az network nsg create -g "$RG" -n "$NSG" -l "$LOCATION" --only-show-errors >/dev/null
           az network nsg rule create -g "$RG" --nsg-name "$NSG" -n allow-truyn-quic \
             --priority 100 --access Allow --direction Inbound --protocol Udp \
@@ -75,12 +81,20 @@ jobs:
           for i in 0 1 2 3; do
             vm="${PREFIX}-${i}"; pip="${PREFIX}-${i}-pip"; VMS+=("$vm")
             mask "$vm"; mask "$pip"
-            az vm create -g "$RG" -n "$vm" -l "$LOCATION" \
-              --image Ubuntu2204 --size Standard_B1s --admin-username truynadmin \
-              --generate-ssh-keys --nsg "$NSG" --public-ip-address "$pip" --public-ip-sku Standard \
-              --nic-delete-option Delete --os-disk-delete-option Delete \
-              --tags "truyn-purpose=ephemeral-network-productionization" "truyn-run=${GITHUB_RUN_ID}" \
-              --only-show-errors >/dev/null || { echo 'TRUYN_VM_GATE=FAIL reason=vm_create_failed'; exit 11; }
+            created=0
+            chosen=''
+            for sku in "${SKU_CANDIDATES[@]}"; do
+              if az vm create -g "$RG" -n "$vm" -l "$LOCATION" \
+                --image Ubuntu2204 --size "$sku" --admin-username truynadmin \
+                --generate-ssh-keys --nsg "$NSG" --public-ip-address "$pip" --public-ip-sku Standard \
+                --nic-delete-option Delete --os-disk-delete-option Delete \
+                --tags "truyn-purpose=ephemeral-network-productionization" "truyn-run=${GITHUB_RUN_ID}" \
+                --only-show-errors >/dev/null 2>/tmp/truyn-vm-create.err; then
+                created=1; chosen="$sku"; break
+              fi
+            done
+            [[ "$created" == 1 ]] || { echo 'TRUYN_VM_GATE=FAIL reason=no_candidate_vm_capacity'; exit 11; }
+            VM_SIZES+=("$chosen")
             ip="$(az vm list-ip-addresses -g "$RG" -n "$vm" --query '[0].virtualMachine.network.publicIpAddresses[0].ipAddress' -o tsv)"
             [[ -n "$ip" ]] || { echo 'TRUYN_VM_GATE=FAIL reason=public_ip_missing'; exit 12; }
             IPS+=("$ip"); mask "$ip"
@@ -119,6 +133,7 @@ jobs:
           cd /opt/truyn; git checkout -q '${TEST_COMMIT}'; npm install --ignore-scripts --no-audit --no-fund >/dev/null
           install -d -m 0700 -o truyn -g truyn /var/lib/truyn-testnet /etc/truyn-testnet
           openssl req -x509 -newkey rsa:2048 -nodes -keyout /etc/truyn-testnet/key.pem -out /etc/truyn-testnet/cert.pem -subj '/CN=${ip}' -days 1 -addext 'subjectAltName=IP:${ip}' >/dev/null 2>&1
+          chown truyn:truyn /etc/truin-testnet/key.pem /etc/truin-testnet/cert.pem 2>/dev/null || true
           chown truyn:truyn /etc/truyn-testnet/key.pem /etc/truyn-testnet/cert.pem; chmod 0600 /etc/truyn-testnet/key.pem
           cat >/etc/systemd/system/truyn-testnet.service <<UNIT
           [Unit]
@@ -192,4 +207,4 @@ jobs:
           [[ "$(jq -r '.pong' <<<"$pong")" == true ]] || { echo 'TRUYN_VM_GATE=FAIL reason=restarted_peer_unreachable'; exit 38; }
 
           gate_ok=1
-          jq -nc --arg gate PASS --argjson hosts 4 --argjson directMs "$direct_ms" --argjson repairMs "$repair_ms" '{gate:$gate,hosts:$hosts,transport:"real-public-udp-quic",relayCalls:0,directNeedMs:$directMs,replicationAcks:3,remoteReplicaRead:true,holderFailureRepairMs:$repairMs,restartIdentityStable:true,sequenceAdvanced:true}' | sed 's/^/TRUYN_VM_GATE=/'
+          jq -nc --arg gate PASS --argjson hosts 4 --argjson directMs "$direct_ms" --argjson repairMs "$repair_ms" --argjson mixedSku "$([[ $(printf '%s\n' "${VM_SIZES[@]}" | sort -u | wc -l) -gt 1 ]] && echo true || echo false)" '{gate:$gate,hosts:$hosts,transport:"real-public-udp-quic",relayCalls:0,directNeedMs:$directMs,replicationAcks:3,remoteReplicaRead:true,holderFailureRepairMs:$repairMs,restartIdentityStable:true,sequenceAdvanced:true,mixedVmSku:$mixedSku}' | sed 's/^/TRUYN_VM_GATE=/'
