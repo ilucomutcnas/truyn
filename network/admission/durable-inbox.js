@@ -161,13 +161,14 @@ export class DurableAcceptedWorkInbox {
     if (existing?.status === 'completed') return clone(existing.result);
     if (existing?.status === 'failed') throw restoredError(existing.error);
     if (this.inFlight.has(envelope?.id)) return this.inFlight.get(envelope.id);
+    const recovered = existing?.status === 'pending';
     const entry = existing || await this.accept(envelope, context);
     const execution = (async () => {
       entry.attempts = (entry.attempts || 0) + 1;
       entry.updatedAt = new Date().toISOString();
       await this.#persist();
       try {
-        const result = await handler(clone(entry.envelope), { ...clone(entry.context), recovered: entry.attempts > 1 });
+        const result = await handler(clone(entry.envelope), { ...clone(entry.context), recovered });
         await this.#complete(entry.id, result);
         return clone(result);
       } catch (error) {
