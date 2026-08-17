@@ -13,7 +13,7 @@ permissions:
 jobs:
   azure-vm-multihost:
     runs-on: ubuntu-latest
-    timeout-minutes: 70
+    timeout-minutes: 80
     env:
       TEST_COMMIT: b69560744569fa4dcbf7a95f183f44b049376c82
       AZURE_CLIENT_ID_VALUE: ${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }}
@@ -28,31 +28,32 @@ jobs:
           client-id: ${{ env.AZURE_CLIENT_ID_VALUE }}
           tenant-id: ${{ env.AZURE_TENANT_ID_VALUE }}
           subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID_VALUE }}
-      - name: Run four-host crash repair restart gate
+      - name: Run four-host cross-region crash repair restart gate
         shell: bash
         run: |
           set -Eeuo pipefail
-          PREFIX="truyn-vm-${GITHUB_RUN_ID}"
-          NSG="${PREFIX}-nsg"
-          VMS=(); IPS=(); NODEIDS=(); RECORDS=(); VM_SIZES=()
-          SKU_CANDIDATES=(Standard_B1ms Standard_B2s Standard_D2as_v5 Standard_D2s_v5 Standard_D2as_v6)
-          RG=''; LOCATION=''; gate_ok=0
+          PREFIX="truyn-wan-${GITHUB_RUN_ID}"
+          VMS=(); IPS=(); NODEIDS=(); RECORDS=(); VM_REGIONS=(); VM_SIZES=()
+          SKU_CANDIDATES=(Standard_B1ms Standard_B2s Standard_D2as_v5 Standard_D2s_v5 Standard_D2as_v6 Standard_D2s_v6)
+          REGION_CANDIDATES=()
+          RG=''; HOME_REGION=''; gate_ok=0
           mask(){ [[ -n "${1:-}" ]] && echo "::add-mask::$1"; }
           cleanup(){
             set +e
+            [[ -n "$RG" ]] || return 0
             for vm in "${VMS[@]:-}"; do
-              [[ -z "$vm" || -z "$RG" ]] || az vm delete -g "$RG" -n "$vm" --yes --force-deletion --only-show-errors >/dev/null 2>&1 || true
+              [[ -z "$vm" ]] || az vm delete -g "$RG" -n "$vm" --yes --force-deletion --only-show-errors >/dev/null 2>&1 || true
             done
-            if [[ -n "$RG" ]]; then
-              for ids in \
-                "$(az network public-ip list -g "$RG" --query "[?starts_with(name, '${PREFIX}')].id" -o tsv 2>/dev/null || true)" \
-                "$(az network nic list -g "$RG" --query "[?starts_with(name, '${PREFIX}')].id" -o tsv 2>/dev/null || true)" \
-                "$(az disk list -g "$RG" --query "[?starts_with(name, '${PREFIX}')].id" -o tsv 2>/dev/null || true)"; do
-                [[ -z "$ids" ]] || az resource delete --ids $ids --only-show-errors >/dev/null 2>&1 || true
-              done
-              az network nsg delete -g "$RG" -n "$NSG" --only-show-errors >/dev/null 2>&1 || true
-            fi
-            [[ "$gate_ok" == 1 ]] && echo 'TRUYN_VM_CLEANUP=PASS ephemeral_resources_removed=true' || echo 'TRUYN_VM_CLEANUP=EXECUTED gate_failed=true'
+            for command in \
+              "az network public-ip list -g '$RG' --query \"[?starts_with(name, '$PREFIX')].id\" -o tsv" \
+              "az network nic list -g '$RG' --query \"[?starts_with(name, '$PREFIX')].id\" -o tsv" \
+              "az network nsg list -g '$RG' --query \"[?starts_with(name, '$PREFIX')].id\" -o tsv" \
+              "az network vnet list -g '$RG' --query \"[?starts_with(name, '$PREFIX')].id\" -o tsv" \
+              "az disk list -g '$RG' --query \"[?starts_with(name, '$PREFIX')].id\" -o tsv"; do
+              ids="$(eval "$command" 2>/dev/null || true)"
+              [[ -z "$ids" ]] || az resource delete --ids $ids --only-show-errors >/dev/null 2>&1 || true
+            done
+            [[ "$gate_ok" == 1 ]] && echo 'TRUYN_WAN_VM_CLEANUP=PASS ephemeral_resources_removed=true' || echo 'TRUYN_WAN_VM_CLEANUP=EXECUTED gate_failed=true'
           }
           trap cleanup EXIT
 
@@ -62,43 +63,63 @@ jobs:
             if [[ "$role" == relay || "$name" == *relay* ]]; then RG="$rg"; break; fi
           done < <(az containerapp list --query '[].[name,resourceGroup]' -o tsv 2>/dev/null || true)
           [[ -n "$RG" ]] || RG="$(az group list --query "[?contains(name, 'truyn')].name | [0]" -o tsv)"
-          [[ -n "$RG" ]] || { echo 'TRUYN_VM_GATE=FAIL reason=resource_group_not_found'; exit 10; }
-          LOCATION="$(az group show -g "$RG" --query location -o tsv)"
-          mask "$RG"; mask "$LOCATION"; mask "$NSG"
+          [[ -n "$RG" ]] || { echo 'TRUYN_WAN_VM_GATE=FAIL reason=resource_group_not_found'; exit 10; }
+          HOME_REGION="$(az group show -g "$RG" --query location -o tsv)"
+          mask "$RG"; mask "$HOME_REGION"
 
           for ns in Microsoft.Network Microsoft.Compute; do
             state="$(az provider show --namespace "$ns" --query registrationState -o tsv --only-show-errors)"
-            [[ "$state" == Registered ]] || { echo "TRUYN_VM_GATE=BLOCKED provider=$ns state=$state"; exit 9; }
+            [[ "$state" == Registered ]] || { echo "TRUYN_WAN_VM_GATE=BLOCKED provider=$ns state=$state"; exit 9; }
           done
 
-          az network nsg create -g "$RG" -n "$NSG" -l "$LOCATION" --only-show-errors >/dev/null
-          az network nsg rule create -g "$RG" --nsg-name "$NSG" -n allow-truyn-quic \
-            --priority 100 --access Allow --direction Inbound --protocol Udp \
-            --source-address-prefixes Internet --source-port-ranges '*' \
-            --destination-address-prefixes '*' --destination-port-ranges 4433 \
-            --only-show-errors >/dev/null
+          REGION_CANDIDATES+=("$HOME_REGION")
+          for region in eastus2 centralus westus2 westus3 northeurope westeurope; do
+            [[ "$region" == "$HOME_REGION" ]] || REGION_CANDIDATES+=("$region")
+          done
+
+          create_node(){
+            local index="$1" created=0 chosen_vm='' chosen_ip='' chosen_region='' chosen_sku=''
+            local r=0 s=0
+            for region in "${REGION_CANDIDATES[@]}"; do
+              r=$((r + 1)); s=0
+              for sku in "${SKU_CANDIDATES[@]}"; do
+                s=$((s + 1))
+                local suffix="${index}-${r}-${s}"
+                local vm="${PREFIX}-${suffix}"
+                local pip="${PREFIX}-pip-${suffix}"
+                local nsg="${PREFIX}-nsg-${suffix}"
+                local vnet="${PREFIX}-vnet-${suffix}"
+                local subnet="${PREFIX}-subnet-${suffix}"
+                mask "$vm"; mask "$pip"; mask "$nsg"; mask "$vnet"
+                if az vm create -g "$RG" -n "$vm" -l "$region" \
+                    --image Ubuntu2204 --size "$sku" --admin-username truynadmin \
+                    --generate-ssh-keys --public-ip-address "$pip" --public-ip-sku Standard \
+                    --nsg "$nsg" --nsg-rule NONE --vnet-name "$vnet" --subnet "$subnet" \
+                    --nic-delete-option Delete --os-disk-delete-option Delete \
+                    --tags "truyn-purpose=ephemeral-network-productionization" "truyn-run=${GITHUB_RUN_ID}" \
+                    --only-show-errors >/dev/null 2>/tmp/truyn-vm-create.err; then
+                  az network nsg rule create -g "$RG" --nsg-name "$nsg" -n allow-truyn-quic \
+                    --priority 100 --access Allow --direction Inbound --protocol Udp \
+                    --source-address-prefixes Internet --source-port-ranges '*' \
+                    --destination-address-prefixes '*' --destination-port-ranges 4433 \
+                    --only-show-errors >/dev/null
+                  chosen_ip="$(az vm list-ip-addresses -g "$RG" -n "$vm" --query '[0].virtualMachine.network.publicIpAddresses[0].ipAddress' -o tsv)"
+                  [[ -n "$chosen_ip" ]] || { echo 'TRUYN_WAN_VM_GATE=FAIL reason=public_ip_missing'; return 12; }
+                  created=1; chosen_vm="$vm"; chosen_region="$region"; chosen_sku="$sku"; break 2
+                fi
+              done
+            done
+            [[ "$created" == 1 ]] || return 11
+            VMS+=("$chosen_vm"); IPS+=("$chosen_ip"); VM_REGIONS+=("$chosen_region"); VM_SIZES+=("$chosen_sku")
+            mask "$chosen_ip"; mask "$chosen_region"
+          }
 
           for i in 0 1 2 3; do
-            vm="${PREFIX}-${i}"; pip="${PREFIX}-${i}-pip"; VMS+=("$vm")
-            mask "$vm"; mask "$pip"
-            created=0
-            chosen=''
-            for sku in "${SKU_CANDIDATES[@]}"; do
-              if az vm create -g "$RG" -n "$vm" -l "$LOCATION" \
-                --image Ubuntu2204 --size "$sku" --admin-username truynadmin \
-                --generate-ssh-keys --nsg "$NSG" --public-ip-address "$pip" --public-ip-sku Standard \
-                --nic-delete-option Delete --os-disk-delete-option Delete \
-                --tags "truyn-purpose=ephemeral-network-productionization" "truyn-run=${GITHUB_RUN_ID}" \
-                --only-show-errors >/dev/null 2>/tmp/truyn-vm-create.err; then
-                created=1; chosen="$sku"; break
-              fi
-            done
-            [[ "$created" == 1 ]] || { echo 'TRUYN_VM_GATE=FAIL reason=no_candidate_vm_capacity'; exit 11; }
-            VM_SIZES+=("$chosen")
-            ip="$(az vm list-ip-addresses -g "$RG" -n "$vm" --query '[0].virtualMachine.network.publicIpAddresses[0].ipAddress' -o tsv)"
-            [[ -n "$ip" ]] || { echo 'TRUYN_VM_GATE=FAIL reason=public_ip_missing'; exit 12; }
-            IPS+=("$ip"); mask "$ip"
+            create_node "$i" || { echo "TRUYN_WAN_VM_GATE=FAIL reason=no_region_sku_capacity node=$i"; exit 11; }
           done
+
+          distinct_regions="$(printf '%s\n' "${VM_REGIONS[@]}" | sort -u | wc -l | tr -d ' ')"
+          echo "TRUYN_WAN_VM_TOPOLOGY hosts=4 distinct_regions=$distinct_regions"
 
           remote_raw(){
             local vm="$1" script="$2"
@@ -133,7 +154,6 @@ jobs:
           cd /opt/truyn; git checkout -q '${TEST_COMMIT}'; npm install --ignore-scripts --no-audit --no-fund >/dev/null
           install -d -m 0700 -o truyn -g truyn /var/lib/truyn-testnet /etc/truyn-testnet
           openssl req -x509 -newkey rsa:2048 -nodes -keyout /etc/truyn-testnet/key.pem -out /etc/truyn-testnet/cert.pem -subj '/CN=${ip}' -days 1 -addext 'subjectAltName=IP:${ip}' >/dev/null 2>&1
-          chown truyn:truyn /etc/truin-testnet/key.pem /etc/truin-testnet/cert.pem 2>/dev/null || true
           chown truyn:truyn /etc/truyn-testnet/key.pem /etc/truyn-testnet/cert.pem; chmod 0600 /etc/truyn-testnet/key.pem
           cat >/etc/systemd/system/truyn-testnet.service <<UNIT
           [Unit]
@@ -145,7 +165,7 @@ jobs:
           User=truyn
           Group=truyn
           WorkingDirectory=/opt/truyn
-          Environment=TRUYN_TESTNET_DATA_DIR=/var/lib/truyn-testnet
+          Environment=TRUYN_TESTNET_DATA_DIR=/var/lib/truwyn-testnet
           Environment=TRUYN_TLS_KEY_PATH=/etc/truyn-testnet/key.pem
           Environment=TRUYN_TLS_CERT_PATH=/etc/truyn-testnet/cert.pem
           Environment=TRUYN_ADVERTISE_HOST=${ip}
@@ -172,39 +192,40 @@ jobs:
 
           for i in 0 1 2 3; do
             rec="$(call_json "${VMS[$i]}" GET /record)"; RECORDS+=("$rec")
-            nid="$(jq -r '.record.nodeId' <<<"$rec")"; [[ "$nid" == truyn:node:* ]] || { echo 'TRUYN_VM_GATE=FAIL reason=node_identity_missing'; exit 20; }
+            nid="$(jq -r '.record.nodeId' <<<"$rec")"; [[ "$nid" == truyn:node:* ]] || { echo 'TRUYN_WAN_VM_GATE=FAIL reason=node_identity_missing'; exit 20; }
             NODEIDS+=("$nid"); mask "$nid"
           done
           ALL_RECORDS="$(printf '%s\n' "${RECORDS[@]}" | jq -s '{records: map(.record)}')"
           for i in 0 1 2 3; do call_json "${VMS[$i]}" POST /bootstrap "$ALL_RECORDS" >/dev/null; done
 
-          direct_payload="$(jq -nc --arg id "${NODEIDS[2]}" '{nodeId:$id,input:{proof:"azure-four-vm-direct"}}')"
+          direct_payload="$(jq -nc --arg id "${NODEIDS[2]}" '{nodeId:$id,input:{proof:"azure-four-vm-wan"}}')"
           t0="$(date +%s%3N)"; direct="$(call_json "${VMS[0]}" POST /need "$direct_payload")"; direct_ms=$(( $(date +%s%3N) - t0 ))
-          [[ "$(jq -r '.transport' <<<"$direct")" == 'quic-direct' && "$(jq -r '.result.transport' <<<"$direct")" == 'quic' ]] || { echo 'TRUYN_VM_GATE=FAIL reason=direct_quic_failed'; exit 30; }
+          [[ "$(jq -r '.transport' <<<"$direct")" == 'quic-direct' && "$(jq -r '.result.transport' <<<"$direct")" == 'quic' ]] || { echo 'TRUYN_WAN_VM_GATE=FAIL reason=direct_quic_failed'; exit 30; }
 
-          replicated="$(call_json "${VMS[0]}" POST /replicate '{"namespace":"productionization","key":"azure-four-vm","value":{"proof":"durable"},"replicationFactor":3,"minAcks":3,"ttlMs":900000}')"
-          [[ "$(jq -r '.result.acknowledgements' <<<"$replicated")" == 3 ]] || { echo 'TRUYN_VM_GATE=FAIL reason=replication_quorum'; exit 31; }
+          replicated="$(call_json "${VMS[0]}" POST /replicate '{"namespace":"productionization","key":"azure-wan-four-vm","value":{"proof":"durable"},"replicationFactor":3,"minAcks":3,"ttlMs":900000}')"
+          [[ "$(jq -r '.result.acknowledgements' <<<"$replicated")" == 3 ]] || { echo 'TRUYN_WAN_VM_GATE=FAIL reason=replication_quorum'; exit 31; }
           record_id="$(jq -r '.record.recordId' <<<"$replicated")"; mask "$record_id"
-          found="$(call_json "${VMS[3]}" GET '/find?namespace=productionization&key=azure-four-vm&fanout=4')"
-          jq -e --arg rid "$record_id" '.records | any(.recordId == $rid)' <<<"$found" >/dev/null || { echo 'TRUYN_VM_GATE=FAIL reason=remote_replica_read'; exit 32; }
+          found="$(call_json "${VMS[3]}" GET '/find?namespace=productionization&key=azure-wan-four-vm&fanout=4')"
+          jq -e --arg rid "$record_id" '.records | any(.recordId == $rid)' <<<"$found" >/dev/null || { echo 'TRUYN_WAN_VM_GATE=FAIL reason=remote_replica_read'; exit 32; }
 
           holder="$(jq -r --arg self "${NODEIDS[0]}" '.result.storedAt[] | select(. != $self)' <<<"$replicated" | head -1)"; failed_index=''
           for i in 1 2 3; do [[ "${NODEIDS[$i]}" == "$holder" ]] && failed_index="$i"; done
-          [[ -n "$failed_index" ]] || { echo 'TRUYN_VM_GATE=FAIL reason=holder_mapping'; exit 33; }
+          [[ -n "$failed_index" ]] || { echo 'TRUYN_WAN_VM_GATE=FAIL reason=holder_mapping'; exit 33; }
           failed_vm="${VMS[$failed_index]}"
           before_seq="$(printf '%s\n' "${RECORDS[@]}" | jq -r --arg nid "$holder" 'select(.record.nodeId == $nid) | .record.sequence')"
           remote_raw "$failed_vm" 'set -e; systemctl stop truyn-testnet.service' >/dev/null
 
-          t1="$(date +%s%3N)"; repaired="$(call_json "${VMS[0]}" POST /repair '{"namespace":"productionization","key":"azure-four-vm","replicationFactor":3,"minAcks":3}')"; repair_ms=$(( $(date +%s%3N) - t1 ))
-          [[ "$(jq -r '.repairs[0].acknowledgements' <<<"$repaired")" == 3 ]] || { echo 'TRUYN_VM_GATE=FAIL reason=repair_quorum'; exit 34; }
-          jq -e --arg dead "$holder" '.repairs[0].storedAt | index($dead) == null' <<<"$repaired" >/dev/null || { echo 'TRUYN_VM_GATE=FAIL reason=failed_holder_not_replaced'; exit 35; }
+          t1="$(date +%s%3N)"; repaired="$(call_json "${VMS[0]}" POST /repair '{"namespace":"productionization","key":"azure-wan-four-vm","replicationFactor":3,"minAcks":3}')"; repair_ms=$(( $(date +%s%3N) - t1 ))
+          [[ "$(jq -r '.repairs[0].acknowledgements' <<<"$repaired")" == 3 ]] || { echo 'TRUYN_WAN_VM_GATE=FAIL reason=repair_quorum'; exit 34; }
+          jq -e --arg dead "$holder" '.repairs[0].storedAt | index($dead) == null' <<<"$repaired" >/dev/null || { echo 'TRUYN_WAN_VM_GATE=FAIL reason=failed_holder_not_replaced'; exit 35; }
+          (( repair_ms < 30000 )) || { echo "TRUYN_WAN_VM_GATE=FAIL reason=repair_latency_bound ms=$repair_ms"; exit 36; }
 
           remote_raw "$failed_vm" 'set -e; systemctl start truyn-testnet.service; for n in $(seq 1 60); do curl -fsS --max-time 2 http://127.0.0.1:8788/status >/dev/null && exit 0; sleep 2; done; exit 1' >/dev/null
           restarted="$(call_json "$failed_vm" GET /record)"
-          [[ "$(jq -r '.record.nodeId' <<<"$restarted")" == "$holder" ]] || { echo 'TRUYN_VM_GATE=FAIL reason=identity_changed_after_restart'; exit 36; }
-          after_seq="$(jq -r '.record.sequence' <<<"$restarted")"; (( after_seq > before_seq )) || { echo 'TRUYN_VM_GATE=FAIL reason=sequence_rollback'; exit 37; }
+          [[ "$(jq -r '.record.nodeId' <<<"$restarted")" == "$holder" ]] || { echo 'TRUYN_WAN_VM_GATE=FAIL reason=identity_changed_after_restart'; exit 37; }
+          after_seq="$(jq -r '.record.sequence' <<<"$restarted")"; (( after_seq > before_seq )) || { echo 'TRUYN_WAN_VM_GATE=FAIL reason=sequence_rollback'; exit 38; }
           ping_payload="$(jq -nc --arg id "$holder" '{nodeId:$id}')"; pong="$(call_json "${VMS[3]}" POST /ping "$ping_payload")"
-          [[ "$(jq -r '.pong' <<<"$pong")" == true ]] || { echo 'TRUYN_VM_GATE=FAIL reason=restarted_peer_unreachable'; exit 38; }
+          [[ "$(jq -r '.pong' <<<"$pong")" == true ]] || { echo 'TRUYN_WAN_VM_GATE=FAIL reason=restarted_peer_unreachable'; exit 39; }
 
           gate_ok=1
-          jq -nc --arg gate PASS --argjson hosts 4 --argjson directMs "$direct_ms" --argjson repairMs "$repair_ms" --argjson mixedSku "$([[ $(printf '%s\n' "${VM_SIZES[@]}" | sort -u | wc -l) -gt 1 ]] && echo true || echo false)" '{gate:$gate,hosts:$hosts,transport:"real-public-udp-quic",relayCalls:0,directNeedMs:$directMs,replicationAcks:3,remoteReplicaRead:true,holderFailureRepairMs:$repairMs,restartIdentityStable:true,sequenceAdvanced:true,mixedVmSku:$mixedSku}' | sed 's/^/TRUYN_VM_GATE=/'
+          jq -nc --arg gate PASS --argjson hosts 4 --argjson regions "$distinct_regions" --argjson directMs "$direct_ms" --argjson repairMs "$repair_ms" '{gate:$gate,hosts:$hosts,distinctRegions:$regions,transport:"real-public-udp-quic",relayCalls:0,directNeedMs:$directMs,replicationAcks:3,remoteReplicaRead:true,holderFailureRepairMs:$repairMs,restartIdentityStable:true,sequenceAdvanced:true}' | sed 's/^/TRUYN_WAN_VM_GATE=/'

@@ -1,0 +1,57 @@
+name: Temporary Network Azure Capacity Probe
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/tmp-network-azure-capacity-probe.yml'
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      AZURE_CLIENT_ID_VALUE: ${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID_VALUE: ${{ vars.AZURE_TENANT_ID || secrets.AZURE_TENANT_ID }}
+      AZURE_SUBSCRIPTION_ID_VALUE: ${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}
+    steps:
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID_VALUE }}
+          tenant-id: ${{ env.AZURE_TENANT_ID_VALUE }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID_VALUE }}
+      - name: Select live region and SKU
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          RG="$(az group list --query "[?contains(name, 'truyn')].name | [0]" -o tsv)"
+          [[ -n "$RG" ]] || { echo 'TRUYN_AZURE_CAPACITY=FAIL reason=resource_group_not_found'; exit 10; }
+          home="$(az group show -g "$RG" --query location -o tsv)"
+          regions=("$home" eastus2 eastus centralus southcentralus westus2 westus3 northeurope westeurope uksouth swedencentral)
+          sizes=(Standard_B1ms Standard_A1_v2 Standard_D1_v2 Standard_B2s Standard_D2s_v5 Standard_D2as_v5)
+          declare -A seen=()
+          for region in "${regions[@]}"; do
+            [[ -n "$region" && -z "${seen[$region]:-}" ]] || continue
+            seen[$region]=1
+            usage="$(az vm list-usage -l "$region" -o json --only-show-errors 2>/dev/null || echo '[]')"
+            total_available="$(jq -r '[.[] | select(.name.value == "cores")][0] | if . == null then -1 else ((.limit | tonumber) - (.currentValue | tonumber)) end' <<<"$usage")"
+            for size in "${sizes[@]}"; do
+              sku="$(az vm list-skus -l "$region" --resource-type virtualMachines --size "$size" --all -o json --only-show-errors 2>/dev/null | jq -c '[.[] | select((.restrictions | length) == 0)][0] // empty')"
+              [[ -n "$sku" ]] || { echo "TRUYN_AZURE_CAPACITY_SKIP region=$region size=$size reason=restricted_or_absent"; continue; }
+              family="$(jq -r '.family // empty' <<<"$sku")"
+              vcpus="$(jq -r '[.capabilities[]? | select(.name == "vCPUs") | .value][0] // "0" | tonumber' <<<"$sku")"
+              need=$((vcpus * 4))
+              family_available="$(jq -r --arg family "$family" '[.[] | select(.name.value == $family)][0] | if . == null then -1 else ((.limit | tonumber) - (.currentValue | tonumber)) end' <<<"$usage")"
+              echo "TRUYN_AZURE_CAPACITY_CHECK region=$region size=$size vcpus=$vcpus need=$need totalAvailable=$total_available familyAvailable=$family_available"
+              if [[ "$vcpus" -gt 0 && ( "$total_available" == -1 || "$total_available" -ge "$need" ) && ( "$family_available" == -1 || "$family_available" -ge "$need" ) ]]; then
+                echo "TRUYN_AZURE_CAPACITY=PASS region=$region size=$size vcpus=$vcpus family=$family totalAvailable=$total_available familyAvailable=$family_available"
+                exit 0
+              fi
+            done
+          done
+          echo 'TRUYN_AZURE_CAPACITY=FAIL reason=no_candidate_with_reported_quota'
+          exit 11

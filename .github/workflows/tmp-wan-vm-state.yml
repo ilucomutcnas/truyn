@@ -1,0 +1,37 @@
+name: Temporary WAN VM State
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/tmp-wan-vm-state.yml'
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  state:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      AZURE_CLIENT_ID_VALUE: ${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID_VALUE: ${{ vars.AZURE_TENANT_ID || secrets.AZURE_TENANT_ID }}
+      AZURE_SUBSCRIPTION_ID_VALUE: ${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}
+    steps:
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID_VALUE }}
+          tenant-id: ${{ env.AZURE_TENANT_ID_VALUE }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID_VALUE }}
+      - name: Inspect WAN testnet VMs
+        shell: bash
+        run: |
+          set -euo pipefail
+          prefix='truyn-wan-31999660681'
+          data="$(az vm list -d --query "[?starts_with(name, '$prefix')].{location:location,power:powerState,provisioning:provisioningState}" -o json --only-show-errors)"
+          count="$(jq 'length' <<<"$data")"
+          regions="$(jq -c '[.[].location] | unique | sort' <<<"$data")"
+          powers="$(jq -c '[.[].power] | group_by(.) | map({state:.[0],count:length})' <<<"$data")"
+          provisioning="$(jq -c '[.[].provisioning] | group_by(.) | map({state:.[0],count:length})' <<<"$data")"
+          echo "TRUYN_WAN_STATE hosts=$count regions=$regions power=$powers provisioning=$provisioning"
