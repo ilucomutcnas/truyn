@@ -145,7 +145,7 @@ export class AdversarialScaleNode {
     if (this.node?.status === 'started') await this.node.stop();
   }
 
-  async refresh({ timeoutMs = 8_000, externalAbort = true } = {}) {
+  async refresh({ timeoutMs = 8_000, externalAbort = false } = {}) {
     return refreshKademliaRoutingTable(this.node, { timeoutMs, externalAbort });
   }
 
