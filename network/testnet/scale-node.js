@@ -28,6 +28,19 @@ function jsonBytes(value) {
   return encoder.encode(JSON.stringify(value)).byteLength;
 }
 
+function softDeadline(promise, timeoutMs, label) {
+  let timer;
+  const deadline = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      const error = new Error(`${label}_deadline_exceeded`);
+      error.code = 'ERR_TRUYN_SCALE_SOFT_DEADLINE';
+      reject(error);
+    }, Math.max(1, timeoutMs));
+    timer.unref?.();
+  });
+  return Promise.race([promise, deadline]).finally(() => clearTimeout(timer));
+}
+
 export class AdversarialScaleNode {
   constructor({
     index,
@@ -55,7 +68,9 @@ export class AdversarialScaleNode {
       requestsHandled: 0,
       responsesDropped: 0,
       applicationBytesSent: 0,
-      applicationBytesReceived: 0
+      applicationBytesReceived: 0,
+      refreshSoftDeadlines: 0,
+      advertisementSoftDeadlines: 0
     };
   }
 
@@ -146,14 +161,27 @@ export class AdversarialScaleNode {
   }
 
   async refresh({ timeoutMs = 8_000, externalAbort = false } = {}) {
-    return refreshKademliaRoutingTable(this.node, { timeoutMs, externalAbort });
+    try {
+      const refresh = refreshKademliaRoutingTable(this.node, { timeoutMs, externalAbort });
+      return externalAbort ? refresh : await softDeadline(refresh, timeoutMs + 2_000, `truyn_scale_refresh_${this.index}`);
+    } catch (error) {
+      if (error.code === 'ERR_TRUYN_SCALE_SOFT_DEADLINE') this.telemetry.refreshSoftDeadlines += 1;
+      throw error;
+    }
   }
 
   async advertise(key, { timeoutMs = 8_000, externalAbort = false } = {}) {
     const cid = key instanceof CID ? key : await scaleContentCid(key);
     const options = externalAbort ? { signal: AbortSignal.timeout(timeoutMs) } : {};
-    await this.node.contentRouting.provide(cid, options);
-    return cid;
+    try {
+      const publication = this.node.contentRouting.provide(cid, options);
+      if (externalAbort) await publication;
+      else await softDeadline(publication, timeoutMs + 4_000, `truyn_scale_provide_${this.index}`);
+      return cid;
+    } catch (error) {
+      if (error.code === 'ERR_TRUYN_SCALE_SOFT_DEADLINE') this.telemetry.advertisementSoftDeadlines += 1;
+      throw error;
+    }
   }
 
   async findProviders(key, { timeoutMs = 5_000, limit = 20 } = {}) {
