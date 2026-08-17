@@ -11,7 +11,7 @@ permissions:
 jobs:
   targeted:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 6
     steps:
       - uses: actions/checkout@v4
         with:
@@ -32,5 +32,9 @@ jobs:
         run: timeout 45s node --test tests/relay-body-limit.test.js
       - name: Access/dev/billing/origin regressions
         run: timeout 90s node --test tests/provider-access.test.js tests/runtime-relay-security.test.js tests/provider-billing.test.js tests/origin-guard.test.js tests/cloudflare-origin-proxy.test.js
+        env:
+          TRUYN_LOCAL_DEVELOPMENT: '1'
+      - name: Relay and runtime compatibility regressions
+        run: timeout 120s node --test tests/owner-provider-lock.test.js tests/byok-private-provider.test.js tests/byok-network-gate.test.js tests/relay-provider-policy.test.js tests/relay-provider-routing.test.js tests/runtime-security.test.js tests/runtime-backchannel-wiring.test.js tests/runtime-combined-perimeter.test.js tests/security-boundary.test.js tests/provider-backchannel-guard.test.js tests/provider-node-backchannel.test.js tests/node-backchannel.test.js tests/mvp.test.js
         env:
           TRUYN_LOCAL_DEVELOPMENT: '1'
