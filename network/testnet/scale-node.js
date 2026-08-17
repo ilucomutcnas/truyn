@@ -128,7 +128,8 @@ export class AdversarialScaleNode {
       bootstrap,
       kBucketSize: this.kBucketSize,
       connectionGater: this.gater.connectionGater,
-      connectionManager: { maxConnections: 256 }
+      connectionManager: { maxConnections: 256 },
+      pingEnabled: false
     });
 
     await this.node.handle(SCALE_PROBE_PROTOCOL, async (stream) => {
