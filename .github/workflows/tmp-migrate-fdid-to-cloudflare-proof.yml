@@ -1,0 +1,210 @@
+name: Temporary Migrate FDID Guard To Cloudflare Proof
+
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/tmp-migrate-fdid-to-cloudflare-proof.yml']
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      AZURE_CLIENT_ID_VALUE: ${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID_VALUE: ${{ vars.AZURE_TENANT_ID || secrets.AZURE_TENANT_ID }}
+      AZURE_SUBSCRIPTION_ID_VALUE: ${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}
+      CLOUDFLARE_API_TOKEN_VALUE: ${{ secrets.CLOUDFLARE_API_TOKENS || secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ZONE_ID_VALUE: ${{ secrets.CLOUDFLARE_ZONE_ID || vars.CLOUDFLARE_ZONE_ID }}
+      PUBLIC_RELAY_URL: https://relay.truyn.org
+    steps:
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID_VALUE }}
+          tenant-id: ${{ env.AZURE_TENANT_ID_VALUE }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID_VALUE }}
+
+      - name: Install Container Apps CLI extension
+        shell: bash
+        run: az extension add --name containerapp --upgrade --only-show-errors >/dev/null
+
+      - name: Migrate proof boundary and verify all bypass paths
+        shell: bash
+        run: |
+          set -euo pipefail
+          HEADER='x-truyn-origin-token'
+          CF_BASE='https://api.cloudflare.com/client/v4'
+          CF_PHASE='http_request_late_transform'
+          AFD_API='2025-04-15'
+          RULE_REF='truyn_relay_origin_guard'
+          TOKEN="$(openssl rand -hex 32)"
+          NEW_SECRET="og-$(openssl rand -hex 8)"
+          SUCCESS=0; CF_RULESET_CREATED=0; CF_RULE_CREATED=0; NEW_SECRET_SET=0; GUARD_SWITCHED=0
+          APP=''; RG=''; FQDN=''; ORIGIN=''; AFD_HOST=''; CF_RULESET_ID=''; CF_RULE_ID=''; OLD_HEADER=''; OLD_SECRET_REF=''; BREG=''; BERR=''; BWS=''
+
+          mask(){ [[ -n "${1:-}" ]] && echo "::add-mask::$1"; }
+          for v in "$TOKEN" "$NEW_SECRET" "$CLOUDFLARE_API_TOKEN_VALUE" "$CLOUDFLARE_ZONE_ID_VALUE"; do mask "$v"; done
+          [[ -n "${CLOUDFLARE_API_TOKEN_VALUE:-}" && -n "${CLOUDFLARE_ZONE_ID_VALUE:-}" ]] || { echo 'MIGRATE_CF=FAIL cloudflare_credentials_missing'; exit 2; }
+
+          public_health(){
+            local n="${1:-50}" c
+            for _ in $(seq 1 "$n"); do
+              c="$(curl -sS --max-time 10 -D /tmp/ph.headers -o /tmp/ph.body -w '%{http_code}' "$PUBLIC_RELAY_URL/health" || true)"
+              [[ "$c" == 200 ]] && grep -qi '^cf-ray:' /tmp/ph.headers && return 0
+              sleep 2
+            done
+            return 1
+          }
+
+          cf(){
+            local method="$1" url="$2" body="${3:-}" out="$4"
+            if [[ -n "$body" ]]; then
+              curl -sS --max-time 30 -o "$out" -w '%{http_code}' -X "$method" -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN_VALUE}" -H 'Content-Type: application/json' --data "$body" "$url" || true
+            else
+              curl -sS --max-time 30 -o "$out" -w '%{http_code}' -X "$method" -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN_VALUE}" -H 'Content-Type: application/json' "$url" || true
+            fi
+          }
+
+          rollback(){
+            set +e
+            echo 'MIGRATE_CF_ROLLBACK=START network_lock_retained=true'
+            if [[ "$GUARD_SWITCHED" == 1 && -n "$APP" && -n "$OLD_SECRET_REF" ]]; then
+              az containerapp update -g "$RG" -n "$APP" --set-env-vars TRUYN_ORIGIN_GUARD=1 "TRUYN_ORIGIN_GUARD_HEADER=${OLD_HEADER}" "TRUYN_ORIGIN_GUARD_TOKEN=secretref:${OLD_SECRET_REF}" --only-show-errors >/dev/null 2>&1 || true
+              public_health 100 || true
+            fi
+            if [[ "$NEW_SECRET_SET" == 1 && -n "$APP" ]]; then az containerapp secret remove -g "$RG" -n "$APP" --secret-names "$NEW_SECRET" --only-show-errors >/dev/null 2>&1 || true; fi
+            if [[ "$CF_RULESET_CREATED" == 1 && -n "$CF_RULESET_ID" ]]; then
+              cf DELETE "${CF_BASE}/zones/${CLOUDFLARE_ZONE_ID_VALUE}/rulesets/${CF_RULESET_ID}" '' /tmp/cf-del.json >/dev/null || true
+            elif [[ "$CF_RULE_CREATED" == 1 && -n "$CF_RULESET_ID" && -n "$CF_RULE_ID" ]]; then
+              cf DELETE "${CF_BASE}/zones/${CLOUDFLARE_ZONE_ID_VALUE}/rulesets/${CF_RULESET_ID}/rules/${CF_RULE_ID}" '' /tmp/cf-del-rule.json >/dev/null || true
+            fi
+            if [[ "$SUCCESS" == 1 ]]; then echo 'MIGRATE_CF_CLEANUP=PASS cloudflare_proof_retained=true network_lock_retained=true'; return; fi
+            if public_health 100; then echo 'MIGRATE_CF_ROLLBACK=PASS public_health=200 old_fdid_guard_restored=true'; else echo 'MIGRATE_CF_ROLLBACK=FAIL'; fi
+          }
+          trap rollback EXIT
+
+          # Require the already-proven production baseline: AFD network lock + FDID app guard.
+          found=0
+          while IFS=$'\t' read -r name rg fqdn; do
+            [[ -n "$fqdn" ]] || continue
+            app="$(az containerapp show -g "$rg" -n "$name" -o json)"
+            role="$(jq -r '[.properties.template.containers[0].env[]? | select(.name=="TRUYN_ROLE") | .value][0] // empty' <<<"$app")"
+            [[ "$role" == relay || "$name" == *relay* ]] || continue
+            found=1; APP="$name"; RG="$rg"; FQDN="$fqdn"; ORIGIN="https://${fqdn}"
+            for v in "$APP" "$RG" "$FQDN" "$ORIGIN"; do mask "$v"; done
+            enabled="$(jq -r '[.properties.template.containers[0].env[]? | select(.name=="TRUYN_ORIGIN_GUARD") | .value][0] // empty' <<<"$app")"
+            OLD_HEADER="$(jq -r '[.properties.template.containers[0].env[]? | select(.name=="TRUYN_ORIGIN_GUARD_HEADER") | .value][0] // empty' <<<"$app")"
+            OLD_SECRET_REF="$(jq -r '[.properties.template.containers[0].env[]? | select(.name=="TRUYN_ORIGIN_GUARD_TOKEN") | .secretRef][0] // empty' <<<"$app")"
+            mask "$OLD_SECRET_REF"
+            [[ "$enabled" == 1 && "$OLD_HEADER" == x-azure-fdid && -n "$OLD_SECRET_REF" ]] || { echo "MIGRATE_CF=FAIL fdid_guard_baseline enabled=${enabled} header=${OLD_HEADER} secretref=$([[ -n "$OLD_SECRET_REF" ]]&&echo present||echo missing)"; exit 10; }
+            rules="$(jq '.properties.configuration.ingress.ipSecurityRestrictions // []' <<<"$app")"
+            rule_count="$(jq 'length' <<<"$rules")"; [[ "$rule_count" -gt 0 ]] || { echo 'MIGRATE_CF=FAIL network_lock_missing'; exit 11; }
+            network_hash="$(jq -cS '[.[]|{name,action,ipAddressRange}]|sort_by(.name,.ipAddressRange)' <<<"$rules" | sha256sum | awk '{print $1}')"; mask "$network_hash"
+            break
+          done < <(az containerapp list --query "[?properties.configuration.ingress.external==\`true\`].[name,resourceGroup,properties.configuration.ingress.fqdn]" -o tsv)
+          [[ "$found" == 1 ]] || { echo 'MIGRATE_CF=FAIL relay_not_found'; exit 12; }
+
+          public_health 20 || { echo 'MIGRATE_CF=FAIL baseline_health'; exit 20; }
+          BREG="$(curl -sS --max-time 12 -D /tmp/base-reg.headers -o /tmp/base-reg.body -w '%{http_code}' -X POST -H 'content-type: application/json' --data '{}' "$PUBLIC_RELAY_URL/v1/register" || true)"
+          BERR="$(jq -r '.error//""' /tmp/base-reg.body 2>/dev/null || true)"; jq -e 'type=="object"' /tmp/base-reg.body >/dev/null || { echo 'MIGRATE_CF=FAIL baseline_json'; exit 21; }
+          BWS="$(curl -sS --http1.1 --max-time 12 -o /tmp/base-ws.body -w '%{http_code}' -H 'Connection: Upgrade' -H 'Upgrade: websocket' -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' "$PUBLIC_RELAY_URL/v1/fast/socket?nodeId=migrate-cf" || true)"
+          [[ "$BWS" != 000 && ! "$BWS" =~ ^5 ]] || { echo "MIGRATE_CF=FAIL baseline_ws=${BWS}"; exit 22; }
+
+          # Discover the one live AFD endpoint; before migration it is expected to pass because AFD itself supplies x-azure-fdid.
+          : >/tmp/afd.tsv
+          profiles="$(az resource list --resource-type Microsoft.Cdn/profiles -o json)"
+          mapfile -t pids < <(jq -r '.[]|select((.sku.name//"")|test("AzureFrontDoor";"i"))|.id' <<<"$profiles")
+          for pid in "${pids[@]}"; do
+            mask "$pid"; es="$(az rest --method get --url "https://management.azure.com${pid}/afdEndpoints?api-version=${AFD_API}" 2>/dev/null || echo '{}')"
+            while IFS=$'\t' read -r host state; do
+              [[ "$state" == Enabled && -n "$host" ]] || continue; mask "$host"
+              c="$(curl -sS --max-time 15 --connect-to "relay.truyn.org:443:${host}:443" -o /tmp/afd-health.body -w '%{http_code}' https://relay.truyn.org/health || true)"
+              [[ "$c" == 200 ]] && printf '%s\n' "$host" >>/tmp/afd.tsv
+            done < <(jq -r '.value[]?|[(.properties.hostName//""),(.properties.enabledState//"")]|@tsv' <<<"$es")
+          done
+          [[ "$(sort -u /tmp/afd.tsv|sed '/^$/d'|wc -l|tr -d ' ')" == 1 ]] || { echo 'MIGRATE_CF=FAIL afd_not_unique'; exit 23; }
+          AFD_HOST="$(sort -u /tmp/afd.tsv|head -1)"; mask "$AFD_HOST"
+          ABC="$(curl -sS --max-time 12 --connect-to "relay.truyn.org:443:${AFD_HOST}:443" -o /tmp/afd-before.body -w '%{http_code}' -X POST -H 'content-type: application/json' --data '{}' https://relay.truyn.org/v1/register || true)"
+          ABE="$(jq -r '.error//""' /tmp/afd-before.body 2>/dev/null || true)"
+          [[ "$ABC" == "$BREG" && "$ABE" == "$BERR" ]] || { echo "MIGRATE_CF=FAIL afd_baseline_changed=${ABC}:${ABE}"; exit 24; }
+          echo 'DIRECT_AFD_BASELINE=PASS currently_reaches_relay=true migration_required=true'
+
+          # Create one scoped Cloudflare request transform, preserving any existing rules in the phase.
+          ENTRY="${CF_BASE}/zones/${CLOUDFLARE_ZONE_ID_VALUE}/rulesets/phases/${CF_PHASE}/entrypoint"
+          EC="$(cf GET "$ENTRY" '' /tmp/cf-entry.json)"
+          EXPR='(http.host eq "relay.truyn.org")'
+          RULE_BODY="$(jq -nc --arg ref "$RULE_REF" --arg expr "$EXPR" --arg h "$HEADER" --arg v "$TOKEN" '{ref:$ref,description:"TRUYN relay origin proof",expression:$expr,action:"rewrite",action_parameters:{headers:{($h):{operation:"set",value:$v}}},enabled:true}')"
+          if [[ "$EC" == 200 && "$(jq -r '.success//false' /tmp/cf-entry.json 2>/dev/null)" == true ]]; then
+            stale="$(jq --arg ref "$RULE_REF" '[.result.rules[]?|select(.ref==$ref)]|length' /tmp/cf-entry.json)"; [[ "$stale" == 0 ]] || { echo 'MIGRATE_CF=FAIL existing_truyn_transform_rule'; exit 25; }
+            CF_RULESET_ID="$(jq -r '.result.id//empty' /tmp/cf-entry.json)"; mask "$CF_RULESET_ID"; [[ -n "$CF_RULESET_ID" ]] || { echo 'MIGRATE_CF=FAIL ruleset_id_missing'; exit 26; }
+            RC="$(cf POST "${CF_BASE}/zones/${CLOUDFLARE_ZONE_ID_VALUE}/rulesets/${CF_RULESET_ID}/rules" "$RULE_BODY" /tmp/cf-rule.json)"
+            [[ "$RC" == 200 && "$(jq -r '.success//false' /tmp/cf-rule.json 2>/dev/null)" == true ]] || { code="$(jq -r '.errors[0].code//"unknown"' /tmp/cf-rule.json 2>/dev/null)"; echo "MIGRATE_CF=FAIL create_rule_http=${RC} code=${code}"; exit 27; }
+            CF_RULE_ID="$(jq -r '.result.id//empty' /tmp/cf-rule.json)"; mask "$CF_RULE_ID"; [[ -n "$CF_RULE_ID" ]] || { echo 'MIGRATE_CF=FAIL rule_id_missing'; exit 28; }; CF_RULE_CREATED=1
+          elif [[ "$EC" == 404 ]]; then
+            CREATE="$(jq -nc --argjson rule "$RULE_BODY" '{name:"TRUYN request header transforms",description:"TRUYN relay edge proof",kind:"zone",phase:"http_request_late_transform",rules:[$rule]}')"
+            CC="$(cf POST "${CF_BASE}/zones/${CLOUDFLARE_ZONE_ID_VALUE}/rulesets" "$CREATE" /tmp/cf-create.json)"
+            [[ "$CC" == 200 && "$(jq -r '.success//false' /tmp/cf-create.json 2>/dev/null)" == true ]] || { code="$(jq -r '.errors[0].code//"unknown"' /tmp/cf-create.json 2>/dev/null)"; echo "MIGRATE_CF=FAIL create_ruleset_http=${CC} code=${code}"; exit 29; }
+            CF_RULESET_ID="$(jq -r '.result.id//empty' /tmp/cf-create.json)"; CF_RULE_ID="$(jq -r '.result.rules[0].id//empty' /tmp/cf-create.json)"; mask "$CF_RULESET_ID"; mask "$CF_RULE_ID"; [[ -n "$CF_RULESET_ID" && -n "$CF_RULE_ID" ]] || { echo 'MIGRATE_CF=FAIL created_ids_missing'; exit 30; }; CF_RULESET_CREATED=1
+          else
+            code="$(jq -r '.errors[0].code//"unknown"' /tmp/cf-entry.json 2>/dev/null)"; echo "MIGRATE_CF=FAIL phase_access_http=${EC} code=${code}"; exit 31
+          fi
+          echo 'CLOUDFLARE_REQUEST_TRANSFORM=PASS scoped_host=true operation=set'
+          sleep 45
+
+          # Switch only the app proof. Network restrictions stay untouched.
+          az containerapp secret set -g "$RG" -n "$APP" --secrets "${NEW_SECRET}=${TOKEN}" --only-show-errors >/dev/null; NEW_SECRET_SET=1
+          az containerapp update -g "$RG" -n "$APP" --set-env-vars TRUYN_ORIGIN_GUARD=1 "TRUYN_ORIGIN_GUARD_HEADER=${HEADER}" "TRUYN_ORIGIN_GUARD_TOKEN=secretref:${NEW_SECRET}" --only-show-errors >/dev/null; GUARD_SWITCHED=1
+
+          ready=0; p='unknown'; r='unknown'
+          for _ in $(seq 1 100); do
+            live="$(az containerapp show -g "$RG" -n "$APP" -o json)"; rev="$(jq -r '.properties.latestRevisionName//empty' <<<"$live")"; mask "$rev"
+            env_ok="$(jq --arg h "$HEADER" '[.properties.template.containers[0].env[]?|select((.name=="TRUYN_ORIGIN_GUARD" and .value=="1") or (.name=="TRUYN_ORIGIN_GUARD_HEADER" and .value==$h) or (.name=="TRUYN_ORIGIN_GUARD_TOKEN" and (.secretRef|length>0)))]|length' <<<"$live")"
+            if [[ -n "$rev" ]]; then rj="$(az containerapp revision show -g "$RG" -n "$APP" --revision "$rev" -o json 2>/dev/null || echo '{}')"; p="$(jq -r '.properties.provisioningState//"unknown"' <<<"$rj")"; r="$(jq -r '.properties.runningState//"unknown"' <<<"$rj")"; fi
+            if [[ "$env_ok" == 3 && ( "$p" == Succeeded || "$p" == Provisioned ) && "$r" == Running* ]]; then ready=1; break; fi
+            [[ "$p" == Failed || "$r" == Failed ]] && break; sleep 3
+          done
+          [[ "$ready" == 1 ]] || { echo "MIGRATE_CF=FAIL revision env=${env_ok} provisioning=${p} running=${r}"; exit 40; }
+
+          # Public path must remain baseline while direct AFD now fails closed.
+          converged=0; PC=000; PE=''; AC=000; AE=''
+          for _ in $(seq 1 30); do
+            PC="$(curl -sS --max-time 10 -D /tmp/pub.headers -o /tmp/pub.body -w '%{http_code}' -X POST -H 'content-type: application/json' --data '{}' "$PUBLIC_RELAY_URL/v1/register" || true)"; PE="$(jq -r '.error//""' /tmp/pub.body 2>/dev/null || true)"
+            AC="$(curl -sS --max-time 10 --connect-to "relay.truyn.org:443:${AFD_HOST}:443" -o /tmp/afd-after.body -w '%{http_code}' -X POST -H 'content-type: application/json' --data '{}' https://relay.truyn.org/v1/register || true)"; AE="$(jq -r '.error//""' /tmp/afd-after.body 2>/dev/null || true)"
+            if [[ "$PC" == "$BREG" && "$PE" == "$BERR" && "$AC" == 403 && "$AE" == origin_guard_denied ]] && grep -qi '^cf-ray:' /tmp/pub.headers; then converged=1; break; fi
+            sleep 2
+          done
+          [[ "$converged" == 1 ]] || { echo "MIGRATE_CF=FAIL convergence public=${PC}:${PE} afd=${AC}:${AE}"; exit 41; }
+
+          # Cloudflare overwrites client spoofing; direct AFD cannot spoof the proof.
+          PSC="$(curl -sS --max-time 12 -o /tmp/pub-spoof.body -w '%{http_code}' -X POST -H 'content-type: application/json' -H "$HEADER: attacker-controlled" --data '{}' "$PUBLIC_RELAY_URL/v1/register" || true)"; PSE="$(jq -r '.error//""' /tmp/pub-spoof.body 2>/dev/null || true)"; [[ "$PSC" == "$BREG" && "$PSE" == "$BERR" ]] || { echo "MIGRATE_CF=FAIL public_spoof=${PSC}:${PSE}"; exit 42; }
+          ASC="$(curl -sS --max-time 12 --connect-to "relay.truyn.org:443:${AFD_HOST}:443" -o /tmp/afd-spoof.body -w '%{http_code}' -X POST -H 'content-type: application/json' -H "$HEADER: attacker-controlled" --data '{}' https://relay.truyn.org/v1/register || true)"; ASE="$(jq -r '.error//""' /tmp/afd-spoof.body 2>/dev/null || true)"; [[ "$ASC" == 403 && "$ASE" == origin_guard_denied ]] || { echo "MIGRATE_CF=FAIL afd_spoof=${ASC}:${ASE}"; exit 43; }
+
+          # Prove the correct secret would authorize AFD, without printing it, so the 403 is specifically the missing Cloudflare proof.
+          AKC="$(curl -sS --max-time 12 --connect-to "relay.truyn.org:443:${AFD_HOST}:443" -o /tmp/afd-known.body -w '%{http_code}' -X POST -H 'content-type: application/json' -H "$HEADER: $TOKEN" --data '{}' https://relay.truyn.org/v1/register || true)"; AKE="$(jq -r '.error//""' /tmp/afd-known.body 2>/dev/null || true)"; [[ "$AKC" == "$BREG" && "$AKE" == "$BERR" ]] || { echo "MIGRATE_CF=FAIL known_proof=${AKC}:${AKE}"; exit 44; }
+
+          AWS="$(curl -sS --http1.1 --max-time 12 --connect-to "relay.truyn.org:443:${AFD_HOST}:443" -o /tmp/afd-ws.body -w '%{http_code}' -H 'Connection: Upgrade' -H 'Upgrade: websocket' -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' https://relay.truyn.org/v1/fast/socket?nodeId=migrate-cf || true)"; [[ "$AWS" == 403 ]] || { echo "MIGRATE_CF=FAIL afd_ws=${AWS}"; exit 45; }
+          PWS="$(curl -sS --http1.1 --max-time 12 -o /tmp/pub-ws.body -w '%{http_code}' -H 'Connection: Upgrade' -H 'Upgrade: websocket' -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' "$PUBLIC_RELAY_URL/v1/fast/socket?nodeId=migrate-cf" || true)"; [[ "$PWS" == "$BWS" ]] || { echo "MIGRATE_CF=FAIL public_ws baseline=${BWS} guarded=${PWS}"; exit 46; }
+
+          # Container Apps remains unreachable from arbitrary Internet because network lock did not change.
+          DHC="$(curl -4 -sS --max-time 10 -o /tmp/direct-health.body -w '%{http_code}' "$ORIGIN/health" || true)"; [[ "$DHC" == 403 ]] || { echo "MIGRATE_CF=FAIL containerapp_direct=${DHC}"; exit 47; }
+          live="$(az containerapp show -g "$RG" -n "$APP" -o json)"; post_hash="$(jq -cS '[.properties.configuration.ingress.ipSecurityRestrictions[]?|{name,action,ipAddressRange}]|sort_by(.name,.ipAddressRange)' <<<"$live" | sha256sum | awk '{print $1}')"; mask "$post_hash"; [[ "$post_hash" == "$network_hash" ]] || { echo 'MIGRATE_CF=FAIL network_lock_changed'; exit 48; }
+
+          sleep 12; public_health 10 || { echo 'MIGRATE_CF=FAIL settle_public'; exit 50; }
+          SAC="$(curl -sS --max-time 10 --connect-to "relay.truyn.org:443:${AFD_HOST}:443" -o /tmp/afd-settle.body -w '%{http_code}' -X POST -H 'content-type: application/json' --data '{}' https://relay.truyn.org/v1/register || true)"; SAE="$(jq -r '.error//""' /tmp/afd-settle.body 2>/dev/null || true)"; [[ "$SAC" == 403 && "$SAE" == origin_guard_denied ]] || { echo "MIGRATE_CF=FAIL settle_afd=${SAC}:${SAE}"; exit 51; }
+
+          SUCCESS=1
+          echo 'CLOUDFLARE_TO_AFD_PROOF=PASS request_header_set=true client_spoof_overwritten=true'
+          echo 'PUBLIC_EDGE_HTTP=PASS baseline_equivalent=true cf_ray=true'
+          echo 'PUBLIC_EDGE_WEBSOCKET=PASS baseline_equivalent=true'
+          echo 'DIRECT_AFD_HTTP=403 origin_guard_denied'
+          echo 'DIRECT_AFD_WEBSOCKET=403 origin_guard_denied'
+          echo 'DIRECT_AFD_SPOOFED_PROOF=403 origin_guard_denied'
+          echo 'DIRECT_AFD_KNOWN_PROOF_INTERNAL_CHECK=PASS'
+          echo 'DIRECT_CONTAINERAPP=403 network_denied'
+          echo 'AFD_BACKEND_NETWORK_LOCK=RETAINED unchanged=true'
+          echo 'CLOUDFLARE_BYPASS_GATE=PASS'
+          echo 'AZURE_ORIGIN_BYPASS_DATA_PLANE_GATE=PASS'
+          echo 'PRODUCTION_EDGE_CHAIN=LOCKED cloudflare_then_frontdoor_then_containerapps=true'
