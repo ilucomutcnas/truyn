@@ -34,6 +34,7 @@ jobs:
           - partition
           - churn
           - eclipse
+          - byzantine
           - sybil-collusion
     env:
       TRUYN_SCALE_NODE_COUNT: '100'
@@ -42,6 +43,8 @@ jobs:
       TRUYN_SCALE_HOST_COUNT: '1'
       TRUYN_SCALE_FAILURE_DOMAIN_TYPE: 'github-hosted-runner-single-host'
       TRUYN_SCALE_CLOUD: 'github-actions'
+      TRUYN_SCALE_ADVERTISE_CONCURRENCY: '2'
+      TRUYN_SCALE_K_BUCKET_SIZE: '32'
       TRUYN_SCALE_REPORT: artifacts/scale100-${{ matrix.scenario }}.json
     steps:
       - uses: actions/checkout@v4
