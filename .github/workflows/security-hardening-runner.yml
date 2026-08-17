@@ -29,11 +29,33 @@ jobs:
           node /tmp/apply-security-hardening.mjs
           node --input-type=module <<'NODE'
           import fs from 'node:fs';
-          const path = 'tests/runtime-combined-perimeter.test.js';
-          const original = fs.readFileSync(path, 'utf8');
-          const needle = "      TRUYN_ORIGIN_GUARD_TOKEN: 'edge-proof',\n";
-          if (!original.includes(needle)) throw new Error('origin guard fixture anchor missing');
-          fs.writeFileSync(path, original.replace(needle, `${needle}      TRUYN_ORIGIN_GUARD_TOKEN_EXPIRES_AT: '2099-01-01T00:00:00.000Z',\n`));
+
+          {
+            const path = 'tests/runtime-combined-perimeter.test.js';
+            const original = fs.readFileSync(path, 'utf8');
+            const needle = "      TRUYN_ORIGIN_GUARD_TOKEN: 'edge-proof',\n";
+            if (!original.includes(needle)) throw new Error('origin guard fixture anchor missing');
+            fs.writeFileSync(path, original.replace(needle, `${needle}      TRUYN_ORIGIN_GUARD_TOKEN_EXPIRES_AT: '2099-01-01T00:00:00.000Z',\n`));
+          }
+
+          {
+            const path = 'tests/mvp.test.js';
+            let text = fs.readFileSync(path, 'utf8');
+            const importNeedle = "import { createFunctionAdapter, TruynAdapterHost } from '../adapters/sdk/index.js';\n";
+            if (!text.includes(importNeedle)) throw new Error('mvp public-policy import anchor missing');
+            text = text.replace(
+              importNeedle,
+              `${importNeedle}import { createProviderAccessPolicy } from '../core/security/provider-access.js';\n`,
+            );
+            const hostNeedle = "    publicKeysByNodeId: requesterPublicKeys,\n";
+            const occurrences = text.split(hostNeedle).length - 1;
+            if (occurrences !== 2) throw new Error(`expected 2 public host config anchors, got ${occurrences}`);
+            text = text.replaceAll(
+              hostNeedle,
+              `    publicKeysByNodeId: requesterPublicKeys,\n    accessPolicy: createProviderAccessPolicy({ mode: 'public' }),\n`,
+            );
+            fs.writeFileSync(path, text);
+          }
           NODE
           rm -f .github/workflows/security-hardening-apply.yml .github/workflows/security-hardening-runner.yml
       - name: Run full regression suite
