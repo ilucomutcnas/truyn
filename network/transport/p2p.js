@@ -10,6 +10,18 @@ function parseQuicEndpoint(value) {
   } catch { return null; }
 }
 
+function selectedQuicEndpoint(peerRecord) {
+  for (const value of peerRecord?.endpoints || []) {
+    const endpoint = parseQuicEndpoint(value);
+    if (endpoint) return { value, endpoint };
+  }
+  return null;
+}
+
+function peerRecordBinding(peerRecord, endpointValue) {
+  return `${Number.isInteger(peerRecord?.sequence) ? peerRecord.sequence : 'na'}:${endpointValue}`;
+}
+
 export class ExplicitBackpressureQueue extends BoundedAdmissionQueue {
   constructor({ maxInFlight = 64, maxQueued = 256 } = {}) {
     super({ maxInFlight, maxQueued, errorCode: 'TRUYN_BACKPRESSURE', errorMessage: 'p2p_backpressure' });
@@ -28,13 +40,22 @@ export class DirectFirstP2P {
     this.queue = new ExplicitBackpressureQueue({ maxInFlight, maxQueued });
   }
 
+  async #discardConnection(peerNodeId) {
+    const existing = this.connections.get(peerNodeId);
+    this.connections.delete(peerNodeId);
+    if (!existing?.client || typeof this.quic.disconnect !== 'function') return;
+    try { await this.quic.disconnect(existing.client); } catch { /* stale connection disposal is best-effort */ }
+  }
+
   async #directClient(peerRecord) {
+    const selected = selectedQuicEndpoint(peerRecord);
+    if (!selected) throw new Error('peer_has_no_quic_endpoint');
+    const binding = peerRecordBinding(peerRecord, selected.value);
     const existing = this.connections.get(peerRecord.nodeId);
-    if (existing) return existing;
-    const endpoint = peerRecord.endpoints.map(parseQuicEndpoint).find(Boolean);
-    if (!endpoint) throw new Error('peer_has_no_quic_endpoint');
-    const client = await this.quic.connect(endpoint);
-    this.connections.set(peerRecord.nodeId, client);
+    if (existing?.binding === binding) return existing.client;
+    if (existing) await this.#discardConnection(peerRecord.nodeId);
+    const client = await this.quic.connect(selected.endpoint);
+    this.connections.set(peerRecord.nodeId, { client, binding });
     return client;
   }
 
@@ -51,7 +72,7 @@ export class DirectFirstP2P {
           return { transport: 'quic-direct', result };
         } catch (error) {
           directError = error;
-          this.connections.delete(peerNodeId);
+          await this.#discardConnection(peerNodeId);
         }
       } else {
         directError = new Error('peer_not_discovered');
@@ -68,7 +89,7 @@ export class DirectFirstP2P {
     });
   }
 
-  forget(peerNodeId) { this.connections.delete(peerNodeId); }
+  async forget(peerNodeId) { await this.#discardConnection(peerNodeId); }
   admissionSnapshot() { return this.queue.snapshot(); }
 }
 
