@@ -1,172 +1,138 @@
 # TRUYN Relay Security Architecture
 
-**Status:** relay/provider authorization core, an optional reference origin guard, a generic Cloudflare edge proxy, and an optional protected-provider M2M backchannel guard are implemented; deployment-specific edge/origin activation remains operational work.
+**Status:** core relay/provider authorization, origin guard, Cloudflare-compatible edge proxy and protected-provider M2M reference guards are implemented; deployment-specific perimeter activation remains operational work.
 
 ## Public relay, private intelligence
 
-A TRUYN relay may be publicly reachable while the providers behind it remain private.
-
 > **Public relay access is permission to speak TRUYN, not permission to spend another party's AI quota.**
 
-The relay is a routing and coordination surface. It is not a shared credential broker and it must not convert public reachability into provider authorization.
+A relay is routing/coordination infrastructure, not a credential broker.
 
-## Security boundary
-
-The implemented dispatch boundary is:
+## Implemented dispatch boundary
 
 ```text
-public requester
-      ↓
-relay authentication / session validation
-      ↓
-provider visibility + authorization-aware matching
-      ↓
+public/authenticated requester
+        ↓
+relay authentication/session validation
+        ↓
+authorization-aware provider discovery/matching
+        ↓
 provider-host access decision
-      ↓
+        ↓
 provider-host billing decision
-      ↓
-provider execution
+        ↓
+adapter execution
 ```
 
-No provider invocation occurs before the provider-host access and billing decisions succeed. Private offers are filtered before dispatch, and provider-host authorization remains an independent second check before adapter execution.
+Unauthorized private providers are filtered before dispatch and checked again at the provider host.
 
-Additional account-level tenancy, durable distributed quota/accounting and commercial entitlement resolution remain later layers and must preserve this fail-closed order.
+## Provider defaults
 
-## Discovery boundary
+Both the low-level provider access policy and runtime provider role default to `owner-only`. Missing/empty requester authorization denies access. `public` is always an explicit opt-in, and owner-funded billing still refuses public execution.
 
-Discovery is authorization-aware. A requester receives only:
+## Development/public separation
 
-- its own private/BYOK providers;
-- private providers whose provider-signed requester policy authorizes it;
-- providers intentionally published for network-wide use when public dispatch is explicitly enabled.
+The low-level/runtime relay hard-fails if permissive local-development mode is combined with production/public markers. The user-facing CLI local relay is loopback-only.
 
-Owner-private providers do not appear as usable foreign discovery matches. Hiding them is defense in depth; authorization remains mandatory even if a provider ID becomes known.
+This prevents a development convenience mode from being accidentally exposed as a production public relay.
 
-## Provider backchannel
+## Request-body boundary
 
-Provider runtimes connect to the relay using signed TRUYN identity, a session bound to that node identity, and the same authorization-aware fast/legacy paths used by the relay core. Provider execution is additionally protected by provider-host access and billing checks.
+HTTP/WebSocket payloads are bounded. If an HTTP request body exceeds the configured limit, the relay returns 413 and closes that connection so unread bytes cannot poison a reusable keep-alive socket. Subsequent traffic must arrive on a fresh connection.
 
-The reference runtime now also supports an optional **protected-provider M2M proof** for specifically enumerated owner-provider node identities. It is an additional transport-layer boundary, not a replacement for TRUYN signatures, provider policy, or billing authorization.
+## Protected-provider M2M backchannel
 
-When enabled:
+The reference runtime can require a transport-layer M2M proof for explicitly protected provider node identities.
 
-1. the relay runtime starts the real relay on loopback behind an in-process provider-backchannel guard;
-2. only node IDs explicitly listed as protected require the additional M2M proof; ordinary BYOK/public nodes preserve their existing transport behavior;
-3. a protected node must present the correct proof during registration before any relay session is issued;
-4. the guard records protected relay sessions issued through that same process lifecycle and requires proof on subsequent protected HTTP traffic;
-5. protected WebSocket upgrades require the proof as well;
-6. possession of a protected relay session without the M2M proof remains insufficient;
-7. the proof exists only as a transport header and is stripped before the request reaches the inner relay; it is not serialized into `IDENTITY`, `OFFER`, `NEED`, `RESULT`, or other TRUYN envelopes;
-8. incomplete relay-side protected-node/token configuration fails closed at startup.
+The proof:
 
-The provider runtime uses a dedicated `ProviderTruynNode` transport wrapper when a proof is configured. Without a proof, it preserves normal `TruynNode` behavior.
+- is required before a protected registration can obtain a relay session;
+- remains required on protected HTTP/WebSocket traffic;
+- is not replaced by possession of a stolen relay session;
+- is transport-only and stripped before the inner relay;
+- does not replace signed TRUYN identity, provider policy or billing authorization;
+- fails closed when configuration is incomplete.
 
-Regression tests cover wrong/missing proof at registration, stolen protected sessions, protected WebSocket access, ordinary-node compatibility, transport-secret stripping, and the actual `runtime/service.js` relay entrypoint.
+Ordinary non-protected/BYOK nodes retain their normal transport behavior.
 
-A separate deployment perimeter is still useful for owner infrastructure. Perimeter controls are additive; they do not replace TRUYN provider authorization.
+## Origin guard
 
-## Public edge vs control plane
+When enabled, the inner relay binds only to loopback and an outer origin guard owns the exposed origin-side listener.
 
-The architecture distinguishes:
+HTTP data-plane requests and WebSocket upgrades require trusted edge proof. Unauthorized health responses remain minimal; edge proof is stripped before forwarding inward.
 
-- **public protocol/data plane** — network participation, authenticated request transport and public capabilities intentionally exposed by policy;
-- **owner control plane** — deployment, provider registration, privileged proofs, configuration, billing/quota operations and internal administration;
-- **provider backchannel** — authenticated task delivery to provider runtimes.
+The default `x-truyn-origin-token` is expiry-bound. Runtime configuration supports an **active + previous** token window so rotation can occur without a forced single-instant cutover. Secret token values are deliberately kept non-enumerable in routine runtime config objects so ordinary logging/JSON serialization does not print them.
 
-The owner control plane SHOULD NOT share the same trust assumptions as the public protocol surface.
+Expired/missing/invalid proof is denied before inner-relay access.
 
-## Reference origin guard
+## Cloudflare-compatible edge proxy
 
-The reference runtime contains an optional origin-guard layer for deployments that expose the relay through a trusted edge.
+The generic reference edge proxy:
 
-When enabled:
+- requires an HTTPS origin and secret binding;
+- overwrites any client-supplied origin proof;
+- preserves normal requester/session and WebSocket headers;
+- handles redirects manually to avoid secret forwarding;
+- refuses same-host recursive origin configuration, including alternate ports;
+- sanitizes upstream failures.
 
-1. the actual TRUYN relay binds only to a loopback address on an internal ephemeral port;
-2. the outer origin guard owns the configured external host/port;
-3. HTTP data-plane requests and WebSocket upgrades require a deployment-supplied edge-to-origin secret;
-4. unauthorized data-plane requests are rejected before reaching the inner relay;
-5. unauthenticated `/health` returns only a minimal protocol-health response and does not proxy inner relay diagnostics;
-6. the edge-to-origin secret is stripped before a request is forwarded to the inner relay;
-7. partial origin-guard configuration fails closed at runtime startup.
+Concrete production Worker names, origin addresses and secret values do not belong in public source.
 
-The comparison is constant-time for equal-length tokens. The regression suite covers HTTP denial, WebSocket denial, secret stripping, minimal health output and runtime loopback wiring.
-
-When both origin and provider-backchannel guards are enabled, the runtime chain is:
+## Combined reference chain
 
 ```text
+public client
+    ↓
 trusted edge
-   ↓
+    ↓  expiry-bound origin proof
 origin guard
-   ↓
-protected-provider M2M guard
-   ↓
+    ↓  proof stripped
+protected-provider M2M guard (where applicable)
+    ↓  M2M proof stripped
 inner TRUYN relay
+    ↓
+provider policy + billing
 ```
 
-Each guard removes only its own proof before forwarding inward.
+Each layer authenticates only its own boundary and removes its own proof before forwarding inward.
 
-This is an **implementation capability**, not a claim that a particular production origin is already protected. Edge configuration, token provisioning/rotation, firewall/tunnel policy and direct-origin denial remain deployment-specific operational controls and must be verified separately.
+## Sponsored billing interaction
 
-## Reference Cloudflare edge proxy
+Network reachability never creates sponsored entitlement. Sponsored execution is independently fail-closed unless the provider billing policy has a valid actor-bound signed entitlement verifier and durable atomic usage store reservation. See `BILLING_BOUNDARY.md`.
 
-The public reference code also contains a generic Cloudflare Worker-compatible proxy that pairs with the origin guard without making the origin secret a TRUYN client credential.
+## Operational non-claims
 
-Its fail-closed behavior is:
+Reference code does not prove that every deployment has:
 
-- the origin URL and origin-guard token must both be supplied through Worker bindings;
-- only an HTTPS origin without embedded credentials or path/query configuration is accepted;
-- any origin-proof header supplied by the public requester is discarded and replaced with the Worker secret;
-- request path, query, method, body, requester authorization and WebSocket upgrade headers are preserved for the origin;
-- redirects are handled manually so the origin proof is not automatically forwarded to a redirect target;
-- proxy failures return a sanitized error without binding values or upstream exception details.
+- direct-origin firewall/tunnel denial;
+- correctly issued/rotated live edge proof;
+- correctly issued/rotated protected-provider M2M proof;
+- production IAM/tenant separation;
+- deployed durable sponsored accounting;
+- production mainnet SLOs.
 
-No concrete Worker name, route, origin hostname or secret value belongs in the public repository. Deployment and proof that the production DNS path actually traverses the Worker remain private operational steps.
+Those are deployment/operations gates and must be verified separately.
 
-## Legacy-route rule
-
-Every route capable of causing execution must pass through the same provider authorization decision. This includes legacy HTTP endpoints, fast paths, WebSocket paths, SDKs, MCP gateways and future compatibility bridges.
-
-A new secure endpoint does not fix an older endpoint that can still dispatch around policy.
-
-## Abuse controls
-
-Authorization is the primary billing boundary. Rate limits, replay protection, request size limits, concurrency limits, per-tenant quotas, anomaly detection and edge/WAF rules provide additional protection.
-
-Failure of an abuse-control subsystem must not silently change an unauthorized request into an authorized provider call.
-
-## Kill switches
-
-The architecture reserves explicit operational kill switches for owner-funded external access and owner-provider network visibility. Their safe default is disabled/false. Exact values, thresholds and production policy state are operational/private information.
-
-## Origin protection
-
-Where a public domain is fronted by an edge provider, the origin should be protected against direct bypass. The optional reference origin guard plus edge proxy make edge-authenticated origin access possible without turning the edge token into a TRUYN user credential.
-
-Exact origin hostnames, protected provider node IDs, secret values, firewall rules and bypass configuration are private operational data and are not documented here.
-
-## Acceptance invariant
-
-The relay/provider security invariant remains:
+## Acceptance invariants
 
 ```text
-anonymous/foreign requester
+foreign requester
 + public relay
 + known private provider ID
-+ arbitrary custom client
-= zero owner-funded upstream calls
++ custom client
+= zero unauthorized provider execution
 ```
 
-For a protected owner-provider identity, the additional reference invariant is:
-
 ```text
-protected provider identity or stolen protected session
-+ missing/wrong M2M proof
+protected provider identity/session
++ missing or wrong M2M proof
 = zero protected relay access
 ```
 
-For an origin-guarded deployment, a deployment-specific invariant must also be proven:
-
 ```text
-direct origin request without trusted edge proof
-= zero inner-relay data-plane requests
+direct origin request
++ missing/expired/wrong trusted edge proof
+= zero inner-relay data-plane access
 ```
+
+See `docs/security/` for the separate security documentation layer and operational responsibilities.

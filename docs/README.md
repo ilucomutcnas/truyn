@@ -1,80 +1,91 @@
 # Documentation
 
-Human-facing documentation for TRUYN architecture, concepts, setup, operations, security, Trustability, compatibility, benchmarks, and architecture decisions.
+Human-facing documentation for TRUYN architecture, factual implementation status, setup, operations, security, compatibility, Trustability and benchmark evidence.
 
-## Current architecture references
+## Start here
 
-### Core architecture
+- [Architecture Contract](architecture/ARCHITECTURE_CONTRACT.md) — source-of-truth ownership and cross-subsystem invariants.
+- [Implementation Status](architecture/IMPLEMENTATION_STATUS.md) — canonical factual matrix of defined / implemented / proven / remaining work.
+- [Roadmap](../ROADMAP.md) — sequencing and maturity gates.
+- [Security Policy](../SECURITY.md) — repository/public security baseline.
+- [Benchmark Evidence](benchmarks/README.md) — append-only public evidence ledger.
 
-- [Architecture Contract](architecture/ARCHITECTURE_CONTRACT.md) — canonical architecture constraints and concept ownership.
-- [v0.1 Connect Network Underlay](architecture/NETWORK_UNDERLAY_V01.md) — implemented real QUIC/UDP, authenticated peer sessions, Kademlia discovery/state RPC, direct-first P2P, STUN/same-port hole punching, backpressure and relay-fallback contract.
-- [Provider Ownership](architecture/PROVIDER_OWNERSHIP.md) — provider owner/tenant/visibility/billing boundary.
-- [Authorization Model](architecture/AUTHORIZATION_MODEL.md) — server-side fail-closed provider authorization.
-- [Relay Security](architecture/RELAY_SECURITY.md) — public relay, owner control plane, provider backchannel, and legacy-route rules.
-- [Billing Boundary](architecture/BILLING_BOUNDARY.md) — BYOK, owner-funded, sponsored/prepaid/subscription semantics and quota attribution.
-- [BYOK Architecture](architecture/BYOK_ARCHITECTURE.md) — Bring Your Own Intelligence / Bring Your Own Provider.
-- [Threat Model](architecture/THREAT_MODEL.md) — provider/relay abuse scenarios and the required negative security matrix.
-- [Public / Private Information Boundary](architecture/PUBLIC_PRIVATE_BOUNDARY.md) — what belongs in the public repository versus private operations.
-- [Production Semantic Index Lifecycle](architecture/SEMANTIC_INDEX_LIFECYCLE.md) — persistent root-CID index lifecycle, immutable block-vector reuse, explicit preparation, invalidation, and cold/warm startup for Semantic Retrieval Gate v2.
-- [Semantic Retrieval Scale Gate v3](architecture/SEMANTIC_SCALE_GATE_V3.md) — implemented and measured 600 → 10,000 → 100,000-block scale architecture, sharded durable vectors, fixed semantic/privacy/economic gates, latency definitions, and 100/1,000-node exercises.
-- [Distributed Semantic Retrieval](architecture/DISTRIBUTED_SEMANTIC_RETRIEVAL.md) — implemented network primitive where immutable blocks may live on multiple signed nodes: root-CID discovery, authorized partition holders, bounded candidate transfer, holder receipts, content-addressed provenance, replica placement, and fail-closed coverage.
-- [Decentralized Placement and Byzantine Read Quorum](architecture/DECENTRALIZED_PLACEMENT_BYZANTINE_RETRIEVAL.md) — relay-independent signed placement discovery using rendezvous DHT-style placement, gossip/federation, independent directory HTTP boundaries, Trustability-aware replica selection, and distinct-holder immutable-CID read quorum.
+## Core architecture
 
-### Trustability
+- [v0.1 Connect Network Underlay](architecture/NETWORK_UNDERLAY_V01.md) — implemented real QUIC/UDP, authenticated sessions, Kademlia discovery/state RPC, direct-first P2P, STUN/same-port hole punching and backpressure.
+- [Provider Ownership](architecture/PROVIDER_OWNERSHIP.md) — provider identity/owner/visibility boundary.
+- [Authorization Model](architecture/AUTHORIZATION_MODEL.md) — implemented fail-closed provider authorization baseline and remaining account/tenant work.
+- [Billing Boundary](architecture/BILLING_BOUNDARY.md) — actual BYOK/owner-funded/sponsored/prepaid/subscription safety semantics.
+- [BYOK Architecture](architecture/BYOK_ARCHITECTURE.md) — Bring Your Own Intelligence / Provider.
+- [Relay Security](architecture/RELAY_SECURITY.md) — relay, origin guard, edge and protected-provider backchannel boundaries.
+- [Threat Model](architecture/THREAT_MODEL.md) — abuse scenarios and negative-test requirements.
+- [Public / Private Boundary](architecture/PUBLIC_PRIVATE_BOUNDARY.md) — what may be public vs operationally private.
+- [Multi-Cloud Provider Architecture](architecture/MULTI_CLOUD_PROVIDER_ARCHITECTURE.md) — Google/Azure capability architecture.
+- [Semantic Index Lifecycle](architecture/SEMANTIC_INDEX_LIFECYCLE.md) — persistent index/reuse/invalidation lifecycle.
+- [Semantic Scale Gate v3](architecture/SEMANTIC_SCALE_GATE_V3.md) — measured infrastructure-scale semantic architecture.
+- [Distributed Semantic Retrieval](architecture/DISTRIBUTED_SEMANTIC_RETRIEVAL.md) — signed distributed holders/provenance/minimal-context retrieval.
+- [Decentralized Placement / Byzantine Read Quorum](architecture/DECENTRALIZED_PLACEMENT_BYZANTINE_RETRIEVAL.md) — relay-independent placement and distinct-holder quorum.
+- [Kademlia/QUIC Trust Testnet](architecture/KADEMLIA_QUIC_TRUST_TESTNET.md) — real relay-free trust-network slice.
 
-- [Trustability index](trustability/README.md) — separates retrieval integrity, claim evidence and node operational trust.
-- [Claim-Centric Trustability v1](trustability/CLAIM_TRUSTABILITY_V1.md) — implemented signed `CLAIM` / `ATTEST`, provenance graph, conservative source-lineage independence, network verifier discovery and signed `TRUST_RECEIPT` mechanics.
-- [Active Trustability Lifecycle v2](trustability/ACTIVE_TRUST_LIFECYCLE_V2.md) — implemented signed `CHALLENGE → VERIFY → DISPUTE`, certified source-lineage commitments, freshness, issuer-authoritative revocation and network verifier challenge/response semantics.
+## Trustability
 
-### Provider and edge architecture
+- [Trustability index](trustability/README.md)
+- [Claim-Centric Trustability v1](trustability/CLAIM_TRUSTABILITY_V1.md)
+- [Active Trustability Lifecycle v2](trustability/ACTIVE_TRUST_LIFECYCLE_V2.md)
 
-- [Multi-Cloud Provider Architecture](architecture/MULTI_CLOUD_PROVIDER_ARCHITECTURE.md) — public Google Cloud / Microsoft Azure capability architecture without private deployment identifiers.
-- [Public Edge Domains](architecture/PUBLIC_EDGE_DOMAINS.md) — intentionally public hostname roles and the public/control-plane separation; live origin/resource identifiers are deliberately excluded.
+## Operations
 
-### Benchmarks and evidence
+- [Operations index](operations/README.md)
+- [Node Operations](operations/NODE_OPERATIONS.md)
+- [Testnet Operations](operations/TESTNET_OPERATIONS.md)
+- [Billing Operations](operations/BILLING_OPERATIONS.md)
 
-- [Benchmark evidence policy and index](benchmarks/README.md) — append-only evidence rules and the current public benchmark record.
-- [v0.1 Connect Gate — 2026-08-17](benchmarks/V01_CONNECT_GATE_2026-08-17.md) — 184/184 full-suite proof for real QUIC direct messaging, relay-free three-node Kademlia discovery, networked DHT state, composed runtime, STUN, same-QUIC-port hole punching and explicit backpressure.
-- [Cross-Cloud A/B — 2026-08-15](benchmarks/CROSS_CLOUD_AB_2026-08-15.md) — immutable measured baseline.
-- [Cross-Cloud 8× Optimization — 2026-08-15](benchmarks/CROSS_CLOUD_8X_OPTIMIZATION_2026-08-15.md) — fixed hot-path optimization gate.
-- [Context Efficiency — 2026-08-15](benchmarks/CONTEXT_EFFICIENCY_2026-08-15.md) — content-addressed context economic gate.
-- [Semantic Retrieval Gate — 2026-08-15](benchmarks/SEMANTIC_RETRIEVAL_GATE_2026-08-15.md) — question + root CID retrieval/provenance gate.
-- [Semantic Retrieval 7-Actor Gate — 2026-08-15](benchmarks/SEMANTIC_RETRIEVAL_MULTI_ACTOR_2026-08-15.md) — functional scaling from two to seven heterogeneous AI actors.
-- [Semantic Retrieval v2 Confidence Gate — 2026-08-16](benchmarks/SEMANTIC_RETRIEVAL_V2_CONFIDENCE_GATE_2026-08-16.md) — final Semantic v2 accuracy/stability/economic evidence.
-- [Semantic Index Lifecycle — 2026-08-16](benchmarks/SEMANTIC_INDEX_LIFECYCLE_2026-08-16.md) — persistent-index lifecycle and immutable-vector reuse proof.
-- [Semantic Scale Gate v3 — 2026-08-16](benchmarks/SEMANTIC_SCALE_GATE_V3_2026-08-16.md) — measured 600 / 10,000 / 100,000-block infrastructure-scale proof with cold/warm p50/p95/p99 and 100/1,000-node exercises.
-- [Semantic Concurrent Load — 2026-08-16](benchmarks/SEMANTIC_CONCURRENT_LOAD_2026-08-16.md) — signed multi-agent concurrent NEED and semantic-work single-flight proof, including the preserved 256-event relay queue boundary failure.
-- [Distributed Semantic Retrieval — 2026-08-16](benchmarks/DISTRIBUTED_SEMANTIC_RETRIEVAL_2026-08-16.md) — 600-block / four-partition / five-holder network proof with a replica, 48/48 correct retrieval, 100% provenance/minimal/no-ID, zero unauthorized holder work and 90.025% measured context-payload reduction.
-- [Claim-Centric Trustability v1 — 2026-08-16](benchmarks/CLAIM_TRUSTABILITY_V1_2026-08-16.md) — 600-case evidence-state/resistance proof with zero correlated-echo or unknown-lineage-Sybil false verification, zero missed disputes/retrieval tamper, and signed tamper-evident trust receipts.
-- [Trust Network v2 — 2026-08-16](benchmarks/TRUST_NETWORK_V2_2026-08-16.md) — 1,000-case decentralized-placement / Byzantine-quorum / active-Trustability resistance proof plus functional independent-directory and network-verifier evidence.
-- [Multimodal Provider Parity Benchmark](benchmarks/MULTIMODAL_PROVIDER_PARITY.md) — public apples-to-apples methodology for reasoning, image and video comparisons.
+These describe the actual current reference operational boundary and explicitly separate it from future mainnet/SLO claims.
 
-### Benchmark documentation boundary
+## Security documentation layer
 
-Published benchmark reports are part of TRUYN's verification record and are preserved in the repository. A sanitized public report should retain the methodology, measured results, limitations, public model versions, tested commit SHA, workflow/run identity where safe, artifact identity/digest where safe, and provenance needed to audit the claim.
+- [Security docs index](security/README.md)
+- [Security Architecture Status](security/SECURITY_ARCHITECTURE_STATUS.md)
+- [Operational Security](security/OPERATIONAL_SECURITY.md)
 
-Security review must **redact sensitive fields rather than delete the report**. Credentials, private keys, privileged cloud identities, private deployment/resource names, private origins, customer data, secret-bearing URLs, live allowlists and exact operational quota/cost ceilings remain forbidden. Raw artifacts or logs that contain those details stay outside the public repository; their non-sensitive identifiers and cryptographic digests may remain in the report as evidence.
+Root `SECURITY.md` remains the public security policy; this layer provides architecture/status/runbook detail.
 
-A benchmark result never grants access to the provider accounts used to produce it.
+## Compatibility
 
-### Getting started
+- [Compatibility index](compatibility/README.md)
+- [Protocol and Node Compatibility](compatibility/PROTOCOL_AND_NODE_COMPATIBILITY.md)
+- [Adapter Compatibility](compatibility/ADAPTER_COMPATIBILITY.md)
 
-- [BYOK](getting-started/BYOK.md) — target user-facing provider onboarding and credential-locality contract.
-- [MVP Quickstart](getting-started/MVP_QUICKSTART.md) — current executable relay/node MVP with explicit non-production security boundary.
-- [MVP AI Interoperability](getting-started/MVP_AI_INTEROP.md) — current adapters and live-demo boundary.
+Current software is `0.1.0-dev`; `TRUYN/1` remains draft. No stable mainnet compatibility promise is implied.
+
+## Getting started
+
+- [BYOK](getting-started/BYOK.md)
+- [MVP Quickstart](getting-started/MVP_QUICKSTART.md)
+- [MVP AI Interoperability](getting-started/MVP_AI_INTEROP.md)
+
+## Benchmark evidence
+
+`docs/benchmarks/` is protected append-only evidence. Current reports cover the v0.1 Connect gate, real QUIC/Kademlia trust-testnet slice, semantic retrieval/index/scale/concurrency, distributed retrieval, Trustability, origin-bypass security and cross-cloud/context economics.
+
+Security cleanup uses **redact-not-delete** handling: retain methodology, measured results, limitations, tested commit/run/artifact identity and digests whenever safe.
+
+See [Benchmark evidence policy and index](benchmarks/README.md).
 
 ## Architecture status rule
 
-Documents explicitly label whether they describe:
+Documents must distinguish:
 
-- implemented MVP/reference behavior;
-- approved target architecture;
-- planned future work.
+- architecture defined;
+- implementation present;
+- CI evidence;
+- bounded real-testnet evidence;
+- productionization;
+- Internet-scale evidence;
+- stable compatibility.
 
-An approved architecture document is **not** an implementation-complete security claim. The v0.1 underlay is now implemented and CI-proven as a reference network layer, while WAN churn/partition durability, real 100/1,000-node network scale, universal NAT reachability and mainnet operations remain separate future gates.
+A lower maturity state must not be promoted by wording alone. The canonical current matrix is [Implementation Status](architecture/IMPLEMENTATION_STATUS.md).
 
 ## Public documentation rule
 
-Provider catalogs, model versions, regions, quotas and access requirements change over time. Public architecture documents describe stable TRUYN capabilities and security invariants. Exact deployment details are resolved during preflight/operations and are not published when they reveal private topology, cloud identities, quotas, billing information, privileged allowlists or secret paths.
-
-See [Public / Private Information Boundary](architecture/PUBLIC_PRIVATE_BOUNDARY.md).
+Public docs describe stable invariants and safe evidence, not private deployment topology. Exact live identities, origins, credentials, privileged allowlists, quotas, billing accounts, cloud project/subscription details and secret paths remain private operations.
