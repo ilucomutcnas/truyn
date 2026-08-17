@@ -16,7 +16,7 @@ async function generateTls(root) {
   return { key: await readFile(keyPath, 'utf8'), cert: await readFile(certPath, 'utf8') };
 }
 
-test('signed QUIC operator bootstraps remote peers and orchestrates direct network work without HTTP control', { timeout: 40_000 }, async () => {
+test('signed QUIC operator bootstraps remote peers, drives fault injection and orchestrates direct network work without HTTP control', { timeout: 45_000 }, async () => {
   const root = await mkdtemp(join(tmpdir(), 'truyn-testnet-operator-'));
   const tls = await generateTls(root);
   const operatorIdentity = createIdentity();
@@ -37,7 +37,8 @@ test('signed QUIC operator bootstraps remote peers and orchestrates direct netwo
         dhtReplicationFactor: 3,
         dhtWriteQuorum: 3,
         dhtRpcTimeoutMs: 1_500,
-        operatorNodeIds: [operatorIdentity.nodeId]
+        operatorNodeIds: [operatorIdentity.nodeId],
+        faultControlEnabled: true
       }));
     }
 
@@ -51,6 +52,7 @@ test('signed QUIC operator bootstraps remote peers and orchestrates direct netwo
     const status = await operator.status(services[0].identity.nodeId);
     assert.equal(status.nodeId, services[0].identity.nodeId);
     assert.equal(status.operatorCount, 1);
+    assert.equal(status.faultControlEnabled, true);
     assert.ok(status.peerCount >= 3);
 
     const direct = await operator.directNeed(
@@ -61,6 +63,24 @@ test('signed QUIC operator bootstraps remote peers and orchestrates direct netwo
     assert.equal(direct.transport, 'quic-direct');
     assert.deepEqual(direct.result.echo, { proof: 'remote-a-to-remote-c' });
     assert.equal(direct.result.transport, 'quic');
+
+    const initialFaults = await operator.faults(services[0].identity.nodeId);
+    assert.deepEqual(initialFaults.partitionedPeers, []);
+    await operator.partition(services[0].identity.nodeId, services[2].identity.nodeId);
+    await assert.rejects(
+      operator.directNeed(services[0].identity.nodeId, services[2].identity.nodeId, { proof: 'must-fail-under-partition' }),
+      /TRUYN_NETWORK_PARTITION|quic_envelope/i
+    );
+    const partitioned = await operator.faults(services[0].identity.nodeId);
+    assert.ok(partitioned.partitionedPeers.includes(services[2].identity.nodeId));
+    await operator.heal(services[0].identity.nodeId, services[2].identity.nodeId);
+    const healed = await operator.directNeed(services[0].identity.nodeId, services[2].identity.nodeId, { proof: 'healed' });
+    assert.equal(healed.transport, 'quic-direct');
+
+    await operator.relay(services[0].identity.nodeId, { mode: 'down' });
+    const relayDownButDirectHealthy = await operator.directNeed(services[0].identity.nodeId, services[1].identity.nodeId, { proof: 'relay-independent' });
+    assert.equal(relayDownButDirectHealthy.transport, 'quic-direct');
+    await operator.relay(services[0].identity.nodeId, { mode: 'up' });
 
     const replicated = await operator.replicate(services[0].identity.nodeId, {
       namespace: 'operator-test',
@@ -99,13 +119,18 @@ test('testnet operator commands fail closed for an authenticated but unauthorize
     advertiseHost: '127.0.0.1',
     controlHost: '127.0.0.1',
     controlPort: 0,
-    operatorNodeIds: [authorized.nodeId]
+    operatorNodeIds: [authorized.nodeId],
+    faultControlEnabled: true
   });
   const unauthorized = new TestnetNetworkOperator({ identity: createIdentity(), tls, dhtRpcTimeoutMs: 1_500 });
   try {
     await unauthorized.start([service.node.localPeerRecord]);
     await assert.rejects(
       unauthorized.status(service.identity.nodeId),
+      /testnet_operator_denied|stream|QUIC/i
+    );
+    await assert.rejects(
+      unauthorized.partition(service.identity.nodeId, service.identity.nodeId),
       /testnet_operator_denied|stream|QUIC/i
     );
   } finally {

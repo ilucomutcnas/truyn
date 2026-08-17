@@ -47,6 +47,10 @@ export class TestnetNetworkOperator {
   async find(nodeId, input) { return this.command(nodeId, 'find', input); }
   async repair(nodeId, input) { return this.command(nodeId, 'repair', input); }
   async sweep(nodeId) { return this.command(nodeId, 'sweep'); }
+  async faults(nodeId) { return this.command(nodeId, 'faults'); }
+  async partition(nodeId, nodeIds) { return this.command(nodeId, 'partition', { nodeIds: Array.isArray(nodeIds) ? nodeIds : [nodeIds] }); }
+  async heal(nodeId, nodeIds = null) { return this.command(nodeId, 'heal', nodeIds == null ? {} : { nodeIds: Array.isArray(nodeIds) ? nodeIds : [nodeIds] }); }
+  async relay(nodeId, config = {}) { return this.command(nodeId, 'relay', config); }
 
   async close() { await this.node.close(); }
 }

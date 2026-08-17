@@ -80,6 +80,10 @@ function csv(value = '') {
   return [...new Set(String(value).split(',').map((item) => item.trim()).filter(Boolean))];
 }
 
+function flag(value) {
+  return ['1', 'true', 'yes', 'on'].includes(String(value || '').trim().toLowerCase());
+}
+
 function decodePem(value, label) {
   if (!value) return null;
   try { return Buffer.from(value, 'base64').toString('utf8'); }
@@ -102,7 +106,8 @@ export async function createTestnetNodeService({
   dhtReplicationFactor = 3,
   dhtWriteQuorum = 2,
   dhtRpcTimeoutMs = 5_000,
-  operatorNodeIds = []
+  operatorNodeIds = [],
+  faultControlEnabled = false
 } = {}) {
   if (!identityPath || !statePath) throw new Error('identityPath and statePath are required');
   if (!tlsKey || !tlsCert) throw new Error('tlsKey and tlsCert are required');
@@ -138,8 +143,37 @@ export async function createTestnetNodeService({
     peerRecordSequence: node.localPeerRecord?.sequence || 0,
     dhtRpcTimeoutMs: node.rpc.timeoutMs,
     operatorCount: operators.size,
+    faultControlEnabled,
     requests: requestCount
   });
+
+  const requireFaultControl = () => {
+    if (faultControlEnabled) return;
+    const error = new Error('testnet_fault_control_disabled');
+    error.code = 'TRUYN_TESTNET_FAULT_CONTROL_DISABLED';
+    error.statusCode = 404;
+    throw error;
+  };
+
+  const faultStatus = () => {
+    requireFaultControl();
+    return { enabled: true, ...node.faultSnapshot() };
+  };
+  const partition = (body = {}) => {
+    requireFaultControl();
+    const nodeIds = body.nodeIds ?? body.nodeId;
+    if (nodeIds == null) throw new Error('fault_partition_nodeIds_required');
+    return { enabled: true, ...node.partitionPeers(nodeIds) };
+  };
+  const heal = (body = {}) => {
+    requireFaultControl();
+    const nodeIds = Object.hasOwn(body, 'nodeIds') ? body.nodeIds : (Object.hasOwn(body, 'nodeId') ? body.nodeId : null);
+    return { enabled: true, ...node.healPeers(nodeIds) };
+  };
+  const relayFault = (body = {}) => {
+    requireFaultControl();
+    return { enabled: true, ...node.setRelayFault({ mode: body.mode, delayMs: int(body.delayMs, 0, { min: 0, max: 120_000 }) }) };
+  };
 
   const replicate = async (body = {}) => {
     const record = node.createRecord(body.namespace, body.key, body.value, {
@@ -208,6 +242,10 @@ export async function createTestnetNodeService({
     if (command === 'find') return find(input);
     if (command === 'repair') return repair(input);
     if (command === 'sweep') return sweep();
+    if (command === 'faults') return faultStatus();
+    if (command === 'partition') return partition(input);
+    if (command === 'heal') return heal(input);
+    if (command === 'relay') return relayFault(input);
     throw new Error('unsupported_testnet_operator_command');
   });
 
@@ -227,6 +265,10 @@ export async function createTestnetNodeService({
       if (req.method === 'GET' && url.pathname === '/find') return json(res, 200, await find({ namespace: url.searchParams.get('namespace'), key: url.searchParams.get('key'), fanout: url.searchParams.get('fanout') }));
       if (req.method === 'POST' && url.pathname === '/repair') return json(res, 200, await repair(await readJson(req)));
       if (req.method === 'POST' && url.pathname === '/sweep') return json(res, 200, await sweep());
+      if (req.method === 'GET' && url.pathname === '/faults') return json(res, 200, faultStatus());
+      if (req.method === 'POST' && url.pathname === '/faults/partition') return json(res, 200, partition(await readJson(req)));
+      if (req.method === 'POST' && url.pathname === '/faults/heal') return json(res, 200, heal(await readJson(req)));
+      if (req.method === 'POST' && url.pathname === '/faults/relay') return json(res, 200, relayFault(await readJson(req)));
       return json(res, 404, { ok: false, error: 'not_found' });
     } catch (error) {
       return json(res, error?.statusCode || 500, {
@@ -279,7 +321,8 @@ export async function runTestnetNodeFromEnv(env = process.env) {
     dhtReplicationFactor: int(env.TRUYN_DHT_REPLICATION_FACTOR, 3),
     dhtWriteQuorum: int(env.TRUYN_DHT_WRITE_QUORUM, 2),
     dhtRpcTimeoutMs: int(env.TRUYN_DHT_RPC_TIMEOUT_MS, 5_000, { min: 100, max: 120_000 }),
-    operatorNodeIds: csv(env.TRUYN_TESTNET_OPERATOR_NODE_IDS)
+    operatorNodeIds: csv(env.TRUYN_TESTNET_OPERATOR_NODE_IDS),
+    faultControlEnabled: flag(env.TRUYN_TESTNET_FAULT_CONTROL)
   });
   const address = service.controlAddress;
   process.stdout.write(`${JSON.stringify({

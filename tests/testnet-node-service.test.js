@@ -46,7 +46,11 @@ test('testnet node service exposes only local orchestration semantics and preser
     const status = await call(service, '/status');
     assert.equal(status.status, 200);
     assert.equal(status.value.nodeId, firstNodeId);
+    assert.equal(status.value.faultControlEnabled, false);
     assert.ok(status.value.quicPort > 0);
+    const faults = await call(service, '/faults');
+    assert.equal(faults.status, 404);
+    assert.equal(faults.value.error, 'TRUYN_TESTNET_FAULT_CONTROL_DISABLED');
     const mode = (await stat(common.identityPath)).mode & 0o777;
     assert.equal(mode, 0o600);
 
