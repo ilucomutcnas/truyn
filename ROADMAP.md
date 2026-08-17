@@ -26,13 +26,14 @@ Canonical status matrix: `docs/architecture/IMPLEMENTATION_STATUS.md`.
 |---|---|
 | TRUYN/1 logical protocol | Defined / partial implementation; still draft |
 | v0.1 Connect underlay | Implemented + CI-proven |
+| Signed peer-record lifecycle | Implemented + CI-proven; durable renewal/dissemination/PING repair and stale-client invalidation |
 | Real QUIC/Kademlia trust-network slice | Bounded real-testnet proven (four-node bounded topology) |
 | Semantic retrieval/index/distributed retrieval | Implemented + extensive CI/benchmark evidence |
 | Provider ownership/authorization/BYOK | Implemented reference baseline |
 | Billing safety | BYOK/owner-funded implemented; sponsored guard implemented but requires external durable store/issuer; prepaid/subscription fail closed |
 | Trustability v1/v2 | Implemented + CI/benchmark proven; bounded real-network trust slice proven |
 | Multi-cloud text/image/video providers | Implemented reference adapter paths; individual deployment availability varies |
-| Network productionization | **In progress / primary next gate** |
+| Network productionization | **In progress — Class B closed; Class C heterogeneous WAN/reachability remains next** |
 | Operations / compatibility / separate security docs | Documentation baseline implemented in current synchronization |
 | Mainnet | Not productionized / not stable |
 
@@ -100,22 +101,32 @@ Closing v0.1 is **not** a claim that Internet-scale churn, universal NAT travers
 
 ## Network Productionization Gate — **PRIMARY NEXT**
 
-Do this before treating TRUYN as a production decentralized network:
+Do this before treating TRUYN as a production decentralized network.
 
-- repeatable real multi-host public/private testnet nodes;
-- join/leave/crash/restart churn exercises;
-- Kademlia record replication, refresh, repair and expiry under churn;
-- durable routing/DHT state across process restart where required;
-- WAN partition and healing behavior;
-- NAT/reachability matrix across real network environments;
-- relay degradation, outage and fallback recovery;
-- durable admission/backpressure/queue behavior;
+Closed/CI-proven prerequisites now include:
+
+- [x] repeatable real multi-host public/private testnet — Class B four-host proof;
+- [x] crash/restart identity and durable routing/DHT state reference slice;
+- [x] DHT replication, quorum and repair reference slice;
+- [x] automatic signed peer-record renewal before expiry;
+- [x] renewed peer-record sequence persisted before dissemination;
+- [x] authenticated peer-record announcement and later-contact PING repair;
+- [x] stale P2P/DHT-RPC client invalidation on newer signed peer state;
+- [x] durable bounded admission/backpressure process-restart reference slice.
+
+Still open and required:
+
+- packet-path WAN partition and healing behavior;
+- heterogeneous multi-region / multi-provider failure domains;
+- NAT/reachability matrix across real network environments, including NAT/CGNAT;
+- relay degradation, outage and fallback recovery with production SLO evidence;
+- replicated accepted-work survival after underlying host/volume loss;
 - 100 simultaneously running real network nodes;
 - 1,000 simultaneously running real network nodes;
 - Byzantine provider/log behavior, stale-record floods, Sybil pressure, eclipse attempts and collusion exercises on the real underlay;
-- measured convergence, packet/byte overhead, p50/p95/p99 and failure recovery.
+- measured convergence, packet/byte overhead, p50/p95/p99 and failure recovery across the heterogeneous WAN gate.
 
-Real multi-host cloud productionization exercises are active work as of this synchronization. Temporary workflow success/failure is not promoted to durable maturity until a completed reproducible report is recorded in `docs/benchmarks/`.
+Class B is durable evidence. The signed peer-record lifecycle is a later CI-proven productionization prerequisite. Neither fact closes Class C heterogeneous WAN/reachability or Class D scale/adversarial gates.
 
 This gate is deliberately prioritized ahead of further semantic-router feature expansion.
 
