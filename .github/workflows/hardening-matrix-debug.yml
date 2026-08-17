@@ -1,0 +1,51 @@
+name: Hardening compatibility matrix
+
+on:
+  push:
+    branches:
+      - security/hardening-debug
+
+permissions:
+  contents: read
+
+jobs:
+  test-file:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    strategy:
+      fail-fast: false
+      matrix:
+        test:
+          - owner-provider-lock.test.js
+          - byok-private-provider.test.js
+          - byok-network-gate.test.js
+          - relay-provider-policy.test.js
+          - relay-provider-routing.test.js
+          - runtime-security.test.js
+          - runtime-backchannel-wiring.test.js
+          - runtime-combined-perimeter.test.js
+          - security-boundary.test.js
+          - provider-backchannel-guard.test.js
+          - provider-node-backchannel.test.js
+          - node-backchannel.test.js
+          - mvp.test.js
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: security/hardening-debug
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install --ignore-scripts --no-audit --no-fund
+      - name: Apply patch in workspace
+        shell: bash
+        run: |
+          PATCH_B64="$(sed -n 's/^      PATCH_B64: "\(.*\)"$/\1/p' .github/workflows/security-hardening-apply.yml)"
+          test -n "$PATCH_B64"
+          printf '%s' "$PATCH_B64" | base64 -d | gzip -d > /tmp/apply-security-hardening.mjs
+          node /tmp/apply-security-hardening.mjs
+      - name: Run selected test file
+        run: timeout 45s node --test "tests/${{ matrix.test }}"
+        env:
+          TRUYN_LOCAL_DEVELOPMENT: '1'
