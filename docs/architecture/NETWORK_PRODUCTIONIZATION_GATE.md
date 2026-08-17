@@ -1,6 +1,6 @@
 # TRUYN Network Productionization Gate
 
-Status: **IN PROGRESS**
+Status: **IN PROGRESS — Class B real multi-host milestone closed**
 
 This gate starts after v0.1 Connect. Its purpose is not to add semantic intelligence. Its purpose is to prove that the lower network remains useful under real process, host, route, storage and adversarial failures.
 
@@ -21,6 +21,8 @@ Mandatory sequence:
 9. 100 simultaneously running real network nodes;
 10. 1,000 simultaneously running real network nodes;
 11. Byzantine / Sybil / collusion exercises.
+
+The sequence is evidence-driven. Closing the Class B multi-host milestone does not close later Class C/D gates.
 
 ## Evidence classes
 
@@ -55,10 +57,17 @@ The productionization branch extends the generic `TruynNetworkNode` underlay wit
 - read recovery from surviving replicas;
 - repair that replaces a failed holder with another live routing candidate;
 - bounded DHT control-RPC failure detection and stale-client eviction;
+- P2P QUIC client cache binding to signed peer-record sequence + endpoint;
+- DHT RPC QUIC client cache binding to signed peer-record sequence + endpoint;
+- deterministic stale-client invalidation when a newer signed peer record is accepted;
 - deterministic peer partition/heal fault injection;
 - deterministic relay `healthy / degraded / down` fault modes;
+- explicit bounded admission/backpressure before handler execution;
+- durable accepted-work inbox for process-restart recovery with persisted completed-result replay;
 - standalone testnet node process with persistent identity/state and QUIC endpoint;
 - signed, allowlisted `testnet.operator.*` operations transported over the same authenticated QUIC/signed-envelope path as normal network traffic.
+
+The connection lifecycle intentionally does not blindly replay an application envelope after an ambiguous transport failure. A blind retry could duplicate a non-idempotent external side effect. New signed peer state invalidates the stale connection before a later send instead.
 
 The operator path is a testnet/failure-harness capability. It is not a public mainnet administration API. An authenticated but non-allowlisted node is denied.
 
@@ -76,25 +85,67 @@ CI has executable proof for:
 - direct path failure during an injected peer partition and restoration after heal;
 - relay outage not affecting healthy direct QUIC;
 - explicit degraded relay fallback latency;
+- explicit admission/backpressure with no silent acceptance beyond capacity;
+- durable pending-work recovery after process restart;
+- persisted completed-result replay without re-executing the accepted handler;
+- P2P stale-client invalidation on a newer signed peer record;
+- DHT RPC stale-client invalidation on a newer signed peer record;
 - signed QUIC-only operator orchestration and fail-closed operator authorization.
 
 These results are not relabeled as WAN, NAT, real 100-node or mainnet evidence.
 
-## Real multi-host gate
+Durable accepted-work proof is currently a **process-restart + same durable storage** guarantee. It does not prove replicated queue survival after loss of the underlying host/volume, and it does not claim transactional exactly-once external side effects.
 
-The next acceptable proof requires at least four independent externally reachable node runtimes and must demonstrate, at minimum:
+## Currently proved — Class B real multi-host
 
-1. four distinct TRUYN node identities;
-2. four distinct peer endpoints;
-3. signed operator bootstrap over QUIC;
-4. remote node A → remote node C signed `NEED` over direct QUIC with zero relay use;
-5. a 3-ack DHT replication write;
-6. a replica read initiated through another remote node;
-7. an injected partition causing fail-closed direct routing;
-8. healing restoring direct routing;
-9. ephemeral infrastructure cleanup.
+The four-host Azure proof on 2026-08-17 closes the minimum real multi-host testnet gate.
 
-A cloud IAM/provider-registration failure before nodes are created is recorded as an infrastructure blocker, not a TRUYN network failure and not a passing network result.
+Accepted evidence:
+
+- benchmark: `docs/benchmarks/NETWORK_PRODUCTIONIZATION_AZURE_4HOST_2026-08-17.md`;
+- tested commit: `fd6f52e2e9ad1d08ba9cbe2f4a3b2d196b494afa`;
+- code CI run: `32006370869`;
+- accepted Azure workflow run: `32007414979`;
+- four independent VM runtimes;
+- four distinct signed TRUYN identities;
+- four distinct externally routable QUIC endpoints;
+- direct signed NEED over public UDP/QUIC with zero relay calls;
+- measured direct NEED latency: 81 ms;
+- injected peer partition failed closed and heal restored the direct path;
+- 3-of-3 DHT replication acknowledgement;
+- remote replica read through another host;
+- real remote-holder process stop;
+- replacement repair to three acknowledgements in 5,097 ms;
+- failed holder excluded from repaired placement;
+- restart with identity continuity and increased peer-record sequence;
+- pre-existing DHT client invalidated/reconnected after the newer signed record;
+- ephemeral cloud cleanup PASS.
+
+The measured direct and repair latencies are guest-side TRUYN control-request measurements. GitHub Actions → Azure VM RunCommand latency is excluded.
+
+### Test-only peer lease
+
+The accepted Azure harness used `TRUYN_PEER_RECORD_TTL_MS=1800000` (30 minutes) because serial Azure VM RunCommand orchestration is much slower than normal peer-to-peer operation and can exceed the five-minute reference/default peer lease before assertions execute.
+
+This is a benchmark-harness override only. The protocol/reference default remains unchanged. Automatic peer-record renewal and dissemination before lease expiry remains an open productionization item.
+
+## Class B acceptance criteria — closed
+
+The Class B proof demonstrated all required minimums:
+
+1. four distinct TRUYN node identities — PASS;
+2. four distinct peer endpoints — PASS;
+3. signed peer-record bootstrap — PASS;
+4. remote node A → remote node C signed `NEED` over direct QUIC with zero relay use — PASS;
+5. a 3-ack DHT replication write — PASS;
+6. a replica read initiated through another remote node — PASS;
+7. an injected partition causing fail-closed direct routing — PASS;
+8. healing restoring direct routing — PASS;
+9. ephemeral infrastructure cleanup — PASS.
+
+The accepted run additionally proved a real remote-holder process failure, repair, restart identity continuity, peer-record sequence advancement and DHT stale-client invalidation/reconnection.
+
+A cloud IAM/provider-registration or cloud-control-plane failure before nodes are created remains an infrastructure blocker rather than a TRUYN network result.
 
 ## Required measurements
 
@@ -122,10 +173,13 @@ Credentials, private cloud identities, private origins, live account/resource id
 
 Until separate evidence closes them, TRUYN does **not** claim completion of:
 
-- packet-path WAN partition/healing;
+- packet-path WAN partition/healing; the Class B partition was deterministic TRUYN peer fault injection, not physical/route-level WAN loss;
+- heterogeneous multi-region / multi-provider failure-domain proof;
 - real NAT/CGNAT traversal coverage;
+- automatic signed peer-record lease renewal/dissemination under long-lived operation;
 - relay outage production SLOs;
-- durable queue recovery across host/process loss;
+- replicated accepted-work queue survival after underlying host/volume loss;
+- transactional exactly-once semantics for arbitrary external side effects;
 - 100 real simultaneously running nodes;
 - 1,000 real simultaneously running nodes;
 - Byzantine/Sybil/collusion resistance on the productionized underlay;
