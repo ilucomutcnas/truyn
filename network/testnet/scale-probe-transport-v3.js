@@ -1,6 +1,5 @@
 import { AdversarialScaleNode } from './scale-node.js';
 
-const originalFindPeer = AdversarialScaleNode.prototype.findPeer;
 const originalProbe = AdversarialScaleNode.prototype.probe;
 
 function peerIdFromTarget(target) {
@@ -23,34 +22,6 @@ if (!AdversarialScaleNode.prototype.__truynScaleProbeTransportV3) {
     enumerable: false,
     writable: false
   });
-
-  AdversarialScaleNode.prototype.findPeer = async function findPeerWithRoutableCache(targetPeerId, options = {}) {
-    const peerInfo = await originalFindPeer.call(this, targetPeerId, options);
-    if (!peerInfo?.id) return peerInfo;
-
-    const peerId = peerInfo.id.toString();
-    const multiaddrs = Array.from(peerInfo.multiaddrs || []);
-    this.__truynScaleRoutablePeerInfoV3 ||= new Map();
-
-    if (multiaddrs.length > 0) {
-      this.__truynScaleRoutablePeerInfoV3.set(peerId, multiaddrs);
-      return peerInfo;
-    }
-
-    // js-libp2p can satisfy a follow-up findPeer from local routing/peer state with
-    // the correct PeerId but no dialable addresses. If this same requester already
-    // learned addresses for this exact PeerId from an earlier successful Kad
-    // lookup, retain those addresses for the immediately following signed probe.
-    // The cache is keyed by transport PeerId, so a restarted node's old addresses
-    // cannot be reused after its PeerId rotation.
-    const cached = this.__truynScaleRoutablePeerInfoV3.get(peerId);
-    if (cached?.length > 0) {
-      await this.node.peerStore.merge(peerInfo.id, { multiaddrs: cached }).catch(() => null);
-      return { ...peerInfo, multiaddrs: cached };
-    }
-
-    return peerInfo;
-  };
 
   AdversarialScaleNode.prototype.probe = async function probeWithResolvedTransport(target, value, options = {}) {
     const expectedPeerId = peerIdFromTarget(target);
