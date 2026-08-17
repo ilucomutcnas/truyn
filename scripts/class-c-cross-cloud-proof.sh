@@ -59,6 +59,22 @@ for old, new in checks.items():
     if old not in s:
         raise SystemExit(f'expected Class C bootstrap check not found: {old[:40]}')
     s = s.replace(old, new)
+
+# On the cross-cloud direct gate retain the HTTP error body long enough to print
+# only the bounded application error code. Do not print peer records, node IDs,
+# addresses, cloud IDs, or request payloads.
+old_direct = '''P="$(jq -nc --arg id "$A0_ID" '{nodeId:$id,input:{proof:"gcp-cloudrun-to-azure-cross-cloud"}}')"; D1="$(cr_call POST /need "$P")"; [[ "$(jq -r '.transport' <<<"$D1")" == quic-direct ]] || fail gcp_to_azure_direct 40'''
+new_direct = '''P="$(jq -nc --arg id "$A0_ID" '{nodeId:$id,input:{proof:"gcp-cloudrun-to-azure-cross-cloud"}}')"
+D1="$(curl -sS --max-time 70 -X POST -H 'content-type: application/json' --data-binary "$P" "$G_URL/need")"
+if [[ "$(jq -r '.transport // empty' <<<"$D1" 2>/dev/null)" != quic-direct ]]; then
+  diag="$(jq -r '.error // "unknown_direct_failure"' <<<"$D1" 2>/dev/null || printf 'unparseable_direct_failure')"
+  diag="$(printf '%s' "$diag" | tr -cd 'A-Za-z0-9_.:-' | cut -c1-128)"
+  echo "TRUYN_CLASS_C_DIRECT_ERROR=$diag"
+  fail gcp_to_azure_direct 40
+fi'''
+if old_direct not in s:
+    raise SystemExit('expected cross-cloud direct gate not found')
+s = s.replace(old_direct, new_direct)
 p.write_text(s)
 PY
 
