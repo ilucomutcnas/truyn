@@ -51,6 +51,7 @@ export class TestnetNetworkOperator {
   async partition(nodeId, nodeIds) { return this.command(nodeId, 'partition', { nodeIds: Array.isArray(nodeIds) ? nodeIds : [nodeIds] }); }
   async heal(nodeId, nodeIds = null) { return this.command(nodeId, 'heal', nodeIds == null ? {} : { nodeIds: Array.isArray(nodeIds) ? nodeIds : [nodeIds] }); }
   async relay(nodeId, config = {}) { return this.command(nodeId, 'relay', config); }
+  async store(nodeId, targetNodeId, record) { return this.command(nodeId, 'store', { nodeId: targetNodeId, record }); }
 
   async close() { await this.node.close(); }
 }
