@@ -3,6 +3,7 @@ import { createEnvelope } from '../core/protocol/index.js';
 import { DurableAcceptedWorkInbox } from './admission/durable-inbox.js';
 import { KademliaRecordStore, createDhtRecord } from './dht/kademlia.js';
 import { PeerDiscovery, createPeerRecord, verifyPeerRecord } from './discovery/peer-discovery.js';
+import { PeerRecordLeaseManager } from './discovery/peer-record-lease.js';
 import { QuicDiscoveryRpc, createQuicDiscoveryControlHandler } from './discovery/quic-rpc.js';
 import { NetworkFaultController } from './faults/controller.js';
 import { DhtReplicationManager } from './replication/dht-replication.js';
@@ -14,6 +15,7 @@ export class TruynNetworkNode {
   constructor({
     identity = createIdentity(), host = '0.0.0.0', port = 0, advertiseHost = null, tls,
     k = 20, alpha = 3, relayFallback = null, nat = null, capabilities = [], peerRecordTtlMs = 300_000,
+    peerLeaseEnabled = true, peerRenewBeforeMs = null, peerGossipIntervalMs = null, peerGossipFanout = 8,
     maxInFlight = 64, maxQueued = 256, statePath = null, dhtReplicationFactor = 3, dhtWriteQuorum = 2,
     dhtRpcTimeoutMs = 5_000, faultController = null, workInboxPath = null, workInboxMaxCompleted = 10_000
   } = {}) {
@@ -29,6 +31,7 @@ export class TruynNetworkNode {
     this.nat = nat;
     this.capabilities = [...new Set(capabilities)];
     this.peerRecordTtlMs = peerRecordTtlMs;
+    this.peerLeaseEnabled = peerLeaseEnabled !== false;
     this.sequence = 0;
     this.started = false;
     this.localPeerRecord = null;
@@ -60,6 +63,16 @@ export class TruynNetworkNode {
       faults: this.faults
     });
     this.quic.onControl(createQuicDiscoveryControlHandler(this.discovery, { recordStore: this.recordStore }));
+    this.peerLeases = this.peerLeaseEnabled ? new PeerRecordLeaseManager({
+      discovery: this.discovery,
+      rpc: this.rpc,
+      getLocalRecord: () => this.localPeerRecord ? structuredClone(this.localPeerRecord) : null,
+      renewLocalRecord: () => this.refreshPeerRecord(),
+      ttlMs: peerRecordTtlMs,
+      renewBeforeMs: peerRenewBeforeMs,
+      gossipIntervalMs: peerGossipIntervalMs,
+      fanout: peerGossipFanout
+    }) : null;
   }
 
   snapshotState() {
@@ -141,20 +154,29 @@ export class TruynNetworkNode {
     this.started = true;
     await this.persistState();
     await this.recoverAcceptedWork();
+    this.peerLeases?.start();
     return structuredClone(this.localPeerRecord);
   }
 
-  refreshPeerRecord({ nat = this.nat, capabilities = this.capabilities } = {}) {
+  refreshPeerRecord({ nat = this.nat, capabilities = this.capabilities, endpoints = this.localPeerRecord?.endpoints } = {}) {
     if (!this.started) throw new Error('network node is not started');
     this.nat = nat;
     this.capabilities = [...new Set(capabilities)];
-    const endpoint = this.localPeerRecord.endpoints[0];
+    const normalizedEndpoints = [...new Set((endpoints || []).filter(Boolean))];
+    if (normalizedEndpoints.length === 0) throw new Error('peer record endpoints are required');
     this.sequence += 1;
-    this.localPeerRecord = createPeerRecord({ identity: this.identity, endpoints: [endpoint], sequence: this.sequence,
+    this.localPeerRecord = createPeerRecord({ identity: this.identity, endpoints: normalizedEndpoints, sequence: this.sequence,
       ttlMs: this.peerRecordTtlMs, capabilities: this.capabilities, nat: this.nat });
     this.schedulePersist();
     return structuredClone(this.localPeerRecord);
   }
+
+  async announcePeerRecord(options = {}) {
+    if (!this.peerLeases) return { disabled: true };
+    return this.peerLeases.runOnce(options);
+  }
+
+  peerLeaseSnapshot() { return this.peerLeases?.snapshot() || { running: false, disabled: true }; }
 
   bootstrap(records = []) {
     const results = [];
@@ -163,6 +185,7 @@ export class TruynNetworkNode {
       if (!verification.ok) { results.push({ accepted: false, reason: verification.reason }); continue; }
       results.push(this.discovery.ingest(record));
     }
+    if (this.peerLeases && results.some((entry) => entry.accepted)) void this.peerLeases.announce().catch(() => {});
     return results;
   }
 
@@ -194,6 +217,7 @@ export class TruynNetworkNode {
   faultSnapshot() { return this.faults.snapshot(); }
 
   async close() {
+    this.peerLeases?.stop();
     if (this.stateReady) await this.persistState();
     this.started = false;
     await this.quic.close();
