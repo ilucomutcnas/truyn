@@ -29,12 +29,13 @@ export class ExplicitBackpressureQueue extends BoundedAdmissionQueue {
 }
 
 export class DirectFirstP2P {
-  constructor({ quicTransport, discovery, relayFallback = null, maxInFlight = 64, maxQueued = 256, faults = null } = {}) {
+  constructor({ quicTransport, discovery, relayFallback = null, natTraversal = null, maxInFlight = 64, maxQueued = 256, faults = null } = {}) {
     if (!quicTransport) throw new Error('quicTransport is required');
     if (!discovery) throw new Error('peer discovery is required');
     this.quic = quicTransport;
     this.discovery = discovery;
     this.relayFallback = relayFallback;
+    this.natTraversal = natTraversal;
     this.faults = faults;
     this.connections = new Map();
     this.queue = new ExplicitBackpressureQueue({ maxInFlight, maxQueued });
@@ -47,9 +48,9 @@ export class DirectFirstP2P {
     try { await this.quic.disconnect(existing.client); } catch { /* stale connection disposal is best-effort */ }
   }
 
-  async #directClient(peerRecord) {
-    const selected = selectedQuicEndpoint(peerRecord);
-    if (!selected) throw new Error('peer_has_no_quic_endpoint');
+  async #directClient(peerRecord, selectedOverride = null) {
+    const selected = selectedOverride || selectedQuicEndpoint(peerRecord);
+    if (!selected?.endpoint || !selected?.value) throw new Error('peer_has_no_quic_endpoint');
     const binding = peerRecordBinding(peerRecord, selected.value);
     const existing = this.connections.get(peerRecord.nodeId);
     if (existing?.binding === binding) return existing.client;
@@ -57,6 +58,13 @@ export class DirectFirstP2P {
     const client = await this.quic.connect(selected.endpoint);
     this.connections.set(peerRecord.nodeId, { client, binding });
     return client;
+  }
+
+  async #selectedRoute(record) {
+    if (!this.natTraversal?.eligible?.(record)) return null;
+    const prepared = await this.natTraversal.prepare(record);
+    if (!prepared?.endpoint || !prepared?.endpointValue) throw new Error('nat_traversal_missing_endpoint');
+    return { value: prepared.endpointValue, endpoint: prepared.endpoint, traversal: prepared };
   }
 
   async send(peerNodeId, envelope, { allowRelayFallback = true } = {}) {
@@ -67,9 +75,13 @@ export class DirectFirstP2P {
       if (record) {
         try {
           this.faults?.assertPeer(peerNodeId, 'direct');
-          const client = await this.#directClient(record);
+          // NAT preparation happens before the application envelope is attempted. We never
+          // blindly replay an envelope after an ambiguous QUIC failure because that could
+          // duplicate an external side effect.
+          const prepared = await this.#selectedRoute(record);
+          const client = await this.#directClient(record, prepared);
           const result = await this.quic.sendEnvelope(client, envelope);
-          return { transport: 'quic-direct', result };
+          return { transport: 'quic-direct', result, natTraversal: prepared?.traversal ? 'coordinated-punch' : null };
         } catch (error) {
           directError = error;
           await this.#discardConnection(peerNodeId);
