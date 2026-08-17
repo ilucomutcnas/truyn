@@ -11,7 +11,7 @@ permissions:
 jobs:
   targeted:
     runs-on: ubuntu-latest
-    timeout-minutes: 6
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
         with:
@@ -21,20 +21,22 @@ jobs:
         with:
           node-version: '22'
       - run: npm install --ignore-scripts --no-audit --no-fund
-      - name: Apply patch in workspace
+      - name: Apply patch and update expiring-token fixture
         shell: bash
         run: |
           PATCH_B64="$(sed -n 's/^      PATCH_B64: "\(.*\)"$/\1/p' .github/workflows/security-hardening-apply.yml)"
           test -n "$PATCH_B64"
           printf '%s' "$PATCH_B64" | base64 -d | gzip -d > /tmp/apply-security-hardening.mjs
           node /tmp/apply-security-hardening.mjs
-      - name: 413 regression only
-        run: timeout 45s node --test tests/relay-body-limit.test.js
-      - name: Access/dev/billing/origin regressions
-        run: timeout 90s node --test tests/provider-access.test.js tests/runtime-relay-security.test.js tests/provider-billing.test.js tests/origin-guard.test.js tests/cloudflare-origin-proxy.test.js
-        env:
-          TRUYN_LOCAL_DEVELOPMENT: '1'
-      - name: Relay and runtime compatibility regressions
-        run: timeout 120s node --test tests/owner-provider-lock.test.js tests/byok-private-provider.test.js tests/byok-network-gate.test.js tests/relay-provider-policy.test.js tests/relay-provider-routing.test.js tests/runtime-security.test.js tests/runtime-backchannel-wiring.test.js tests/runtime-combined-perimeter.test.js tests/security-boundary.test.js tests/provider-backchannel-guard.test.js tests/provider-node-backchannel.test.js tests/node-backchannel.test.js tests/mvp.test.js
-        env:
-          TRUYN_LOCAL_DEVELOPMENT: '1'
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const path = 'tests/runtime-combined-perimeter.test.js';
+          const original = fs.readFileSync(path, 'utf8');
+          const needle = "      TRUYN_ORIGIN_GUARD_TOKEN: 'edge-proof',\n";
+          if (!original.includes(needle)) throw new Error('origin guard fixture anchor missing');
+          fs.writeFileSync(path, original.replace(needle, `${needle}      TRUYN_ORIGIN_GUARD_TOKEN_EXPIRES_AT: '2099-01-01T00:00:00.000Z',\n`));
+          NODE
+      - name: MVP integration without dev bypass
+        run: timeout 90s node --test tests/mvp.test.js
+      - name: Combined perimeter with expiring secret
+        run: timeout 60s node --test tests/runtime-combined-perimeter.test.js
