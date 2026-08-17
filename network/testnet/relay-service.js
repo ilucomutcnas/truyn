@@ -134,7 +134,7 @@ export async function createTestnetRelayService({
           if (!res.writableEnded) json(res, 204, null);
         }, waitMs);
         waiters.set(nodeId, { res, timer });
-        req.once('close', () => {
+        res.once('close', () => {
           const current = waiters.get(nodeId);
           if (current?.res === res) { clearTimeout(current.timer); waiters.delete(nodeId); }
         });
