@@ -1,6 +1,7 @@
 import { createHmac, randomFillSync, randomBytes, timingSafeEqual } from 'node:crypto';
 import { QUICSocket, QUICServer, QUICClient, events } from '@matrixai/quic';
 import { verifyEnvelope } from '../../core/protocol/index.js';
+import { BoundedAdmissionQueue } from '../admission/bounded-queue.js';
 import { createSessionHello, createSessionAccept, verifySessionHello, verifySessionAccept, sessionHandshakeBinding, sessionId, SessionReplayCache } from '../sessions/authenticated-session.js';
 
 export const TRUYN_QUIC_ALPN = 'truyn/1';
@@ -71,7 +72,7 @@ function boundedHandlerError(error, fallback) {
 }
 
 export class TruynQuicTransport {
-  constructor({ identity, host = '0.0.0.0', port = 0, tls, maxMessageBytes = 1_048_576 } = {}) {
+  constructor({ identity, host = '0.0.0.0', port = 0, tls, maxMessageBytes = 1_048_576, maxInboundInFlight = 64, maxInboundQueued = 256 } = {}) {
     if (!identity?.nodeId || !identity?.publicKeyPem || !identity?.privateKeyPem) throw new Error('QUIC transport identity is required');
     if (!tls?.key || !tls?.cert) throw new Error('QUIC server TLS key and certificate are required');
     this.identity = identity;
@@ -85,6 +86,12 @@ export class TruynQuicTransport {
     this.serverSessions = new WeakMap();
     this.clientSessions = new WeakMap();
     this.replayCache = new SessionReplayCache();
+    this.inboundAdmission = new BoundedAdmissionQueue({
+      maxInFlight: maxInboundInFlight,
+      maxQueued: maxInboundQueued,
+      errorCode: 'TRUYN_BACKPRESSURE',
+      errorMessage: 'inbound_backpressure'
+    });
     this.envelopeHandler = null;
     this.controlHandler = null;
   }
@@ -98,6 +105,8 @@ export class TruynQuicTransport {
     this.controlHandler = typeof handler === 'function' ? handler : null;
     return this;
   }
+
+  admissionSnapshot() { return this.inboundAdmission.snapshot(); }
 
   async start() {
     await this.socket.start({ host: this.host, port: this.port, reuseAddr: true });
@@ -169,7 +178,11 @@ export class TruynQuicTransport {
       if (message.envelope.from !== session.peerNodeId || message.envelope.publicKey !== session.peerPublicKey) { await writeJson(stream, { ok: false, error: 'quic_session_sender_mismatch' }); return; }
       if (!this.envelopeHandler) { await writeJson(stream, { ok: false, error: 'no_envelope_handler' }); return; }
       try {
-        const result = await this.envelopeHandler(message.envelope, { peerNodeId: session.peerNodeId, transport: 'quic', connection });
+        const result = await this.inboundAdmission.run(() => this.envelopeHandler(message.envelope, {
+          peerNodeId: session.peerNodeId,
+          transport: 'quic',
+          connection
+        }));
         await writeJson(stream, { ok: true, result: result ?? null });
       } catch (error) {
         await writeJson(stream, { ok: false, error: boundedHandlerError(error, 'quic_envelope_handler_failed') });

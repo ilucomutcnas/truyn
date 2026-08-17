@@ -1,3 +1,5 @@
+import { BoundedAdmissionQueue } from '../admission/bounded-queue.js';
+
 function parseQuicEndpoint(value) {
   if (typeof value !== 'string' || !value.startsWith('quic://')) return null;
   try {
@@ -8,30 +10,9 @@ function parseQuicEndpoint(value) {
   } catch { return null; }
 }
 
-export class ExplicitBackpressureQueue {
+export class ExplicitBackpressureQueue extends BoundedAdmissionQueue {
   constructor({ maxInFlight = 64, maxQueued = 256 } = {}) {
-    this.maxInFlight = maxInFlight;
-    this.maxQueued = maxQueued;
-    this.inFlight = 0;
-    this.queue = [];
-  }
-
-  async run(task) {
-    if (this.inFlight >= this.maxInFlight) {
-      if (this.queue.length >= this.maxQueued) {
-        const error = new Error('p2p_backpressure');
-        error.code = 'TRUYN_BACKPRESSURE';
-        throw error;
-      }
-      await new Promise((resolve) => this.queue.push(resolve));
-    }
-    this.inFlight += 1;
-    try { return await task(); }
-    finally {
-      this.inFlight -= 1;
-      const next = this.queue.shift();
-      if (next) next();
-    }
+    super({ maxInFlight, maxQueued, errorCode: 'TRUYN_BACKPRESSURE', errorMessage: 'p2p_backpressure' });
   }
 }
 
@@ -88,6 +69,7 @@ export class DirectFirstP2P {
   }
 
   forget(peerNodeId) { this.connections.delete(peerNodeId); }
+  admissionSnapshot() { return this.queue.snapshot(); }
 }
 
 export { parseQuicEndpoint };
