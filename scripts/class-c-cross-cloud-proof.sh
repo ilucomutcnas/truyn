@@ -27,6 +27,19 @@ s = s.replace(
     'npm install --ignore-scripts --no-audit --no-fund',
     'npm install --no-audit --no-fund'
 )
+# Azure Run Command invokes RunShellScript payloads through /bin/sh. The Class C
+# bootstrap intentionally uses bash-only safety/options and helpers, so encode the
+# payload and invoke it explicitly with /bin/bash on every proof VM.
+old_remote = '''az_remote(){ retry az vm run-command invoke -g "$AZ_RG" -n "$1" --command-id RunShellScript --scripts "$2" --query 'value[0].message' -o tsv --only-show-errors; }'''
+new_remote = '''az_remote(){
+  local vm="$1" body="$2" enc remote
+  enc="$(printf '%s' "$body" | base64 -w0)"
+  remote="printf '%s' '$enc' | base64 -d >/tmp/truyn-run.sh; chmod 700 /tmp/truyn-run.sh; /bin/bash /tmp/truyn-run.sh"
+  retry az vm run-command invoke -g "$AZ_RG" -n "$vm" --command-id RunShellScript --scripts "$remote" --query 'value[0].message' -o tsv --only-show-errors
+}'''
+if old_remote not in s:
+    raise SystemExit('expected az_remote definition not found')
+s = s.replace(old_remote, new_remote)
 s = s.replace(
     'systemctl --no-pager status truyn-testnet.service || true; exit 31',
     "systemctl --no-pager status truyn-testnet.service || true; "
