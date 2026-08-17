@@ -13,6 +13,7 @@ Human-facing documentation for TRUYN architecture, factual implementation status
 ## Core architecture
 
 - [v0.1 Connect Network Underlay](architecture/NETWORK_UNDERLAY_V01.md) — implemented real QUIC/UDP, authenticated peer sessions, Kademlia discovery/state RPC, direct-first P2P, STUN/same-port hole punching, backpressure and relay fallback.
+- [Network Productionization Gate](architecture/NETWORK_PRODUCTIONIZATION_GATE.md) — durability, bounded admission, restart continuity, DHT replication/repair and controlled failure requirements proven by the bounded Azure four-host gate.
 - [Provider Ownership](architecture/PROVIDER_OWNERSHIP.md) — implemented node-level provider owner/visibility boundary and future account/tenant model.
 - [Authorization Model](architecture/AUTHORIZATION_MODEL.md) — implemented fail-closed provider authorization baseline and remaining control-plane layers.
 - [Relay Security](architecture/RELAY_SECURITY.md) — public relay, owner control plane, provider backchannel, origin guard, edge proxy and legacy-route rules.
@@ -67,6 +68,7 @@ Current software is `0.1.0-dev`; `TRUYN/1` remains draft. No stable mainnet comp
 - [Benchmark evidence policy and index](benchmarks/README.md) — append-only evidence rules/current public record.
 - [v0.1 Connect Gate — 2026-08-17](benchmarks/V01_CONNECT_GATE_2026-08-17.md) — full-suite proof for real QUIC direct messaging, relay-free Kademlia discovery/state, STUN/same-port hole punching and backpressure.
 - [Kademlia/QUIC Trust Testnet — 2026-08-17](benchmarks/KADEMLIA_QUIC_TRUST_TESTNET_2026-08-17.md) — bounded four-node real QUIC/Kademlia trust-lifecycle proof under churn with zero relay calls in the tested path.
+- [Network Productionization Azure Four-Host Gate — 2026-08-17](benchmarks/NETWORK_PRODUCTIONIZATION_AZURE_4HOST_2026-08-17.md) — Class B direct-QUIC, partition/heal, RF=3 replication, holder-crash repair and restart-continuity proof on four Azure hosts.
 - [Cross-Cloud A/B — 2026-08-15](benchmarks/CROSS_CLOUD_AB_2026-08-15.md) — immutable paired baseline.
 - [Cross-Cloud 8× Optimization — 2026-08-15](benchmarks/CROSS_CLOUD_8X_OPTIMIZATION_2026-08-15.md) — fixed hot-path optimization gate.
 - [Context Efficiency — 2026-08-15](benchmarks/CONTEXT_EFFICIENCY_2026-08-15.md) — content-addressed context economic gate.
