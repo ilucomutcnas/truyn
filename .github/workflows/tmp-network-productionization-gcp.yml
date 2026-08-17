@@ -1,0 +1,187 @@
+name: Temporary Network Productionization GCP
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/tmp-network-productionization-gcp.yml'
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  gcp-multihost:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      TEST_COMMIT: d9369e83ff7ff71900f9465aa2dc025921ad32e1
+      GCP_WIF_PROVIDER_VALUE: ${{ vars.GCP_WIF_PROVIDER || secrets.GCP_WIF_PROVIDER }}
+      GCP_DEPLOYER_SERVICE_ACCOUNT_EMAIL_VALUE: ${{ vars.GCP_DEPLOYER_SERVICE_ACCOUNT_EMAIL || secrets.GCP_DEPLOYER_SERVICE_ACCOUNT_EMAIL }}
+      GCP_REGION_VALUE: ${{ vars.GCP_REGION || secrets.GCP_REGION }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ env.GCP_WIF_PROVIDER_VALUE }}
+          service_account: ${{ env.GCP_DEPLOYER_SERVICE_ACCOUNT_EMAIL_VALUE }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - name: Run four-host public QUIC durability gate
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          PREFIX="truyn-net-${GITHUB_RUN_ID}"
+          NETWORK="${PREFIX}-net"; SUBNET="${PREFIX}-subnet"; TAG="${PREFIX}-node"
+          FW_QUIC="${PREFIX}-quic"; FW_SSH="${PREFIX}-ssh"
+          VMS=(); IPS=(); NODEIDS=(); RECORDS=(); gate_ok=0
+          mask(){ [[ -n "${1:-}" ]] && echo "::add-mask::$1"; }
+
+          PROJECT_ID="$(gcloud config get-value project 2>/dev/null || true)"
+          if [[ -z "$PROJECT_ID" || "$PROJECT_ID" == '(unset)' ]]; then
+            PROJECT_ID="${GCP_DEPLOYER_SERVICE_ACCOUNT_EMAIL_VALUE#*@}"
+            PROJECT_ID="${PROJECT_ID%.iam.gserviceaccount.com}"
+            gcloud config set project "$PROJECT_ID" >/dev/null
+          fi
+          REGION="${GCP_REGION_VALUE:-us-central1}"
+          ZONE="$(gcloud compute zones list --filter="region:($REGION)" --format='value(name)' --limit=1 2>/dev/null || true)"
+          mask "$PROJECT_ID"; mask "$REGION"
+          if [[ -z "$ZONE" ]]; then
+            gcloud services enable compute.googleapis.com --quiet >/dev/null 2>&1 || { echo 'TRUYN_GCP_MULTIHOST=FAIL reason=compute_api_unavailable'; exit 10; }
+            ZONE="$(gcloud compute zones list --filter="region:($REGION)" --format='value(name)' --limit=1)"
+          fi
+          [[ -n "$ZONE" ]] || { echo 'TRUYN_GCP_MULTIHOST=FAIL reason=zone_unavailable'; exit 11; }
+          mask "$ZONE"; mask "$NETWORK"; mask "$SUBNET"; mask "$TAG"; mask "$FW_QUIC"; mask "$FW_SSH"
+          RUNNER_IP="$(curl -fsS https://api.ipify.org)"; mask "$RUNNER_IP"
+
+          cleanup(){
+            set +e
+            for vm in "${VMS[@]:-}"; do [[ -z "$vm" ]] || gcloud compute instances delete "$vm" --zone "$ZONE" --quiet >/dev/null 2>&1 || true; done
+            gcloud compute firewall-rules delete "$FW_QUIC" "$FW_SSH" --quiet >/dev/null 2>&1 || true
+            gcloud compute networks subnets delete "$SUBNET" --region "$REGION" --quiet >/dev/null 2>&1 || true
+            gcloud compute networks delete "$NETWORK" --quiet >/dev/null 2>&1 || true
+            [[ "$gate_ok" == 1 ]] && echo 'TRUYN_GCP_MULTIHOST_CLEANUP=PASS ephemeral_resources_removed=true' || echo 'TRUYN_GCP_MULTIHOST_CLEANUP=EXECUTED gate_failed=true'
+          }
+          trap cleanup EXIT
+
+          gcloud compute networks create "$NETWORK" --subnet-mode=custom --quiet >/dev/null
+          gcloud compute networks subnets create "$SUBNET" --network "$NETWORK" --region "$REGION" --range 10.241.0.0/24 --quiet >/dev/null
+          gcloud compute firewall-rules create "$FW_QUIC" --network "$NETWORK" --direction INGRESS --action ALLOW --rules udp:4433 --source-ranges 0.0.0.0/0 --target-tags "$TAG" --quiet >/dev/null
+          gcloud compute firewall-rules create "$FW_SSH" --network "$NETWORK" --direction INGRESS --action ALLOW --rules tcp:22 --source-ranges "${RUNNER_IP}/32" --target-tags "$TAG" --quiet >/dev/null
+
+          for i in 0 1 2 3; do
+            vm="${PREFIX}-${i}"; VMS+=("$vm"); mask "$vm"
+            gcloud compute instances create "$vm" --zone "$ZONE" --machine-type e2-small --subnet "$SUBNET" --tags "$TAG" --image-family ubuntu-2204-lts --image-project ubuntu-os-cloud --boot-disk-size 10GB --quiet >/dev/null
+            ip="$(gcloud compute instances describe "$vm" --zone "$ZONE" --format='get(networkInterfaces[0].accessConfigs[0].natIP)')"
+            [[ -n "$ip" ]] || { echo 'TRUYN_GCP_MULTIHOST=FAIL reason=public_ip_missing'; exit 12; }
+            IPS+=("$ip"); mask "$ip"
+          done
+
+          remote_raw(){
+            local vm="$1" script="$2" out=''
+            for attempt in $(seq 1 20); do
+              if out="$(gcloud compute ssh "$vm" --zone "$ZONE" --quiet --ssh-flag='-o ConnectTimeout=10' --command "$script" 2>/dev/null)"; then printf '%s' "$out"; return 0; fi
+              sleep 3
+            done
+            return 1
+          }
+          call_json(){
+            local vm="$1" method="$2" path="$3" payload="${4:-}" encoded='' script out result
+            [[ -z "$payload" ]] || encoded="$(printf '%s' "$payload" | base64 -w0)"
+            if [[ -n "$encoded" ]]; then
+              script="set -euo pipefail; R=\$(printf '%s' '$encoded' | base64 -d | curl -fsS --max-time 150 -X '$method' -H 'content-type: application/json' --data-binary @- 'http://127.0.0.1:8788$path'); printf 'TRUYN_RESULT=%s\\n' \"\$R\""
+            else
+              script="set -euo pipefail; R=\$(curl -fsS --max-time 150 -X '$method' 'http://127.0.0.1:8788$path'); printf 'TRUYN_RESULT=%s\\n' \"\$R\""
+            fi
+            out="$(remote_raw "$vm" "$script")"; result="$(printf '%s\n' "$out" | sed -n 's/^TRUYN_RESULT=//p' | tail -1)"
+            [[ -n "$result" ]] || return 1; printf '%s' "$result"
+          }
+
+          for i in 0 1 2 3; do
+            vm="${VMS[$i]}"; ip="${IPS[$i]}"
+            setup=$(cat <<SCRIPT
+          set -Eeuo pipefail
+          export DEBIAN_FRONTEND=noninteractive
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq git curl jq openssl ca-certificates >/dev/null
+          major=0; command -v node >/dev/null && major=\$(node -p 'parseInt(process.versions.node)' 2>/dev/null || echo 0)
+          if [[ "\$major" -lt 22 ]]; then curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - >/dev/null; sudo apt-get install -y -qq nodejs >/dev/null; fi
+          id -u truyn >/dev/null 2>&1 || sudo useradd --system --home /var/lib/truyn-testnet --shell /usr/sbin/nologin truyn
+          sudo rm -rf /opt/truyn
+          sudo git clone -q https://github.com/inn-media/truyn.git /opt/truyn
+          cd /opt/truyn; sudo git checkout -q '${TEST_COMMIT}'; sudo npm install --ignore-scripts --no-audit --no-fund >/dev/null
+          sudo install -d -m 0700 -o truyn -g truyn /var/lib/truyn-testnet /etc/truyn-testnet
+          sudo openssl req -x509 -newkey rsa:2048 -nodes -keyout /etc/truyn-testnet/key.pem -out /etc/truyn-testnet/cert.pem -subj '/CN=${ip}' -days 1 -addext 'subjectAltName=IP:${ip}' >/dev/null 2>&1
+          sudo chown truyn:truyn /etc/truyn-testnet/key.pem /etc/truyn-testnet/cert.pem; sudo chmod 0600 /etc/truyn-testnet/key.pem
+          cat <<UNIT | sudo tee /etc/systemd/system/truyn-testnet.service >/dev/null
+          [Unit]
+          Description=TRUYN network productionization test node
+          After=network-online.target
+          Wants=network-online.target
+          [Service]
+          Type=simple
+          User=truyn
+          Group=truyn
+          WorkingDirectory=/opt/truyn
+          Environment=TRUYN_TESTNET_DATA_DIR=/var/lib/truyn-testnet
+          Environment=TRUYN_TLS_KEY_PATH=/etc/truyn-testnet/key.pem
+          Environment=TRUYN_TLS_CERT_PATH=/etc/truyn-testnet/cert.pem
+          Environment=TRUYN_ADVERTISE_HOST=${ip}
+          Environment=TRUYN_QUIC_HOST=0.0.0.0
+          Environment=TRUYN_QUIC_PORT=4433
+          Environment=TRUYN_CONTROL_HOST=127.0.0.1
+          Environment=TRUYN_CONTROL_PORT=8788
+          Environment=TRUYN_DHT_REPLICATION_FACTOR=3
+          Environment=TRUYN_DHT_WRITE_QUORUM=3
+          ExecStart=/usr/bin/node /opt/truin/network/testnet/node-service.js
+          Restart=on-failure
+          RestartSec=2
+          [Install]
+          WantedBy=multi-user.target
+          UNIT
+          sudo sed -i 's#/opt/truin/#/opt/truyn/#' /etc/systemd/system/truyn-testnet.service
+          sudo systemctl daemon-reload; sudo systemctl enable --now truyn-testnet.service >/dev/null
+          for n in \$(seq 1 60); do curl -fsS --max-time 2 http://127.0.0.1:8788/status >/dev/null && exit 0; sleep 2; done
+          sudo systemctl --no-pager status truyn-testnet.service || true; exit 21
+          SCRIPT
+          )
+            remote_raw "$vm" "$setup" >/dev/null
+          done
+
+          for i in 0 1 2 3; do
+            rec="$(call_json "${VMS[$i]}" GET /record)"; RECORDS+=("$rec")
+            nid="$(jq -r '.record.nodeId' <<<"$rec")"; [[ "$nid" == truyn:node:* ]] || { echo 'TRUYN_GCP_MULTIHOST=FAIL reason=node_identity_missing'; exit 20; }
+            NODEIDS+=("$nid"); mask "$nid"
+          done
+          ALL_RECORDS="$(printf '%s\n' "${RECORDS[@]}" | jq -s '{records: map(.record)}')"
+          for i in 0 1 2 3; do call_json "${VMS[$i]}" POST /bootstrap "$ALL_RECORDS" >/dev/null; done
+
+          direct_payload="$(jq -nc --arg id "${NODEIDS[2]}" '{nodeId:$id,input:{proof:"gcp-four-host-direct"}}')"
+          t0="$(date +%s%3N)"; direct="$(call_json "${VMS[0]}" POST /need "$direct_payload")"; direct_ms=$(( $(date +%s%3N) - t0 ))
+          [[ "$(jq -r '.transport' <<<"$direct")" == 'quic-direct' && "$(jq -r '.result.transport' <<<"$direct")" == 'quic' ]] || { echo 'TRUYN_GCP_MULTIHOST=FAIL reason=direct_quic_failed'; exit 30; }
+
+          replicated="$(call_json "${VMS[0]}" POST /replicate '{"namespace":"productionization","key":"gcp-four-host","value":{"proof":"durable"},"replicationFactor":3,"minAcks":3,"ttlMs":900000}')"
+          [[ "$(jq -r '.result.acknowledgements' <<<"$replicated")" == 3 ]] || { echo 'TRUYN_GCP_MULTIHOST=FAIL reason=replication_quorum'; exit 31; }
+          record_id="$(jq -r '.record.recordId' <<<"$replicated")"; mask "$record_id"
+          found="$(call_json "${VMS[2]}" GET '/find?namespace=productionization&key=gcp-four-host&fanout=4')"
+          jq -e --arg rid "$record_id" '.records | any(.recordId == $rid)' <<<"$found" >/dev/null || { echo 'TRUYN_GCP_MULTIHOST=FAIL reason=remote_read_missing'; exit 32; }
+
+          holder="$(jq -r --arg self "${NODEIDS[0]}" '.result.storedAt[] | select(. != $self)' <<<"$replicated" | head -1)"; failed_index=''
+          for i in 1 2 3; do [[ "${NODEIDS[$i]}" == "$holder" ]] && failed_index="$i"; done
+          [[ -n "$failed_index" ]] || { echo 'TRUYN_GCP_MULTIHOST=FAIL reason=holder_mapping'; exit 33; }
+          failed_vm="${VMS[$failed_index]}"; before_seq="$(printf '%s\n' "${RECORDS[@]}" | jq -r --arg nid "$holder" 'select(.record.nodeId == $nid) | .record.sequence')"
+          remote_raw "$failed_vm" 'sudo systemctl stop truyn-testnet.service' >/dev/null
+          t1="$(date +%s%3N)"; repaired="$(call_json "${VMS[0]}" POST /repair '{"namespace":"productionization","key":"gcp-four-host","replicationFactor":3,"minAcks":3}')"; repair_ms=$(( $(date +%s%3N) - t1 ))
+          [[ "$(jq -r '.repairs[0].acknowledgements' <<<"$repaired")" == 3 ]] || { echo 'TRUYN_GCP_MULTIHOST=FAIL reason=repair_quorum'; exit 34; }
+          jq -e --arg dead "$holder" '.repairs[0].storedAt | index($dead) == null' <<<"$repaired" >/dev/null || { echo 'TRUYN_GCP_MULTIHOST=FAIL reason=failed_holder_not_replaced'; exit 35; }
+
+          remote_raw "$failed_vm" 'sudo systemctl start truyn-testnet.service; for n in $(seq 1 60); do curl -fsS --max-time 2 http://127.0.0.1:8788/status >/dev/null && exit 0; sleep 2; done; exit 1' >/dev/null
+          restarted="$(call_json "$failed_vm" GET /record)"
+          [[ "$(jq -r '.record.nodeId' <<<"$restarted")" == "$holder" ]] || { echo 'TRUYN_GCP_MULTIHOST=FAIL reason=identity_changed_after_restart'; exit 36; }
+          after_seq="$(jq -r '.record.sequence' <<<"$restarted")"; (( after_seq > before_seq )) || { echo 'TRUYN_GCP_MULTIHOST=FAIL reason=sequence_rollback'; exit 37; }
+          ping_payload="$(jq -nc --arg id "$holder" '{nodeId:$id}')"; pong="$(call_json "${VMS[3]}" POST /ping "$ping_payload")"
+          [[ "$(jq -r '.pong' <<<"$pong")" == true ]] || { echo 'TRUYN_GCP_MULTIHOST=FAIL reason=restarted_peer_unreachable'; exit 38; }
+
+          gate_ok=1
+          jq -nc --arg gate PASS --argjson hosts 4 --argjson directMs "$direct_ms" --argjson repairMs "$repair_ms" '{gate:$gate,hosts:$hosts,transport:"real-public-udp-quic",relayCalls:0,directNeedMs:$directMs,replicationAcks:3,holderFailureRepairMs:$repairMs,restartIdentityStable:true,sequenceAdvanced:true}' | sed 's/^/TRUYN_GCP_MULTIHOST=/'
