@@ -4,6 +4,7 @@ import { createRelay } from '../network/relay/server.js';
 import { TruynNode } from '../node/client.js';
 import { createIdentity } from '../core/identity/index.js';
 import { createFunctionAdapter, TruynAdapterHost } from '../adapters/sdk/index.js';
+import { createProviderAccessPolicy } from '../core/security/provider-access.js';
 import { createHttpAdapterServer } from '../adapters/http/server.js';
 import { createMcpHandler, createMcpHttpServer, MCP_MODERN_VERSION } from '../adapters/mcp/server.js';
 
@@ -24,7 +25,7 @@ test('AdapterHost executes a signed NEED and returns RESULT', async (t) => {
     capabilities: ['uppercase'],
     execute: async ({ input }) => ({ output: String(input).toUpperCase(), metadata: { engine: 'test' } })
   });
-  const host = new TruynAdapterHost({ node: provider, adapter });
+  const host = new TruynAdapterHost({ node: provider, adapter, accessPolicy: createProviderAccessPolicy({ mode: 'public' }) });
   await host.publishCapabilities();
   const need = await requester.need('uppercase', 'hello truyn');
   assert.equal(typeof need.needId, 'string');

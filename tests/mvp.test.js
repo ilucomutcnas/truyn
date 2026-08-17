@@ -13,6 +13,7 @@ import { trustabilityLite } from '../core/trust/index.js';
 import { createRelay } from '../network/relay/server.js';
 import { TruynNode } from '../node/client.js';
 import { createFunctionAdapter, TruynAdapterHost } from '../adapters/sdk/index.js';
+import { createProviderAccessPolicy } from '../core/security/provider-access.js';
 
 test('node identity is derived from its public key', () => {
   const identity = createIdentity();
@@ -127,6 +128,7 @@ test('single signed CHAIN executes two providers over persistent sockets with <=
   let reviewedCandidate = null;
   const researchHost = new TruynAdapterHost({
     node: researchNode,
+    accessPolicy: createProviderAccessPolicy({ mode: 'public' }),
     fastPath: true,
     socketPath: true,
     adapter: createFunctionAdapter({
@@ -137,6 +139,7 @@ test('single signed CHAIN executes two providers over persistent sockets with <=
   });
   const reviewHost = new TruynAdapterHost({
     node: reviewNode,
+    accessPolicy: createProviderAccessPolicy({ mode: 'public' }),
     fastPath: true,
     socketPath: true,
     adapter: createFunctionAdapter({

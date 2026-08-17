@@ -53,6 +53,8 @@ async function runRelay() {
     trustedRequesterNodeIds: csvSet(process.env.TRUYN_TRUSTED_REQUESTER_NODE_IDS),
     allowPublicRegistration: relaySecurity.allowPublicRegistration,
     allowPublicDispatch: relaySecurity.allowPublicDispatch,
+    localDevelopmentMode: relaySecurity.localDevelopmentMode,
+    productionMode: relaySecurity.productionMode,
     exposeDiagnostics: process.env.TRUYN_PRIVATE_DIAGNOSTICS === '1'
   });
 
@@ -82,7 +84,7 @@ async function runRelay() {
         originGuard = createOriginGuard({
           targetHost: '127.0.0.1',
           targetPort: protectedTargetPort,
-          token: originGuardConfig.token,
+          tokens: originGuardConfig.tokens,
           headerName: originGuardConfig.headerName
         });
         await originGuard.listen({ host, port });

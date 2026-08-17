@@ -5,7 +5,7 @@ function parseIds(value) {
 }
 
 export function createProviderAccessPolicy({
-  mode = process.env.TRUYN_PROVIDER_ACCESS_MODE || 'public',
+  mode = process.env.TRUYN_PROVIDER_ACCESS_MODE || 'owner-only',
   allowedRequesterIds = process.env.TRUYN_ALLOWED_REQUESTER_IDS || ''
 } = {}) {
   const normalizedMode = String(mode).trim().toLowerCase();
