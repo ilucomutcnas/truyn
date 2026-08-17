@@ -1,0 +1,104 @@
+name: TRUYN Adversarial Scale Gate
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - network/adversarial-scale-final-integration
+    paths:
+      - '.github/workflows/scale-gate.yml'
+      - 'network/testnet/**'
+      - 'network/transport/quic-kademlia.js'
+      - 'network/transport/json-stream.js'
+      - 'simulations/network-failure/**'
+      - 'simulations/nodes-100/**'
+      - 'package.json'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: truyn-adversarial-scale-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  scale-100-scenario:
+    name: scale-100 / ${{ matrix.scenario }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        scenario:
+          - baseline
+          - partition
+          - churn
+          - eclipse
+          - byzantine
+          - sybil-collusion
+    env:
+      TRUYN_SCALE_NODE_COUNT: '100'
+      TRUYN_SCALE_SEED: '1414681945'
+      TRUYN_SCALE_SCENARIO: ${{ matrix.scenario }}
+      TRUYN_SCALE_HOST_COUNT: '1'
+      TRUYN_SCALE_FAILURE_DOMAIN_TYPE: 'github-hosted-runner-single-host'
+      TRUYN_SCALE_CLOUD: 'github-actions'
+      TRUYN_SCALE_ADVERTISE_CONCURRENCY: '2'
+      TRUYN_SCALE_K_BUCKET_SIZE: '32'
+      TRUYN_SCALE_REPORT: artifacts/scale100-${{ matrix.scenario }}.json
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install dependencies
+        run: npm install --ignore-scripts --no-audit --no-fund
+      - name: Run isolated 100-node scenario
+        run: node simulations/nodes-100/scenario-peer-routing-v3.js
+      - name: Print compact scenario summary
+        if: always()
+        shell: bash
+        run: |
+          REPORT="artifacts/scale100-${TRUYN_SCALE_SCENARIO}.json"
+          if [[ ! -f "$REPORT" ]]; then
+            echo "TRUYN_SCALE_SUMMARY scenario=${TRUYN_SCALE_SCENARIO} report_missing=true"
+            exit 0
+          fi
+          node --input-type=module <<'NODE'
+          import { readFileSync } from 'node:fs';
+          const report = JSON.parse(readFileSync(process.env.TRUYN_SCALE_REPORT, 'utf8'));
+          const summary = {
+            schema: report.schema,
+            runner: report.runner ?? null,
+            scenario: report.scenario,
+            passed: report.passed,
+            nodeCount: report.nodeCount,
+            routingPrimitive: report.routingPrimitive ?? null,
+            topologyMode: report.topologyMode ?? null,
+            live: report.finalNetwork?.live ?? report.topology?.live ?? null,
+            libp2pIds: report.finalNetwork?.uniqueLibp2pPeerIds ?? report.topology?.uniqueLibp2pPeerIds ?? null,
+            truynIds: report.finalNetwork?.uniqueTruynNodeIds ?? report.topology?.uniqueTruynNodeIds ?? null,
+            hostCount: report.execution?.hostCount,
+            failureDomainType: report.execution?.failureDomainType,
+            durationMs: report.durationMs,
+            gates: report.gates,
+            diagnostics: report.diagnostics ?? null,
+            result: report.result,
+            telemetry: report.finalNetwork?.telemetry,
+            claims: report.claims,
+            failureStage: report.stage ?? null,
+            error: report.error ?? null
+          };
+          console.log(`TRUYN_SCALE_SUMMARY ${JSON.stringify(summary)}`);
+          NODE
+      - name: Upload raw scenario evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: truyn-scale100-${{ matrix.scenario }}-${{ github.run_id }}
+          path: artifacts/scale100-${{ matrix.scenario }}.json
+          if-no-files-found: warn
+          retention-days: 90

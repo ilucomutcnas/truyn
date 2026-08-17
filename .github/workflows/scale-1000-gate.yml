@@ -1,0 +1,88 @@
+name: TRUYN 1000 Runtime Scale Gate
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - network/adversarial-scale-final-integration
+    paths:
+      - '.github/workflows/scale-1000-gate.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: truyn-scale-1000-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  scale-1000-scenario:
+    name: scale-1000 / ${{ matrix.scenario }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        scenario:
+          - baseline
+          - churn
+    env:
+      NODE_OPTIONS: --max-old-space-size=6144
+      TRUYN_SCALE_NODE_COUNT: '1000'
+      TRUYN_SCALE_SEED: '1414681945'
+      TRUYN_SCALE_SCENARIO: ${{ matrix.scenario }}
+      TRUYN_SCALE_HOST_COUNT: '1'
+      TRUYN_SCALE_FAILURE_DOMAIN_TYPE: 'github-hosted-runner-single-host'
+      TRUYN_SCALE_CLOUD: 'github-actions'
+      TRUYN_SCALE_ADVERTISE_CONCURRENCY: '2'
+      TRUYN_SCALE_K_BUCKET_SIZE: '32'
+      TRUYN_SCALE_REPORT: artifacts/scale1000-${{ matrix.scenario }}.json
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install dependencies
+        run: npm install --ignore-scripts --no-audit --no-fund
+      - name: Run isolated 1000-runtime scenario
+        run: node simulations/nodes-100/scenario.js
+      - name: Print compact scenario summary
+        if: always()
+        shell: bash
+        run: |
+          REPORT="artifacts/scale1000-${TRUYN_SCALE_SCENARIO}.json"
+          if [[ ! -f "$REPORT" ]]; then
+            echo "TRUYN_SCALE_1000_SUMMARY scenario=${TRUYN_SCALE_SCENARIO} report_missing=true"
+            exit 0
+          fi
+          node --input-type=module <<'NODE'
+          import { readFileSync } from 'node:fs';
+          const report = JSON.parse(readFileSync(process.env.TRUYN_SCALE_REPORT, 'utf8'));
+          const summary = {
+            scenario: report.scenario,
+            passed: report.passed,
+            nodeCount: report.nodeCount,
+            live: report.finalNetwork?.live ?? report.topology?.live ?? null,
+            libp2pIds: report.finalNetwork?.uniqueLibp2pPeerIds ?? report.topology?.uniqueLibp2pPeerIds ?? null,
+            truynIds: report.finalNetwork?.uniqueTruynNodeIds ?? report.topology?.uniqueTruynNodeIds ?? null,
+            routingTable: report.finalNetwork?.routingTableSize ?? report.topology?.routingTableSize ?? null,
+            bandwidth: report.bandwidth ?? null,
+            durationMs: report.durationMs,
+            gates: report.gates,
+            claims: report.claims,
+            failureStage: report.stage ?? null,
+            error: report.error ?? null
+          };
+          console.log(`TRUYN_SCALE_1000_SUMMARY ${JSON.stringify(summary)}`);
+          NODE
+      - name: Upload raw 1000-runtime evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: truyn-scale1000-${{ matrix.scenario }}-${{ github.run_id }}
+          path: artifacts/scale1000-${{ matrix.scenario }}.json
+          if-no-files-found: warn
+          retention-days: 90

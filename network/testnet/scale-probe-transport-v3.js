@@ -1,0 +1,90 @@
+import { AdversarialScaleNode } from './scale-node.js';
+
+const originalProbe = AdversarialScaleNode.prototype.probe;
+
+function peerIdFromTarget(target) {
+  const text = target?.toString?.() || String(target || '');
+  const match = text.match(/\/p2p\/([^/]+)$/);
+  if (match) return match[1];
+  return text.startsWith('/') ? null : text || null;
+}
+
+function isTransportFailure(result) {
+  return Boolean(result && !result.ok && result.transportError);
+}
+
+if (!AdversarialScaleNode.prototype.__truynScaleProbeTransportV3) {
+  Object.defineProperty(AdversarialScaleNode.prototype, '__truynScaleProbeTransportV3', {
+    value: true,
+    configurable: false,
+    enumerable: false,
+    writable: false
+  });
+
+  AdversarialScaleNode.prototype.probe = async function probeWithResolvedTransport(target, value, options = {}) {
+    const expectedPeerId = peerIdFromTarget(target);
+    const timeoutMs = Math.max(8_000, Number(options.timeoutMs || 3_000));
+    const transportRetries = Math.max(1, Number(options.transportRetries ?? 1));
+    let resolved = null;
+
+    if (expectedPeerId && !String(target?.toString?.() || target).startsWith('/')) {
+      resolved = await this.findPeer(target, { timeoutMs: Math.min(5_000, timeoutMs) }).catch(() => null);
+    }
+
+    let dialTarget = resolved?.multiaddrs?.[0] || target;
+    if (resolved?.multiaddrs?.length > 0) {
+      await this.node.peerStore.merge(resolved.id, { multiaddrs: resolved.multiaddrs }).catch(() => null);
+      await this.node.dial(dialTarget, { signal: AbortSignal.timeout(Math.min(5_000, timeoutMs)) }).catch(() => null);
+    }
+
+    let result = await originalProbe.call(this, dialTarget, value, {
+      ...options,
+      timeoutMs,
+      transportRetries
+    });
+
+    // A transport failure may mean that a freshly rotated PeerId/address has not
+    // converged into this requester's PeerStore yet. Repair routing once, then
+    // retry transport. Cryptographically invalid/malicious replies are never
+    // retried because they do not carry transportError.
+    if (isTransportFailure(result) && expectedPeerId) {
+      const peerIdObject = resolved?.id || (!String(target?.toString?.() || target).startsWith('/') ? target : null);
+      if (peerIdObject) {
+        const refreshed = await this.findPeer(peerIdObject, { timeoutMs: Math.min(6_000, timeoutMs) }).catch(() => null);
+        if (refreshed?.multiaddrs?.length > 0) {
+          await this.node.peerStore.merge(refreshed.id, { multiaddrs: refreshed.multiaddrs }).catch(() => null);
+          dialTarget = refreshed.multiaddrs[0];
+          await this.node.dial(dialTarget, { signal: AbortSignal.timeout(Math.min(5_000, timeoutMs)) }).catch(() => null);
+          result = await originalProbe.call(this, dialTarget, value, {
+            ...options,
+            timeoutMs,
+            transportRetries: 1
+          });
+        }
+      }
+    }
+
+    const responderPeerId = result?.response?.body?.responderPeerId || null;
+    const targetPeerBound = expectedPeerId == null || responderPeerId == null
+      ? expectedPeerId == null
+      : responderPeerId === expectedPeerId;
+
+    if (result?.ok && expectedPeerId && !targetPeerBound) {
+      return {
+        ...result,
+        ok: false,
+        targetPeerBound: false,
+        expectedPeerId,
+        responderPeerId,
+        integrityError: 'truyn_scale_probe_peer_binding_mismatch'
+      };
+    }
+
+    return {
+      ...result,
+      targetPeerBound,
+      expectedPeerId,
+      responderPeerId
+    };
+  };
+}
