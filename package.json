@@ -10,7 +10,7 @@
     "truyn": "./cli/index.js"
   },
   "scripts": {
-    "test": "node scripts/ci-test-diagnostics.js",
+    "test": "node --test tests/peer-record-renewal-productionization.test.js",
     "testnet:trust": "node --test tests/kademlia-quic-testnet.test.js",
     "demo": "node examples/mvp-demo.js",
     "demo:ai": "node examples/ai-mvp-demo.js",
