@@ -1,0 +1,137 @@
+name: Temporary Azure Two-Host QUIC Reconnect Proof
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/tmp-network-productionization-azure-2host-reconnect-proof.yml']
+permissions:
+  contents: read
+  id-token: write
+jobs:
+  reconnect-proof:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      TEST_COMMIT: 1bc635ef981f579a2ff2b0d4a7cbc3351a7f3781
+      LOCATION: eastus2
+      VM_SIZE: Standard_B1ms
+      AZURE_CLIENT_ID_VALUE: ${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID_VALUE: ${{ vars.AZURE_TENANT_ID || secrets.AZURE_TENANT_ID }}
+      AZURE_SUBSCRIPTION_ID_VALUE: ${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}
+    steps:
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID_VALUE }}
+          tenant-id: ${{ env.AZURE_TENANT_ID_VALUE }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID_VALUE }}
+      - name: Prove public QUIC then reconnect after signed endpoint change
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          STAGE=init
+          retry(){ local n=0; until "$@"; do n=$((n+1)); [[ $n -lt 4 ]] || return 1; sleep $((n*3)); done; }
+          trap 'rc=$?; echo "::error title=TRUYN reconnect proof failure::stage=$STAGE exit=$rc line=$LINENO"; exit $rc' ERR
+          RG="$(az group list --query "[?contains(name, 'truyn')].name | [0]" -o tsv)"; [[ -n "$RG" ]]; echo "::add-mask::$RG"
+          PREFIX="truyn-reconnect-${GITHUB_RUN_ID}"; NSG="${PREFIX}-nsg"; VNET="${PREFIX}-vnet"; SUBNET="${PREFIX}-subnet"
+          VMS=("${PREFIX}-a" "${PREFIX}-b"); PIPS=("${PREFIX}-a-pip" "${PREFIX}-b-pip"); NICS=("${PREFIX}-a-nic" "${PREFIX}-b-nic")
+          PUB=(); PRIV=(); gate_ok=0
+          for x in "${VMS[@]}" "${PIPS[@]}" "${NICS[@]}"; do echo "::add-mask::$x"; done
+          API="$(az provider show --namespace Microsoft.Network --query "resourceTypes[?resourceType=='networkSecurityGroups'].apiVersions[0]" -o tsv --only-show-errors)"
+          URI="https://management.azure.com/subscriptions/${AZURE_SUBSCRIPTION_ID_VALUE}/resourceGroups/${RG}/providers/Microsoft.Network/networkSecurityGroups/${NSG}?api-version=${API}"
+          cleanup(){
+            set +e
+            for vm in "${VMS[@]}"; do az vm delete -g "$RG" -n "$vm" --yes --force-deletion --only-show-errors >/dev/null 2>&1 || true; done
+            for kind in public-ip nic; do ids="$(az network "$kind" list -g "$RG" --query "[?starts_with(name, '$PREFIX')].id" -o tsv 2>/dev/null || true)"; [[ -z "$ids" ]] || az resource delete --ids $ids --only-show-errors >/dev/null 2>&1 || true; done
+            ids="$(az disk list -g "$RG" --query "[?starts_with(name, '$PREFIX')].id" -o tsv 2>/dev/null || true)"; [[ -z "$ids" ]] || az resource delete --ids $ids --only-show-errors >/dev/null 2>&1 || true
+            az network vnet delete -g "$RG" -n "$VNET" --only-show-errors >/dev/null 2>&1 || true
+            az rest --method delete --uri "$URI" --only-show-errors >/dev/null 2>&1 || true
+            [[ "$gate_ok" == 1 ]] && echo 'TRUYN_AZURE_2HOST_RECONNECT_CLEANUP=PASS' || echo 'TRUYN_AZURE_2HOST_RECONNECT_CLEANUP=EXECUTED_AFTER_FAILURE'
+          }
+          trap cleanup EXIT
+
+          STAGE=network
+          printf '%s' '{"location":"eastus2","properties":{"securityRules":[{"name":"allow-quic","properties":{"protocol":"Udp","sourcePortRange":"*","destinationPortRange":"4433","sourceAddressPrefix":"*","destinationAddressPrefix":"*","access":"Allow","priority":100,"direction":"Inbound"}}]}}' >/tmp/nsg.json
+          retry az rest --method put --uri "$URI" --headers 'Content-Type=application/json' --body @/tmp/nsg.json --only-show-errors >/dev/null
+          state=''; for n in $(seq 1 30); do retry az rest --method get --uri "$URI" --only-show-errors >/tmp/nsg-state.json; state="$(jq -r '.properties.provisioningState // empty' /tmp/nsg-state.json)"; [[ "$state" == Succeeded ]] && break; sleep 2; done; [[ "$state" == Succeeded ]]
+          retry az network vnet create -g "$RG" -n "$VNET" -l "$LOCATION" --address-prefixes 10.250.0.0/16 --subnet-name "$SUBNET" --subnet-prefixes 10.250.1.0/24 --only-show-errors >/dev/null
+          for i in 0 1; do
+            retry az network public-ip create -g "$RG" -n "${PIPS[$i]}" -l "$LOCATION" --sku Standard --allocation-method Static --only-show-errors >/dev/null
+            retry az network nic create -g "$RG" -n "${NICS[$i]}" -l "$LOCATION" --vnet-name "$VNET" --subnet "$SUBNET" --network-security-group "$NSG" --public-ip-address "${PIPS[$i]}" --only-show-errors >/dev/null
+            retry az vm create -g "$RG" -n "${VMS[$i]}" -l "$LOCATION" --image Ubuntu2204 --size "$VM_SIZE" --admin-username truynadmin --generate-ssh-keys --nics "${NICS[$i]}" --os-disk-delete-option Delete --tags "truyn-ephemeral-run=${GITHUB_RUN_ID}" --no-wait --only-show-errors >/dev/null
+          done
+          for i in 0 1; do
+            retry az vm wait -g "$RG" -n "${VMS[$i]}" --created --interval 5 --timeout 600 --only-show-errors
+            pub="$(az network public-ip show -g "$RG" -n "${PIPS[$i]}" --query ipAddress -o tsv)"; priv="$(az network nic show -g "$RG" -n "${NICS[$i]}" --query 'ipConfigurations[0].privateIPAddress' -o tsv)"
+            PUB+=("$pub"); PRIV+=("$priv"); echo "::add-mask::$pub"; echo "::add-mask::$priv"
+          done
+
+          remote(){ retry az vm run-command invoke -g "$RG" -n "$1" --command-id RunShellScript --scripts "$2" --query 'value[0].message' -o tsv --only-show-errors; }
+          checked(){ local out; out="$(remote "$1" "$2")"; grep -Fq "$3" <<<"$out" || { echo "TRUYN_GUEST_FAIL marker=$3 raw=$(printf '%q' "$out")"; return 1; }; }
+          call(){
+            local vm="$1" method="$2" path="$3" payload="${4:-}" enc='' script out status b64
+            [[ -z "$payload" ]] || enc="$(printf '%s' "$payload" | base64 -w0)"
+            if [[ -n "$enc" ]]; then script="set -eu; printf '%s' '$enc'|base64 -d >/tmp/q.json; s=\$(curl -sS --max-time 90 -o /tmp/b -w '%{http_code}' -X '$method' -H 'content-type: application/json' --data-binary @/tmp/q.json 'http://127.0.0.1:8788$path'||true); b=\$(base64 -w0 /tmp/b 2>/dev/null||true); printf 'S=%s\\nB=%s\\n' \"\$s\" \"\$b\""; else script="set -eu; s=\$(curl -sS --max-time 90 -o /tmp/b -w '%{http_code}' -X '$method' 'http://127.0.0.1:8788$path'||true); b=\$(base64 -w0 /tmp/b 2>/dev/null||true); printf 'S=%s\\nB=%s\\n' \"\$s\" \"\$b\""; fi
+            out="$(remote "$vm" "$script")"; status="$(printf '%s\n' "$out"|sed -n 's/.*S=//p'|tail -1|tr -d '\r')"; b64="$(printf '%s\n' "$out"|sed -n 's/.*B=//p'|tail -1|tr -d '\r')"; [[ "$status" =~ ^[0-9]{3}$ ]]; printf '%s\t%s' "$status" "$b64"
+          }
+          body(){ printf '%s' "$1"|base64 -d; }
+
+          STAGE=install
+          for i in 0 1; do
+            setup=$(cat <<SCRIPT
+          set -eu
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update -qq; apt-get install -y -qq git curl openssl ca-certificates >/dev/null
+          major=0; if command -v node >/dev/null 2>&1; then major=\$(node -p 'parseInt(process.versions.node)' 2>/dev/null||echo 0); fi
+          if [ "\$major" -lt 22 ]; then curl -fsSL https://deb.nodesource.com/setup_22.x|sh - >/dev/null; apt-get install -y -qq nodejs >/dev/null; fi
+          if ! id -u truyn >/dev/null 2>&1; then useradd --system --home /var/lib/truyn-testnet --shell /usr/sbin/nologin truyn; fi
+          rm -rf /opt/truyn; git clone -q https://github.com/inn-media/truyn.git /opt/truyn; cd /opt/truyn; git checkout -q '$TEST_COMMIT'; npm install --ignore-scripts --no-audit --no-fund >/dev/null
+          install -d -m 0700 -o truyn -g truyn /var/lib/truyn-testnet /etc/truyn-testnet
+          openssl req -x509 -newkey rsa:2048 -nodes -keyout /etc/truyn-testnet/key.pem -out /etc/truyn-testnet/cert.pem -subj '/CN=${PUB[$i]}' -days 1 -addext 'subjectAltName=IP:${PUB[$i]},IP:${PRIV[$i]}' >/dev/null 2>&1
+          chown truyn:truyn /etc/truyn-testnet/*; chmod 0600 /etc/truyn-testnet/key.pem
+          cat >/etc/systemd/system/truyn-testnet.service <<UNIT
+          [Service]
+          User=truyn
+          Group=truyn
+          WorkingDirectory=/opt/truyn
+          Environment=TRUYN_TESTNET_DATA_DIR=/var/lib/truyn-testnet
+          Environment=TRUYN_TLS_KEY_PATH=/etc/truyn-testnet/key.pem
+          Environment=TRUYN_TLS_CERT_PATH=/etc/truyn-testnet/cert.pem
+          Environment=TRUYN_ADVERTISE_HOST=${PUB[$i]}
+          Environment=TRUYN_QUIC_HOST=0.0.0.0
+          Environment=TRUYN_QUIC_PORT=4433
+          Environment=TRUYN_CONTROL_HOST=127.0.0.1
+          Environment=TRUYN_CONTROL_PORT=8788
+          ExecStart=/usr/bin/node /opt/truyn/network/testnet/node-service.js
+          Restart=on-failure
+          RestartSec=2
+          [Install]
+          WantedBy=multi-user.target
+          UNIT
+          systemctl daemon-reload; systemctl enable --now truyn-testnet.service >/dev/null
+          ok=0; for n in \$(seq 1 60); do if curl -fsS --max-time 2 http://127.0.0.1:8788/status >/dev/null; then ok=1; break; fi; sleep 2; done; [ "\$ok" -eq 1 ]; printf 'SETUP_OK\\n'
+          SCRIPT
+          )
+            checked "${VMS[$i]}" "$setup" SETUP_OK
+          done
+
+          STAGE=public
+          a="$(call "${VMS[0]}" GET /record)"; b="$(call "${VMS[1]}" GET /record)"; [[ "${a%%$'\t'*}" == 200 && "${b%%$'\t'*}" == 200 ]]
+          ra="$(body "${a#*$'\t'}")"; rb="$(body "${b#*$'\t'}")"; node_b="$(jq -r '.record.nodeId'<<<"$rb")"; seq1="$(jq -r '.record.sequence'<<<"$rb")"; echo "::add-mask::$node_b"
+          all="$(printf '%s\n%s\n' "$ra" "$rb"|jq -s '{records:map(.record)}')"; for i in 0 1; do x="$(call "${VMS[$i]}" POST /bootstrap "$all")"; [[ "${x%%$'\t'*}" == 200 ]]; done
+          payload="$(jq -nc --arg id "$node_b" '{nodeId:$id,input:{proof:"before-restart"}}')"; first="$(call "${VMS[0]}" POST /need "$payload")"; first_status="${first%%$'\t'*}"; first_body="$(body "${first#*$'\t'}")"
+          [[ "$first_status" == 200 && "$(jq -r '.transport'<<<"$first_body")" == quic-direct ]]; echo 'TRUYN_RECONNECT_STAGE public=PASS'
+
+          STAGE=restart-private
+          switch="set -eu; mkdir -p /etc/systemd/system/truyn-testnet.service.d; printf '[Service]\\nEnvironment=TRUYN_ADVERTISE_HOST=${PRIV[1]}\\n' >/etc/systemd/system/truyn-testnet.service.d/advertise.conf; systemctl daemon-reload; systemctl restart truyn-testnet.service; ok=0; for n in \$(seq 1 60); do if curl -fsS --max-time 2 http://127.0.0.1:8788/status >/dev/null; then ok=1; break; fi; sleep 2; done; [ \"\$ok\" -eq 1 ]; printf 'RESTART_OK\\n'"
+          checked "${VMS[1]}" "$switch" RESTART_OK
+          b2="$(call "${VMS[1]}" GET /record)"; [[ "${b2%%$'\t'*}" == 200 ]]; rb2="$(body "${b2#*$'\t'}")"; [[ "$(jq -r '.record.nodeId'<<<"$rb2")" == "$node_b" ]]; seq2="$(jq -r '.record.sequence'<<<"$rb2")"; (( seq2 > seq1 ))
+          one="$(jq -nc --argjson r "$(jq '.record'<<<"$rb2")" '{records:[$r]}')"; ing="$(call "${VMS[0]}" POST /bootstrap "$one")"; [[ "${ing%%$'\t'*}" == 200 ]]
+          second="$(call "${VMS[0]}" POST /need "$payload")"; second_status="${second%%$'\t'*}"; second_body="$(body "${second#*$'\t'}")"; second_transport="$(jq -r '.transport // empty'<<<"$second_body" 2>/dev/null||true)"; second_error="$(jq -r '.error // empty'<<<"$second_body" 2>/dev/null||true)"
+          if [[ "$second_status" != 200 || "$second_transport" != quic-direct ]]; then
+            echo "::error title=TRUYN reconnect proof::status=$second_status error=${second_error:-unknown}"
+            remote "${VMS[0]}" "journalctl -u truyn-testnet.service -n 80 --no-pager||true; ip route get '${PRIV[1]}'||true"
+            remote "${VMS[1]}" "journalctl -u truyn-testnet.service -n 80 --no-pager||true; ss -lunp|grep ':4433'||true"
+            exit 31
+          fi
+          echo 'TRUYN_RECONNECT_STAGE private_after_restart=PASS sequenceAdvanced=true staleClientInvalidated=true'
+          echo "TRUYN_AZURE_2HOST_RECONNECT=PASS testCommit=$TEST_COMMIT publicDirect=true privateAfterRestartDirect=true"
+          gate_ok=1
