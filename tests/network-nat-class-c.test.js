@@ -1,10 +1,23 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { createIdentity } from '../core/identity/index.js';
 import { createPeerRecord } from '../network/discovery/peer-discovery.js';
 import { CoordinatedNatTraversal, peerNatMappedEndpoint } from '../network/nat/traversal.js';
 import { TruynNetworkNode } from '../network/runtime.js';
 import { DirectFirstP2P } from '../network/transport/p2p.js';
+
+async function generateTls() {
+  const dir = await mkdtemp(join(tmpdir(), 'truyn-class-c-nat-'));
+  const keyPath = join(dir, 'key.pem');
+  const certPath = join(dir, 'cert.pem');
+  const run = spawnSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', keyPath, '-out', certPath, '-subj', '/CN=127.0.0.1', '-days', '1', '-addext', 'subjectAltName=IP:127.0.0.1'], { encoding: 'utf8' });
+  if (run.status !== 0) throw new Error(`openssl failed: ${run.stderr}`);
+  return { dir, key: await readFile(keyPath, 'utf8'), cert: await readFile(certPath, 'utf8') };
+}
 
 test('Class C signed NAT mapping is normalized from the peer record', () => {
   const identity = createIdentity();
@@ -18,15 +31,16 @@ test('Class C signed NAT mapping is normalized from the peer record', () => {
   });
 });
 
-test('Class C NAT traversal is wired through the primary network runtime', () => {
-  const natTraversal = { eligible: () => false, prepare: async () => null };
-  const node = new TruynNetworkNode({
-    tls: { key: 'test-key', cert: 'test-cert' },
-    natTraversal,
-    peerLeaseEnabled: false
-  });
-  assert.equal(node.natTraversal, natTraversal);
-  assert.equal(node.router.natTraversal, natTraversal);
+test('Class C NAT traversal is wired through the primary network runtime', async () => {
+  const tls = await generateTls();
+  try {
+    const natTraversal = { eligible: () => false, prepare: async () => null };
+    const node = new TruynNetworkNode({ tls, natTraversal, peerLeaseEnabled: false });
+    assert.equal(node.natTraversal, natTraversal);
+    assert.equal(node.router.natTraversal, natTraversal);
+  } finally {
+    await rm(tls.dir, { recursive: true, force: true });
+  }
 });
 
 test('Class C NAT traversal coordinates and punches before the only envelope attempt', async () => {
@@ -38,9 +52,7 @@ test('Class C NAT traversal coordinates and punches before the only envelope att
     nat: { reachability: 'punch', mapped: { address: '203.0.113.7', port: 41000 } }
   });
   const order = [];
-  const socket = {
-    async send(_payload, port, address) { order.push(`punch:${address}:${port}`); }
-  };
+  const socket = { async send(_payload, port, address) { order.push(`punch:${address}:${port}`); } };
   const quic = {
     identity: local,
     socket,
@@ -92,12 +104,7 @@ test('Class C NAT coordination failure falls back without attempting the applica
     coordinate: async () => ({ accepted: false })
   });
   const discovery = { get: () => record, findNode: async () => null };
-  const router = new DirectFirstP2P({
-    quicTransport: quic,
-    discovery,
-    natTraversal,
-    relayFallback: async () => ({ ok: true, via: 'relay' })
-  });
+  const router = new DirectFirstP2P({ quicTransport: quic, discovery, natTraversal, relayFallback: async () => ({ ok: true, via: 'relay' }) });
   const result = await router.send(remote.nodeId, { id: 'm2' });
   assert.equal(result.transport, 'relay-fallback');
   assert.equal(envelopes, 0);
