@@ -50,7 +50,7 @@ export function verifyPeerRecord(record, { now = Date.now(), allowExpired = fals
 }
 
 export class PeerDiscovery {
-  constructor({ identity, k = 20, alpha = 3, rpc = null, onChange = null } = {}) {
+  constructor({ identity, k = 20, alpha = 3, rpc = null, onChange = null, onRecordAccepted = null } = {}) {
     assertIdentity(identity);
     this.identity = identity;
     this.k = k;
@@ -59,6 +59,7 @@ export class PeerDiscovery {
     this.records = new Map();
     this.rpc = rpc;
     this.onChange = onChange;
+    this.onRecordAccepted = typeof onRecordAccepted === 'function' ? onRecordAccepted : null;
   }
 
   ingest(record, options = {}) {
@@ -68,10 +69,18 @@ export class PeerDiscovery {
     const existing = this.records.get(record.nodeId);
     if (existing && existing.sequence > record.sequence) return { accepted: false, reason: 'peer_record_older_sequence' };
     if (existing && existing.sequence === record.sequence && existing.recordId !== record.recordId) return { accepted: false, reason: 'peer_record_equivocation' };
+    const changed = !existing || existing.recordId !== record.recordId;
     this.records.set(record.nodeId, structuredClone(record));
     this.routing.upsert({ nodeId: record.nodeId, endpoints: record.endpoints, publicKey: record.publicKey, lastSeenAt: new Date().toISOString() });
-    if (notify) this.onChange?.();
-    return { accepted: true, nodeId: record.nodeId };
+    if (notify) {
+      if (changed) this.onRecordAccepted?.({
+        nodeId: record.nodeId,
+        previous: existing ? structuredClone(existing) : null,
+        record: structuredClone(record)
+      });
+      this.onChange?.();
+    }
+    return { accepted: true, nodeId: record.nodeId, updated: Boolean(existing && changed), unchanged: !changed };
   }
 
   get(nodeId, { now = Date.now() } = {}) {
