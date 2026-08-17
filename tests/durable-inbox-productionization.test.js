@@ -87,9 +87,9 @@ test('network runtime persists a completed inbound envelope and returns the same
   });
 
   try {
-    const firstRecord = await server.start();
+    await server.start();
     await client.start();
-    let connection = await client.connect({ host: '127.0.0.1', port: Number(new URL(firstRecord.endpoints[0]).port) });
+    let connection = await client.connect({ host: '127.0.0.1', port: server.quic.port });
     const envelope = createEnvelope({
       type: 'NEED',
       from: clientIdentity.nodeId,
@@ -115,8 +115,8 @@ test('network runtime persists a completed inbound envelope and returns the same
       secondExecutions += 1;
       return { ok: false, execution: secondExecutions };
     });
-    const secondRecord = await server.start();
-    connection = await client.connect({ host: '127.0.0.1', port: Number(new URL(secondRecord.endpoints[0]).port) });
+    await server.start();
+    connection = await client.connect({ host: '127.0.0.1', port: server.quic.port });
     const second = await client.sendEnvelope(connection, envelope);
     assert.deepEqual(second, { ok: true, execution: 1 });
     assert.equal(secondExecutions, 0, 'completed envelope must replay its durable result after restart');
