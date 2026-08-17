@@ -3,10 +3,14 @@
   "version": "0.1.0-mvp.2",
   "private": true,
   "type": "module",
-  "engines": {"node": ">=22"},
-  "bin": {"truyn": "./cli/index.js"},
+  "engines": {
+    "node": ">=22"
+  },
+  "bin": {
+    "truyn": "./cli/index.js"
+  },
   "scripts": {
-    "test": "node scripts/ci-isolate-tests.js",
+    "test": "node --test tests/*.test.js",
     "testnet:trust": "node --test tests/kademlia-quic-testnet.test.js",
     "demo": "node examples/mvp-demo.js",
     "demo:ai": "node examples/ai-mvp-demo.js",
