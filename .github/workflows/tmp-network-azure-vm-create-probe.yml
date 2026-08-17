@@ -1,0 +1,48 @@
+name: Temporary Azure VM Create Probe
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/tmp-network-azure-vm-create-probe.yml']
+permissions:
+  contents: read
+  id-token: write
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      AZURE_CLIENT_ID_VALUE: ${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID_VALUE: ${{ vars.AZURE_TENANT_ID || secrets.AZURE_TENANT_ID }}
+      AZURE_SUBSCRIPTION_ID_VALUE: ${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}
+    steps:
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID_VALUE }}
+          tenant-id: ${{ env.AZURE_TENANT_ID_VALUE }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID_VALUE }}
+      - name: Probe VM creation
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          RG="$(az group list --query "[?contains(name, 'truyn')].name | [0]" -o tsv)"; [[ -n "$RG" ]] || exit 10
+          P="truyn-vmprobe-${GITHUB_RUN_ID}"; VNET="${P}-vnet"; SUBNET="${P}-subnet"; NIC="${P}-nic"; VM="${P}-vm"
+          cleanup(){ set +e; az vm delete -g "$RG" -n "$VM" --yes --force-deletion --only-show-errors >/dev/null 2>&1||true; ids="$(az network nic list -g "$RG" --query "[?starts_with(name,'$P')].id" -o tsv 2>/dev/null||true)"; [[ -z "$ids" ]]||az resource delete --ids $ids >/dev/null 2>&1||true; ids="$(az disk list -g "$RG" --query "[?starts_with(name,'$P')].id" -o tsv 2>/dev/null||true)"; [[ -z "$ids" ]]||az resource delete --ids $ids >/dev/null 2>&1||true; az network vnet delete -g "$RG" -n "$VNET" --only-show-errors >/dev/null 2>&1||true; }
+          trap cleanup EXIT
+          az network vnet create -g "$RG" -n "$VNET" -l eastus2 --address-prefixes 10.245.0.0/16 --subnet-name "$SUBNET" --subnet-prefixes 10.245.1.0/24 --only-show-errors >/dev/null
+          az network nic create -g "$RG" -n "$NIC" -l eastus2 --vnet-name "$VNET" --subnet "$SUBNET" --only-show-errors >/dev/null
+          for size in Standard_B1ms Standard_B2s Standard_B2ms; do
+            err="$(mktemp)"
+            set +e
+            az vm create -g "$RG" -n "$VM" -l eastus2 --image Ubuntu2204 --size "$size" --admin-username truynadmin --generate-ssh-keys --nics "$NIC" --os-disk-delete-option Delete --only-show-errors >/dev/null 2>"$err"
+            rc=$?
+            set -e
+            if [[ "$rc" == 0 ]]; then
+              echo "::notice title=TRUYN Azure VM Create PASS::region=eastus2 size=$size"
+              echo "TRUYN_AZURE_VM_CREATE=PASS region=eastus2 size=$size"
+              exit 0
+            fi
+            msg="$(tail -n 8 "$err" | tr '\n' ' ' | sed 's/%/%25/g;s/\r/%0D/g;s/\n/%0A/g' | cut -c1-900)"
+            echo "::warning title=TRUYN Azure SKU failed::size=$size $msg"
+          done
+          echo '::error title=TRUYN Azure VM Create::All eastus2 B-family candidates failed real creation'
+          exit 12
