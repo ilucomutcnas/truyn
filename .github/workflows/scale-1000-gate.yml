@@ -7,6 +7,12 @@ on:
       - network/adversarial-scale-final-integration
     paths:
       - '.github/workflows/scale-1000-gate.yml'
+      - 'network/testnet/**'
+      - 'network/transport/quic-kademlia.js'
+      - 'network/transport/json-stream.js'
+      - 'simulations/network-failure/**'
+      - 'simulations/nodes-100/**'
+      - 'package.json'
 
 permissions:
   contents: read
