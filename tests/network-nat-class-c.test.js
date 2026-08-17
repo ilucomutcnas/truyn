@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { createIdentity } from '../core/identity/index.js';
 import { createPeerRecord } from '../network/discovery/peer-discovery.js';
 import { CoordinatedNatTraversal, peerNatMappedEndpoint } from '../network/nat/traversal.js';
+import { TruynNetworkNode } from '../network/runtime.js';
 import { DirectFirstP2P } from '../network/transport/p2p.js';
 
 test('Class C signed NAT mapping is normalized from the peer record', () => {
@@ -15,6 +16,17 @@ test('Class C signed NAT mapping is normalized from the peer record', () => {
   assert.deepEqual(peerNatMappedEndpoint(record), {
     host: '203.0.113.7', port: 41000, value: 'quic://203.0.113.7:41000'
   });
+});
+
+test('Class C NAT traversal is wired through the primary network runtime', () => {
+  const natTraversal = { eligible: () => false, prepare: async () => null };
+  const node = new TruynNetworkNode({
+    tls: { key: 'test-key', cert: 'test-cert' },
+    natTraversal,
+    peerLeaseEnabled: false
+  });
+  assert.equal(node.natTraversal, natTraversal);
+  assert.equal(node.router.natTraversal, natTraversal);
 });
 
 test('Class C NAT traversal coordinates and punches before the only envelope attempt', async () => {
