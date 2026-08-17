@@ -41,7 +41,32 @@ export async function writeJsonStream(stream, value, { timeoutMs = 5_000 } = {})
 }
 
 export async function requestJson(node, target, protocol, request, { timeoutMs = 5_000, maxBytes = 1_048_576 } = {}) {
-  const stream = await node.dialProtocol(target, protocol, { signal: AbortSignal.timeout(timeoutMs) });
-  await writeJsonStream(stream, request, { timeoutMs });
-  return readJsonStream(stream, { maxBytes });
+  const controller = new AbortController();
+  let stream = null;
+  let timer;
+  const deadline = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      const error = new Error(`truyn_json_rpc_timeout:${protocol}`);
+      error.code = 'ERR_TRUYN_STREAM_TIMEOUT';
+      controller.abort(error);
+      stream?.abort?.(error);
+      reject(error);
+    }, Math.max(1, timeoutMs));
+    timer.unref?.();
+  });
+
+  const operation = (async () => {
+    stream = await node.dialProtocol(target, protocol, { signal: controller.signal });
+    await writeJsonStream(stream, request, { timeoutMs });
+    return readJsonStream(stream, { maxBytes });
+  })();
+
+  try {
+    return await Promise.race([operation, deadline]);
+  } finally {
+    clearTimeout(timer);
+    if (controller.signal.aborted && stream?.status !== 'closed') {
+      stream?.abort?.(controller.signal.reason instanceof Error ? controller.signal.reason : new Error('truyn_json_rpc_aborted'));
+    }
+  }
 }
