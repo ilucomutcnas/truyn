@@ -2,6 +2,8 @@
 
 This roadmap describes intended engineering milestones, not guaranteed release dates. Protocol semantics live in `spec/`; the roadmap only describes sequencing.
 
+The implementation has not evolved strictly in version order: semantic, provider, Trustability and benchmark layers advanced faster than the physical peer-network underlay. As of 2026-08-17, v0.1 Connect is now implemented as a real QUIC/Kademlia/P2P/NAT reference underlay. The immediate engineering priority after v0.1 is network failure/churn durability and real multi-host scale rather than additional semantic sophistication.
+
 ## Immediate security gate — before public paid-provider coexistence
 
 The repository already contains an executable MVP and cloud PoC work. Before a public TRUYN relay can safely coexist with operator/owner-funded AI providers, the following security architecture must be implemented and proved:
@@ -17,7 +19,7 @@ The repository already contains an executable MVP and cloud PoC work. Before a p
 9. emergency owner-paid/provider-visibility kill-switch semantics;
 10. negative/adversarial tests proving foreign users cause zero owner-funded upstream calls.
 
-This gate is a **security prerequisite**, not a claim of current implementation. Documentation approval does not satisfy the gate; executable tests must.
+This gate is a **security prerequisite**, not a claim that every future tenant/account/entitlement layer is complete. Documentation approval does not satisfy the gate; executable tests must.
 
 See:
 
@@ -28,14 +30,54 @@ See:
 - `docs/architecture/BYOK_ARCHITECTURE.md`
 - `docs/architecture/THREAT_MODEL.md`
 
-## v0.1 — Connect
-- Cryptographic node identity independent of IP address
-- QUIC/UDP underlay session
-- Peer/bootstrap discovery and direct node communication
-- `OFFER`, `NEED`, `RESULT`
-- Minimal `REVOKE` path for offers/keys/results
-- `local` and initial `testnet` profiles
-- Provider-policy semantics compatible with owner/tenant/default-private authorization
+## v0.1 — Connect — **IMPLEMENTED / CI-PROVEN REFERENCE UNDERLAY**
+
+Closed: **2026-08-17**
+
+- [x] Cryptographic node identity independent of IP address
+- [x] Real QUIC/UDP underlay session
+- [x] Signed HELLO/ACCEPT authenticated peer sessions with replay/freshness checks
+- [x] Signed peer/bootstrap records
+- [x] Kademlia 256-bit XOR routing table
+- [x] Iterative peer discovery over authenticated QUIC
+- [x] Networked `PING`, `FIND_NODE`, `STORE`, `FIND_VALUE`
+- [x] Direct peer-to-peer signed TRUYN envelope communication
+- [x] Direct-first routing with explicit relay fallback
+- [x] STUN binding discovery
+- [x] Same-QUIC-socket UDP hole-punch path
+- [x] Explicit bounded backpressure instead of silent direct-path loss
+- [x] `OFFER`, `NEED`, `RESULT`
+- [x] Minimal `REVOKE` path for offers/keys/results
+- [x] `local` and initial `testnet` network profiles
+- [x] Provider-policy semantics remain compatible with owner/tenant/default-private authorization
+- [x] Composed `TruynNetworkNode` lifecycle
+- [x] Full repository regression/security gate green: 184/184 on the v0.1 evidence commit
+
+Evidence:
+
+- `docs/architecture/NETWORK_UNDERLAY_V01.md`
+- `docs/benchmarks/V01_CONNECT_GATE_2026-08-17.md`
+
+Closing v0.1 is **not** a claim that Internet-scale churn, universal NAT traversal, DHT durability or mainnet SLOs are already proved. Those are now the next network-productionization problem.
+
+## Network Productionization Gate — **NEXT**
+
+Do this before treating TRUYN as a production decentralized network:
+
+- real multi-host public/private testnet nodes;
+- join/leave/crash/restart churn exercises;
+- Kademlia record replication, refresh, repair and expiry under churn;
+- durable routing/DHT state across process restart;
+- WAN partition and healing behavior;
+- NAT/reachability matrix across real network environments;
+- relay degradation, outage and fallback recovery;
+- durable admission/backpressure/queue behavior;
+- 100 simultaneously running real network nodes;
+- 1,000 simultaneously running real network nodes;
+- Byzantine/Sybil/collusion exercises on the real underlay;
+- measured convergence, packet/byte overhead, p50/p95/p99 and failure recovery.
+
+This gate is deliberately prioritized ahead of further semantic-router feature expansion.
 
 ## v0.2 — Verify
 - `CLAIM`, `ATTEST`

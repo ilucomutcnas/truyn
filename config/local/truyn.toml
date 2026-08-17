@@ -1,0 +1,39 @@
+# TRUYN v0.1 local network profile
+version = "0.1.0-dev"
+network = "local"
+
+[node]
+data_dir = "~/.truyn"
+
+[protocol]
+preferred = "TRUYN/1"
+
+[network.transport]
+protocol = "quic"
+host = "127.0.0.1"
+port = 0
+alpn = "truyn/1"
+direct_first = true
+relay_fallback = true
+
+[network.kademlia]
+k = 20
+alpha = 3
+peer_record_ttl_ms = 300000
+
+[network.nat]
+stun = true
+udp_hole_punch = true
+same_quic_socket = true
+
+[network.backpressure]
+max_in_flight = 64
+max_queued = 256
+
+[security]
+require_signed_peer_records = true
+require_authenticated_peer_session = true
+require_signed_envelopes = true
+
+[trustability]
+policy = "development-default"

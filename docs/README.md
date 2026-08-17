@@ -7,6 +7,7 @@ Human-facing documentation for TRUYN architecture, concepts, setup, operations, 
 ### Core architecture
 
 - [Architecture Contract](architecture/ARCHITECTURE_CONTRACT.md) — canonical architecture constraints and concept ownership.
+- [v0.1 Connect Network Underlay](architecture/NETWORK_UNDERLAY_V01.md) — implemented real QUIC/UDP, authenticated peer sessions, Kademlia discovery/state RPC, direct-first P2P, STUN/same-port hole punching, backpressure and relay-fallback contract.
 - [Provider Ownership](architecture/PROVIDER_OWNERSHIP.md) — provider owner/tenant/visibility/billing boundary.
 - [Authorization Model](architecture/AUTHORIZATION_MODEL.md) — server-side fail-closed provider authorization.
 - [Relay Security](architecture/RELAY_SECURITY.md) — public relay, owner control plane, provider backchannel, and legacy-route rules.
@@ -33,6 +34,7 @@ Human-facing documentation for TRUYN architecture, concepts, setup, operations, 
 ### Benchmarks and evidence
 
 - [Benchmark evidence policy and index](benchmarks/README.md) — append-only evidence rules and the current public benchmark record.
+- [v0.1 Connect Gate — 2026-08-17](benchmarks/V01_CONNECT_GATE_2026-08-17.md) — 184/184 full-suite proof for real QUIC direct messaging, relay-free three-node Kademlia discovery, networked DHT state, composed runtime, STUN, same-QUIC-port hole punching and explicit backpressure.
 - [Cross-Cloud A/B — 2026-08-15](benchmarks/CROSS_CLOUD_AB_2026-08-15.md) — immutable measured baseline.
 - [Cross-Cloud 8× Optimization — 2026-08-15](benchmarks/CROSS_CLOUD_8X_OPTIMIZATION_2026-08-15.md) — fixed hot-path optimization gate.
 - [Context Efficiency — 2026-08-15](benchmarks/CONTEXT_EFFICIENCY_2026-08-15.md) — content-addressed context economic gate.
@@ -65,11 +67,11 @@ A benchmark result never grants access to the provider accounts used to produce 
 
 Documents explicitly label whether they describe:
 
-- implemented MVP behavior;
+- implemented MVP/reference behavior;
 - approved target architecture;
 - planned future work.
 
-An approved architecture document is **not** an implementation-complete security claim. A fail-closed requester allowlist gate is now implemented before provider execution, but the broader provider-ownership, tenant, BYOK onboarding, billing/quota, private-discovery, marketplace policy and full v0.6 Trustability resistance model remain incremental implementation work until code/tests prove each layer.
+An approved architecture document is **not** an implementation-complete security claim. The v0.1 underlay is now implemented and CI-proven as a reference network layer, while WAN churn/partition durability, real 100/1,000-node network scale, universal NAT reachability and mainnet operations remain separate future gates.
 
 ## Public documentation rule
 

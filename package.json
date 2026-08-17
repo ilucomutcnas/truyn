@@ -26,6 +26,7 @@
     "@libp2p/identify": "4.1.12",
     "@libp2p/kad-dht": "16.4.1",
     "@libp2p/ping": "3.1.5",
+    "@matrixai/quic": "2.0.9",
     "@multiformats/multiaddr": "13.0.3",
     "libp2p": "3.3.8",
     "multiformats": "14.0.5",
