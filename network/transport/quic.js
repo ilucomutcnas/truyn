@@ -211,14 +211,21 @@ export class TruynQuicTransport {
     this.clients.add(client);
     const hello = createSessionHello({ identity: this.identity, endpoints: [`quic://${this.host}:${this.port}`] });
     const response = await requestJson(client.connection, { kind: 'session-hello', hello }, this.maxMessageBytes);
-    if (!response?.ok) { await client.destroy({ force: true }); throw new Error(response?.error || 'quic_session_rejected'); }
+    if (!response?.ok) { await this.disconnect(client); throw new Error(response?.error || 'quic_session_rejected'); }
     const binding = sessionHandshakeBinding(hello);
     const verification = verifySessionAccept(response.accept, hello, { expectedTransportBinding: binding });
-    if (!verification.ok) { await client.destroy({ force: true }); throw new Error(`quic_session_accept_invalid:${verification.reason}`); }
+    if (!verification.ok) { await this.disconnect(client); throw new Error(`quic_session_accept_invalid:${verification.reason}`); }
     const expectedSessionId = sessionId(hello, response.accept);
-    if (response.sessionId !== expectedSessionId) { await client.destroy({ force: true }); throw new Error('quic_session_id_mismatch'); }
+    if (response.sessionId !== expectedSessionId) { await this.disconnect(client); throw new Error('quic_session_id_mismatch'); }
     this.clientSessions.set(client.connection, { id: expectedSessionId, peerNodeId: response.accept.nodeId, peerPublicKey: response.accept.publicKey, binding });
     return client;
+  }
+
+  async disconnect(client) {
+    if (!client) return;
+    this.clients.delete(client);
+    this.clientSessions.delete(client.connection);
+    await client.destroy({ force: true });
   }
 
   async requestControl(client, method, payload = null) {
@@ -247,7 +254,7 @@ export class TruynQuicTransport {
   async close() {
     const clients = [...this.clients];
     this.clients.clear();
-    await Promise.allSettled(clients.map((client) => client.destroy({ force: true })));
+    await Promise.allSettled(clients.map((client) => this.disconnect(client)));
     if (this.server) await this.server.stop({ force: true });
     await this.socket.stop({ force: true });
     this.server = null;
