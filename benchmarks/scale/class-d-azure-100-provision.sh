@@ -113,10 +113,10 @@ for j in \$(seq 0 24); do
   idx=\$(( ${i} * 25 + j ))
   q=\$(( ${QUIC_BASE} + j )); c=\$(( ${CONTROL_BASE} + j ))
   cat >/etc/truyn-d100/node-\${idx}.env <<ENV
-TRUYN_IDENTITY_PATH=/var/lib/truin-d100/node-\${idx}-identity.json
-TRUYN_NETWORK_STATE_PATH=/var/lib/truin-d100/node-\${idx}-state.json
-TRUYN_TLS_KEY_PATH=/etc/truin-d100/key.pem
-TRUYN_TLS_CERT_PATH=/etc/truin-d100/cert.pem
+TRUYN_IDENTITY_PATH=/var/lib/truyn-d100/node-\${idx}-identity.json
+TRUYN_NETWORK_STATE_PATH=/var/lib/truyn-d100/node-\${idx}-state.json
+TRUYN_TLS_KEY_PATH=/etc/truyn-d100/key.pem
+TRUYN_TLS_CERT_PATH=/etc/truyn-d100/cert.pem
 TRUYN_ADVERTISE_HOST=${PRIV[$i]}
 TRUYN_QUIC_HOST=0.0.0.0
 TRUYN_QUIC_PORT=\${q}
@@ -155,10 +155,10 @@ import json, urllib.request
 records=[]
 for p in range(${CONTROL_BASE}, ${CONTROL_BASE}+25):
     records.append(json.load(urllib.request.urlopen(f'http://127.0.0.1:{p}/record'))['record'])
-open('/var/lib/truin-d100/records.json','w').write(json.dumps(records,separators=(',',':')))
+open('/var/lib/truyn-d100/records.json','w').write(json.dumps(records,separators=(',',':')))
 PY
 pkill -f 'python3 -m http.server 9900' >/dev/null 2>&1 || true
-cd /var/lib/truin-d100
+cd /var/lib/truyn-d100
 nohup python3 -m http.server 9900 --bind '${PRIV[$i]}' >/tmp/truyn-record-server.log 2>&1 &
 ids=\$(jq -r '.[].nodeId' records.json)
 uc=\$(printf '%s\n' "\$ids" | sort -u | wc -l)
