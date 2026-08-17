@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { createIdentity } from '../../core/identity/index.js';
 import { nodeIdFromPublicKey } from '../../core/protocol/index.js';
 import { TruynNetworkNode } from '../runtime.js';
+import { HttpPollingRelayClient } from '../transport/http-relay.js';
 import { TESTNET_OPERATOR_PREFIX } from './operator.js';
 
 const MAX_BODY_BYTES = 1024 * 1024;
@@ -107,13 +108,24 @@ export async function createTestnetNodeService({
   dhtWriteQuorum = 2,
   dhtRpcTimeoutMs = 5_000,
   operatorNodeIds = [],
-  faultControlEnabled = false
+  faultControlEnabled = false,
+  relayUrl = null,
+  relayToken = '',
+  relayTimeoutMs = 45_000,
+  relayPollWaitMs = 10_000
 } = {}) {
   if (!identityPath || !statePath) throw new Error('identityPath and statePath are required');
   if (!tlsKey || !tlsCert) throw new Error('tlsKey and tlsCert are required');
   if (!advertiseHost) throw new Error('advertiseHost is required');
   const identity = await loadOrCreateTestnetIdentity(identityPath);
   const operators = new Set(operatorNodeIds);
+  const relay = relayUrl ? new HttpPollingRelayClient({
+    baseUrl: relayUrl,
+    nodeId: identity.nodeId,
+    token: relayToken,
+    relayTimeoutMs,
+    pollWaitMs: relayPollWaitMs
+  }) : null;
   const node = new TruynNetworkNode({
     identity,
     host: quicHost,
@@ -127,7 +139,8 @@ export async function createTestnetNodeService({
     maxQueued,
     dhtReplicationFactor,
     dhtWriteQuorum,
-    dhtRpcTimeoutMs
+    dhtRpcTimeoutMs,
+    relayFallback: relay ? (peerNodeId, envelope) => relay.fallback(peerNodeId, envelope) : null
   });
 
   const startedAt = Date.now();
@@ -144,6 +157,7 @@ export async function createTestnetNodeService({
     dhtRpcTimeoutMs: node.rpc.timeoutMs,
     operatorCount: operators.size,
     faultControlEnabled,
+    relayEnabled: Boolean(relay),
     requests: requestCount
   });
 
@@ -236,7 +250,7 @@ export async function createTestnetNodeService({
     if (command === 'bootstrap') return { results: node.bootstrap(input.records || []) };
     if (command === 'need') {
       if (!input.nodeId) throw new Error('operator_need_nodeId_required');
-      return node.need(input.nodeId, 'testnet.echo', input.input ?? { nonce: randomUUID() }, {}, { allowRelayFallback: false });
+      return node.need(input.nodeId, 'testnet.echo', input.input ?? { nonce: randomUUID() }, {}, { allowRelayFallback: Boolean(relay) });
     }
     if (command === 'replicate') return replicate(input);
     if (command === 'find') return find(input);
@@ -259,7 +273,8 @@ export async function createTestnetNodeService({
       if (req.method === 'POST' && url.pathname === '/ping') return json(res, 200, { pong: await node.pingPeer((await readJson(req)).nodeId) });
       if (req.method === 'POST' && url.pathname === '/need') {
         const body = await readJson(req);
-        return json(res, 200, await node.need(body.nodeId, 'testnet.echo', body.input ?? { nonce: randomUUID() }, {}, { allowRelayFallback: false }));
+        const allowRelayFallback = Object.hasOwn(body, 'allowRelayFallback') ? Boolean(body.allowRelayFallback) : Boolean(relay);
+        return json(res, 200, await node.need(body.nodeId, 'testnet.echo', body.input ?? { nonce: randomUUID() }, {}, { allowRelayFallback }));
       }
       if (req.method === 'POST' && url.pathname === '/replicate') return json(res, 200, await replicate(await readJson(req)));
       if (req.method === 'GET' && url.pathname === '/find') return json(res, 200, await find({ namespace: url.searchParams.get('namespace'), key: url.searchParams.get('key'), fanout: url.searchParams.get('fanout') }));
@@ -281,6 +296,7 @@ export async function createTestnetNodeService({
   });
 
   await node.start();
+  if (relay) void relay.startReceiver(node);
   await new Promise((resolvePromise, reject) => {
     const onError = (error) => { server.off('listening', onListening); reject(error); };
     const onListening = () => { server.off('error', onError); resolvePromise(); };
@@ -291,11 +307,13 @@ export async function createTestnetNodeService({
 
   return {
     node,
+    relay,
     server,
     identity,
     controlAddress: server.address(),
     async close() {
       await new Promise((resolvePromise) => server.close(() => resolvePromise()));
+      if (relay) await relay.stopReceiver();
       await node.close();
     }
   };
@@ -322,7 +340,11 @@ export async function runTestnetNodeFromEnv(env = process.env) {
     dhtWriteQuorum: int(env.TRUYN_DHT_WRITE_QUORUM, 2),
     dhtRpcTimeoutMs: int(env.TRUYN_DHT_RPC_TIMEOUT_MS, 5_000, { min: 100, max: 120_000 }),
     operatorNodeIds: csv(env.TRUYN_TESTNET_OPERATOR_NODE_IDS),
-    faultControlEnabled: flag(env.TRUYN_TESTNET_FAULT_CONTROL)
+    faultControlEnabled: flag(env.TRUYN_TESTNET_FAULT_CONTROL),
+    relayUrl: env.TRUYN_RELAY_URL || null,
+    relayToken: env.TRUYN_RELAY_TOKEN || '',
+    relayTimeoutMs: int(env.TRUYN_RELAY_TIMEOUT_MS, 45_000, { min: 100, max: 120_000 }),
+    relayPollWaitMs: int(env.TRUYN_RELAY_POLL_WAIT_MS, 10_000, { min: 100, max: 20_000 })
   });
   const address = service.controlAddress;
   process.stdout.write(`${JSON.stringify({
