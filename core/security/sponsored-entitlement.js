@@ -1,69 +1,64 @@
-import crypto from 'node:crypto';
+import { verify } from 'node:crypto';
+
+function positiveInteger(value) {
+  const number = Number(value);
+  return Number.isInteger(number) && number > 0 ? number : null;
+}
 
 function decodeBase64UrlCanonical(value) {
-  if (typeof value !== 'string' || !/^[A-Za-z0-9_-]+$/.test(value)) {
-    throw new TypeError('invalid_base64url');
+  if (typeof value !== 'string' || !/^[A-Za-z0-9_-]+$/.test(value)) return null;
+  let decoded;
+  try {
+    decoded = Buffer.from(value, 'base64url');
+  } catch {
+    return null;
   }
-  const decoded = Buffer.from(value, 'base64url');
-  if (decoded.toString('base64url') !== value) {
-    throw new TypeError('non_canonical_base64url');
-  }
+  if (decoded.length === 0 || decoded.toString('base64url') !== value) return null;
   return decoded;
 }
 
-function decodeJson(value) {
-  return JSON.parse(decodeBase64UrlCanonical(value).toString('utf8'));
-}
+export function createSponsoredEntitlementVerifier({ publicKey, now = () => new Date() } = {}) {
+  if (!publicKey) throw new Error('sponsored entitlement public key is required');
 
-export function createSponsoredEntitlementIssuer({ issuerId, identity, lifetimeMs = 300_000 } = {}) {
-  if (!issuerId || !identity?.sign) throw new TypeError('issuerId and identity are required');
-  if (!Number.isFinite(lifetimeMs) || lifetimeMs <= 0) throw new TypeError('lifetimeMs must be positive');
-  return {
-    issue({ providerId, requesterId, actorType, model, maxRequests = 1, maxTokens = 0, now = Date.now() } = {}) {
-      if (!providerId || !requesterId || !actorType || !model) throw new TypeError('providerId, requesterId, actorType and model are required');
-      const payload = {
-        v: 1,
-        iss: issuerId,
-        providerId,
-        requesterId,
-        actorType,
-        model,
-        maxRequests,
-        maxTokens,
-        iat: now,
-        exp: now + lifetimeMs,
-        nonce: crypto.randomBytes(16).toString('base64url')
-      };
-      const encoded = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
-      const signature = identity.sign(Buffer.from(encoded, 'utf8'));
-      return `${encoded}.${signature.toString('base64url')}`;
-    }
-  };
-}
+  return function verifySponsoredEntitlement(token) {
+    if (typeof token !== 'string' || token.length < 16 || token.length > 16_384) return null;
+    const parts = token.split('.');
+    if (parts.length !== 2 || !parts[0] || !parts[1]) return null;
 
-export function createSponsoredEntitlementVerifier({ issuerId, publicKey } = {}) {
-  if (!issuerId || !publicKey) throw new TypeError('issuerId and publicKey are required');
-  const verifier = crypto.createPublicKey(publicKey);
-  return ({ token, providerId, requesterId, actorType, model, now = Date.now() } = {}) => {
-    if (typeof token !== 'string') return null;
-    const [encoded, signature, extra] = token.split('.');
-    if (!encoded || !signature || extra !== undefined) return null;
-    let payload;
-    let signatureBytes;
+    const payloadBytes = decodeBase64UrlCanonical(parts[0]);
+    const signature = decodeBase64UrlCanonical(parts[1]);
+    if (!payloadBytes || !signature) return null;
+
+    let valid = false;
     try {
-      payload = decodeJson(encoded);
-      signatureBytes = decodeBase64UrlCanonical(signature);
+      valid = verify(null, Buffer.from(parts[0], 'utf8'), publicKey, signature);
     } catch {
       return null;
     }
-    const ok = verifier.verify(Buffer.from(encoded, 'utf8'), signatureBytes);
-    if (!ok) return null;
-    if (payload.v !== 1 || payload.iss !== issuerId) return null;
-    if (payload.providerId !== providerId || payload.requesterId !== requesterId) return null;
-    if (payload.actorType !== actorType || payload.model !== model) return null;
-    if (!Number.isInteger(payload.maxRequests) || payload.maxRequests < 0) return null;
-    if (!Number.isInteger(payload.maxTokens) || payload.maxTokens < 0) return null;
-    if (!Number.isFinite(payload.exp) || now >= payload.exp) return null;
-    return payload;
+    if (!valid) return null;
+
+    let claims;
+    try {
+      claims = JSON.parse(payloadBytes.toString('utf8'));
+    } catch {
+      return null;
+    }
+
+    const actorId = typeof claims?.actorId === 'string' ? claims.actorId.trim() : '';
+    const entitlementId = typeof claims?.entitlementId === 'string' ? claims.entitlementId.trim() : '';
+    const expiresAtMs = Date.parse(claims?.expiresAt || '');
+    const maxDailyRequests = positiveInteger(claims?.maxDailyRequests);
+    const maxDailyTokens = positiveInteger(claims?.maxDailyTokens);
+    if (claims?.version !== 1 || !actorId || !entitlementId || !Number.isFinite(expiresAtMs)) return null;
+    if (expiresAtMs <= now().getTime() || !maxDailyRequests || !maxDailyTokens) return null;
+
+    return {
+      version: 1,
+      actorId,
+      entitlementId,
+      expiresAt: new Date(expiresAtMs).toISOString(),
+      maxDailyRequests,
+      maxDailyTokens
+    };
   };
 }
