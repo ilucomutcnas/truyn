@@ -114,7 +114,7 @@ async function advertiseWithRetry(node, key, attempts = 3) {
   throw new Error('unreachable scale publication state');
 }
 
-async function densify(indices, { rounds = 4 } = {}) {
+async function densify(indices, { rounds = 1, refreshConcurrency = 20 } = {}) {
   const active = indices.filter((index) => cluster.nodes[index]?.node?.status === 'started');
   if (active.length < 2) return cluster.snapshot();
   const position = new Map(active.map((index, offset) => [index, offset]));
@@ -126,17 +126,17 @@ async function densify(indices, { rounds = 4 } = {}) {
     return { index, targets };
   });
 
-  for (const batch of batches(plans, 10)) {
+  for (const batch of batches(plans, 12)) {
     await Promise.all(batch.map(async ({ index, targets }) => {
       for (const target of targets) {
         await connectQuicPeers(cluster.nodes[index].node, [cluster.nodes[target].address]).catch(() => {});
       }
     }));
   }
-  await sleep(350);
+  await sleep(500);
   for (let round = 0; round < rounds; round += 1) {
-    await cluster.refreshAll({ indices: active, concurrency: 5, timeoutMs: 12_000 });
-    await sleep(120);
+    await cluster.refreshAll({ indices: active, concurrency: refreshConcurrency, timeoutMs: 12_000 });
+    await sleep(150);
   }
   return cluster.snapshot();
 }
@@ -147,8 +147,8 @@ async function customPartitionScenario() {
   const right = Array.from({ length: nodeCount - midpoint }, (_, index) => index + midpoint);
 
   await cluster.setPartition(left, right);
-  const leftTopology = await densify(left, { rounds: 3 });
-  const rightTopology = await densify(right, { rounds: 3 });
+  const leftTopology = await densify(left, { rounds: 1, refreshConcurrency: 16 });
+  const rightTopology = await densify(right, { rounds: 1, refreshConcurrency: 16 });
   stage('partition:isolated', {
     leftRoutingP50: leftTopology.routingTableSize.p50,
     rightRoutingP50: rightTopology.routingTableSize.p50
@@ -167,7 +167,7 @@ async function customPartitionScenario() {
 
   const recoveryStarted = performance.now();
   for (const node of cluster.nodes) node.gater.heal();
-  await densify(cluster.liveIndices(), { rounds: 4 });
+  await densify(cluster.liveIndices(), { rounds: 2, refreshConcurrency: 20 });
   const recoveryPublication = await advertiseWithRetry(cluster.nodes[rightAssignment.providerIndex], rightAssignment.key);
   let recovered = false;
   let recoveryAttempts = 0;
@@ -204,7 +204,7 @@ async function customChurnScenario() {
   await Promise.all(stopped.map((index) => cluster.nodes[index].stop()));
 
   const survivors = cluster.liveIndices();
-  const survivorTopology = await densify(survivors, { rounds: 3 });
+  const survivorTopology = await densify(survivors, { rounds: 1, refreshConcurrency: 20 });
   stage('churn:survivors-ready', {
     survivors: survivors.length,
     routingP50: survivorTopology.routingTableSize.p50,
@@ -229,7 +229,7 @@ async function customChurnScenario() {
       peerRotations.push(oldPeers.get(index) !== cluster.nodes[index].peerIdString);
     }));
   }
-  const healedTopology = await densify(cluster.liveIndices(), { rounds: 4 });
+  const healedTopology = await densify(cluster.liveIndices(), { rounds: 2, refreshConcurrency: 20 });
 
   return {
     stoppedNodes: stopped.length,
@@ -247,7 +247,7 @@ try {
   cluster = new AdversarialScaleCluster({ count: nodeCount, seed });
   stage('topology:start', { nodeCount });
   await cluster.start({ concurrency: 8 });
-  const topologyAfterDensify = await densify(cluster.liveIndices(), { rounds: 4 });
+  const topologyAfterDensify = await densify(cluster.liveIndices(), { rounds: 1, refreshConcurrency: 20 });
   const topology = cluster.snapshot();
   stage('topology:ready', {
     live: topology.live,
@@ -278,7 +278,7 @@ try {
         ...await advertiseWithRetry(cluster.nodes[assignment.providerIndex], assignment.key)
       });
     }
-    await cluster.refreshAll({ concurrency: 5, timeoutMs: 12_000 });
+    await cluster.refreshAll({ concurrency: 20, timeoutMs: 12_000 });
     stage('baseline:measure:start', { samples: Math.min(40, nodeCount) });
     const measurement = await cluster.measureRouting(assignments, { samples: Math.min(40, nodeCount), timeoutMs: 4_000 });
     result = { publication, measurement };
