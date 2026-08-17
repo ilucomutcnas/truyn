@@ -54,4 +54,18 @@ jobs:
             target && /run: \|/ { found=1; next }
           ' .github/workflows/tmp-network-class-c-cross-cloud.yml > /tmp/truyn-class-c.sh
           test -s /tmp/truyn-class-c.sh
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('/tmp/truyn-class-c.sh')
+          out = []
+          for line in path.read_text().splitlines():
+              stripped = line.strip()
+              if stripped.startswith('GCP_Z1="$(gcloud compute zones list'):
+                  out.append('GCP_Z1="${GCP_R1}-a"')
+              elif stripped.startswith('GCP_Z2="$(gcloud compute zones list'):
+                  out.append('GCP_Z2="${GCP_R2}-b"')
+              else:
+                  out.append(line)
+          path.write_text('\n'.join(out) + '\n')
+          PY
           bash /tmp/truyn-class-c.sh
