@@ -17,16 +17,28 @@ permissions:
   contents: read
 
 jobs:
-  scale-100:
+  scale-100-scenario:
+    name: scale-100 / ${{ matrix.scenario }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        scenario:
+          - baseline
+          - partition
+          - churn
+          - eclipse
+          - sybil-collusion
     env:
       TRUYN_SCALE_NODE_COUNT: '100'
       TRUYN_SCALE_SEED: '1414681945'
+      TRUYN_SCALE_SCENARIO: ${{ matrix.scenario }}
       TRUYN_SCALE_HOST_COUNT: '1'
       TRUYN_SCALE_FAILURE_DOMAIN_TYPE: 'github-hosted-runner-single-host'
       TRUYN_SCALE_CLOUD: 'github-actions'
-      TRUYN_SCALE_REPORT: 'artifacts/scale100-report.json'
+      TRUYN_SCALE_REPORT: artifacts/scale100-${{ matrix.scenario }}.json
     steps:
       - uses: actions/checkout@v4
         with:
@@ -36,63 +48,44 @@ jobs:
           node-version: '22'
       - name: Install dependencies
         run: npm install --ignore-scripts --no-audit --no-fund
-      - name: Run 100-node adversarial QUIC/Kademlia gate
-        run: npm run testnet:scale100
-      - name: Print compact scale summary
+      - name: Run isolated 100-node scenario
+        run: node simulations/nodes-100/scenario.js
+      - name: Print compact scenario summary
         if: always()
         shell: bash
         run: |
-          if [[ ! -f artifacts/scale100-report.json ]]; then
-            echo 'TRUYN_SCALE_SUMMARY report_missing=true'
+          REPORT="artifacts/scale100-${TRUYN_SCALE_SCENARIO}.json"
+          if [[ ! -f "$REPORT" ]]; then
+            echo "TRUYN_SCALE_SUMMARY scenario=${TRUYN_SCALE_SCENARIO} report_missing=true"
             exit 0
           fi
           node --input-type=module <<'NODE'
           import { readFileSync } from 'node:fs';
-          const report = JSON.parse(readFileSync('artifacts/scale100-report.json', 'utf8'));
+          const report = JSON.parse(readFileSync(process.env.TRUYN_SCALE_REPORT, 'utf8'));
           const summary = {
+            scenario: report.scenario,
             passed: report.passed,
             nodeCount: report.nodeCount,
-            live: report.finalNetwork?.live,
-            libp2pIds: report.finalNetwork?.uniqueLibp2pPeerIds,
-            truynIds: report.finalNetwork?.uniqueTruynNodeIds,
+            live: report.finalNetwork?.live ?? report.topology?.live ?? null,
+            libp2pIds: report.finalNetwork?.uniqueLibp2pPeerIds ?? report.topology?.uniqueLibp2pPeerIds ?? null,
+            truynIds: report.finalNetwork?.uniqueTruynNodeIds ?? report.topology?.uniqueTruynNodeIds ?? null,
             hostCount: report.execution?.hostCount,
             failureDomainType: report.execution?.failureDomainType,
-            baselineFirstAttemptRouting: report.baseline?.firstAttemptRoutingSuccessRatio,
-            baselineRouting: report.baseline?.routingSuccessRatio,
-            baselineIntegrity: report.baseline?.endToEndIntegritySuccessRatio,
-            routingLatencyMs: report.baseline?.routingLatencyMs,
-            probeLatencyMs: report.baseline?.probeLatencyMs,
-            partition: report.partition,
-            churn: report.churn ? {
-              stoppedNodes: report.churn.stoppedNodes,
-              duringChurnRouting: report.churn.duringChurn?.routingSuccessRatio,
-              recoveredNodes: report.churn.recoveredNodes,
-              peerIdentityRotations: report.churn.peerIdentityRotations,
-              recoveryMs: report.churn.recoveryMs
-            } : null,
-            eclipse: report.eclipse,
-            sybilPressure: report.sybilPressure,
-            byzantineCollusion: report.byzantineCollusion ? {
-              attackerCount: report.byzantineCollusion.attackerCount,
-              providerResponses: report.byzantineCollusion.providerResponses,
-              maliciousResponsesObserved: report.byzantineCollusion.maliciousResponsesObserved,
-              maliciousAccepted: report.byzantineCollusion.maliciousAccepted,
-              honestAccepted: report.byzantineCollusion.honestAccepted,
-              attackExercised: report.byzantineCollusion.attackExercised,
-              integrityPreserved: report.byzantineCollusion.integrityPreserved
-            } : null,
-            telemetry: report.finalNetwork?.telemetry,
             durationMs: report.durationMs,
             gates: report.gates,
-            claims: report.claims
+            result: report.result,
+            telemetry: report.finalNetwork?.telemetry,
+            claims: report.claims,
+            failureStage: report.stage ?? null,
+            error: report.error ?? null
           };
           console.log(`TRUYN_SCALE_SUMMARY ${JSON.stringify(summary)}`);
           NODE
-      - name: Upload raw scale evidence
+      - name: Upload raw scenario evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: truyn-scale100-raw-${{ github.run_id }}
-          path: artifacts/scale100-report.json
+          name: truyn-scale100-${{ matrix.scenario }}-${{ github.run_id }}
+          path: artifacts/scale100-${{ matrix.scenario }}.json
           if-no-files-found: warn
           retention-days: 90
