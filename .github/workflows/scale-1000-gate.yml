@@ -47,8 +47,8 @@ jobs:
           node-version: '22'
       - name: Install dependencies
         run: npm install --ignore-scripts --no-audit --no-fund
-      - name: Run isolated 1000-runtime scenario
-        run: node simulations/nodes-100/scenario.js
+      - name: Run isolated 1000-runtime peer-routing scenario
+        run: node simulations/nodes-100/scenario-peer-routing-v3.js
       - name: Print compact scenario summary
         if: always()
         shell: bash
@@ -62,9 +62,13 @@ jobs:
           import { readFileSync } from 'node:fs';
           const report = JSON.parse(readFileSync(process.env.TRUYN_SCALE_REPORT, 'utf8'));
           const summary = {
+            schema: report.schema,
+            runner: report.runner ?? null,
             scenario: report.scenario,
             passed: report.passed,
             nodeCount: report.nodeCount,
+            routingPrimitive: report.routingPrimitive ?? null,
+            topologyMode: report.topologyMode ?? null,
             live: report.finalNetwork?.live ?? report.topology?.live ?? null,
             libp2pIds: report.finalNetwork?.uniqueLibp2pPeerIds ?? report.topology?.uniqueLibp2pPeerIds ?? null,
             truynIds: report.finalNetwork?.uniqueTruynNodeIds ?? report.topology?.uniqueTruynNodeIds ?? null,
@@ -72,6 +76,7 @@ jobs:
             bandwidth: report.bandwidth ?? null,
             durationMs: report.durationMs,
             gates: report.gates,
+            diagnostics: report.diagnostics ?? null,
             claims: report.claims,
             failureStage: report.stage ?? null,
             error: report.error ?? null
