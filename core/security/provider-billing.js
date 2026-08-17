@@ -5,6 +5,11 @@ function nonNegativeInteger(value, fallback = 0) {
   return Number.isInteger(number) && number >= 0 ? number : fallback;
 }
 
+function positiveInteger(value) {
+  const number = Number(value);
+  return Number.isInteger(number) && number > 0 ? number : null;
+}
+
 function utcDayKey(date = new Date()) {
   return date.toISOString().slice(0, 10);
 }
@@ -14,6 +19,8 @@ export function createProviderBillingPolicy({
   sponsoredAccess = false,
   freeDailyRequests = 0,
   freeDailyTokens = 0,
+  signedEntitlementVerifier = null,
+  sponsoredUsageStore = null,
   now = () => new Date()
 } = {}) {
   const normalizedMode = String(mode).trim().toLowerCase();
@@ -21,17 +28,17 @@ export function createProviderBillingPolicy({
 
   const requestLimit = nonNegativeInteger(freeDailyRequests);
   const tokenLimit = nonNegativeInteger(freeDailyTokens);
-  const usage = new Map();
 
-  function usageFor(requesterId) {
-    const day = utcDayKey(now());
-    const current = usage.get(requesterId);
-    if (!current || current.day !== day) {
-      const fresh = { day, requests: 0, tokens: 0 };
-      usage.set(requesterId, fresh);
-      return fresh;
+  if (sponsoredAccess && normalizedMode !== 'sponsored') {
+    throw new Error('sponsoredAccess may only be enabled with sponsored billing mode');
+  }
+  if (normalizedMode === 'sponsored' && sponsoredAccess) {
+    if (typeof signedEntitlementVerifier !== 'function') {
+      throw new Error('Sponsored access requires a signed entitlement verifier');
     }
-    return current;
+    if (!sponsoredUsageStore || sponsoredUsageStore.durable !== true || typeof sponsoredUsageStore.reserve !== 'function') {
+      throw new Error('Sponsored access requires an atomic durable usage store');
+    }
   }
 
   function authorize(need, { accessPolicy, estimatedTokens = null } = {}) {
@@ -79,20 +86,66 @@ export function createProviderBillingPolicy({
       return { ok: false, mode: normalizedMode, reason: 'sponsored_token_estimate_required' };
     }
 
-    const current = usageFor(requesterId);
-    if (current.requests >= requestLimit) return { ok: false, mode: normalizedMode, reason: 'sponsored_request_quota_exhausted' };
-    if (current.tokens + estimatedTokens > tokenLimit) return { ok: false, mode: normalizedMode, reason: 'sponsored_token_quota_exhausted' };
+    const token = need?.payload?.policy?.billing?.entitlement;
+    if (typeof token !== 'string' || !token) {
+      return { ok: false, mode: normalizedMode, reason: 'sponsored_entitlement_required' };
+    }
 
-    current.requests += 1;
-    current.tokens += estimatedTokens;
+    let claims = null;
+    try {
+      claims = signedEntitlementVerifier(token);
+    } catch {}
+    if (!claims) return { ok: false, mode: normalizedMode, reason: 'sponsored_entitlement_invalid' };
+    if (claims.actorId !== requesterId) {
+      return { ok: false, mode: normalizedMode, reason: 'sponsored_entitlement_actor_mismatch' };
+    }
+
+    const expiresAtMs = Date.parse(claims.expiresAt || '');
+    if (!Number.isFinite(expiresAtMs) || expiresAtMs <= now().getTime()) {
+      return { ok: false, mode: normalizedMode, reason: 'sponsored_entitlement_expired' };
+    }
+    if (typeof claims.entitlementId !== 'string' || !claims.entitlementId.trim()) {
+      return { ok: false, mode: normalizedMode, reason: 'sponsored_entitlement_invalid' };
+    }
+
+    const claimRequestLimit = positiveInteger(claims.maxDailyRequests);
+    const claimTokenLimit = positiveInteger(claims.maxDailyTokens);
+    if (!claimRequestLimit || !claimTokenLimit) {
+      return { ok: false, mode: normalizedMode, reason: 'sponsored_entitlement_invalid' };
+    }
+
+    const effectiveRequestLimit = Math.min(requestLimit, claimRequestLimit);
+    const effectiveTokenLimit = Math.min(tokenLimit, claimTokenLimit);
+    let reservation;
+    try {
+      reservation = sponsoredUsageStore.reserve({
+        actorId: requesterId,
+        entitlementId: claims.entitlementId,
+        day: utcDayKey(now()),
+        requestLimit: effectiveRequestLimit,
+        tokenLimit: effectiveTokenLimit,
+        estimatedTokens
+      });
+    } catch {
+      return { ok: false, mode: normalizedMode, reason: 'sponsored_usage_store_unavailable' };
+    }
+    if (!reservation?.ok) {
+      return {
+        ok: false,
+        mode: normalizedMode,
+        reason: reservation?.reason || 'sponsored_quota_exhausted'
+      };
+    }
+
     return {
       ok: true,
       mode: normalizedMode,
       requesterId,
+      entitlementId: claims.entitlementId,
       billingResponsibility: 'provider-owner-sponsored',
       reservedTokens: estimatedTokens,
-      remainingRequests: requestLimit - current.requests,
-      remainingTokens: tokenLimit - current.tokens
+      remainingRequests: nonNegativeInteger(reservation.remainingRequests),
+      remainingTokens: nonNegativeInteger(reservation.remainingTokens)
     };
   }
 

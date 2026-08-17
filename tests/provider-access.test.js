@@ -3,6 +3,28 @@ import assert from 'node:assert/strict';
 import { createProviderAccessPolicy } from '../core/security/provider-access.js';
 import { TruynAdapterHost } from '../adapters/sdk/index.js';
 
+test('provider access is owner-only by default at the lowest policy layer', () => {
+  const previous = process.env.TRUYN_PROVIDER_ACCESS_MODE;
+  delete process.env.TRUYN_PROVIDER_ACCESS_MODE;
+  try {
+    const policy = createProviderAccessPolicy();
+    assert.equal(policy.mode, 'owner-only');
+    assert.deepEqual(policy.authorize({ from: 'truyn:node:external' }), {
+      ok: false,
+      mode: 'owner-only',
+      reason: 'no_allowed_requesters'
+    });
+  } finally {
+    if (previous == null) delete process.env.TRUYN_PROVIDER_ACCESS_MODE;
+    else process.env.TRUYN_PROVIDER_ACCESS_MODE = previous;
+  }
+});
+
+test('public provider access remains an explicit opt-in', () => {
+  const policy = createProviderAccessPolicy({ mode: 'public' });
+  assert.deepEqual(policy.authorize({ from: 'truyn:node:external' }), { ok: true, mode: 'public' });
+});
+
 test('owner-only provider policy denies when allowlist is empty', () => {
   const policy = createProviderAccessPolicy({ mode: 'owner-only', allowedRequesterIds: '' });
   assert.deepEqual(policy.authorize({ from: 'truyn:node:external' }), {

@@ -31,6 +31,38 @@ function guardedHeaders(headers = {}, headerName = ORIGIN_GUARD_HEADER) {
   return next;
 }
 
+function parseExpiry(value, label) {
+  if (!String(value || '').trim()) return null;
+  const timestamp = Date.parse(String(value).trim());
+  if (!Number.isFinite(timestamp)) throw new Error(`${label} must be an ISO-8601 timestamp`);
+  return timestamp;
+}
+
+function secretSafeConfig(base, { token = null, tokens = [] } = {}) {
+  const config = { ...base };
+  Object.defineProperty(config, 'token', { value: token, enumerable: false, writable: false });
+  Object.defineProperty(config, 'tokens', { value: Object.freeze(tokens.map((item) => Object.freeze({ ...item }))), enumerable: false, writable: false });
+  Object.defineProperty(config, 'toJSON', { value: () => ({ ...base }), enumerable: false });
+  return Object.freeze(config);
+}
+
+function normalizeTokenRecords({ token = null, tokenExpiresAt = null, tokens = null, headerName }) {
+  const values = Array.isArray(tokens) && tokens.length > 0
+    ? tokens
+    : (String(token || '').trim() ? [{ value: String(token).trim(), expiresAt: tokenExpiresAt }] : []);
+  if (values.length === 0) throw new Error('origin guard token is required');
+
+  return values.map((record) => {
+    const value = String(record?.value || '').trim();
+    if (!value) throw new Error('origin guard token is required');
+    const expiry = parseExpiry(record?.expiresAt, 'origin guard token expiry');
+    if (headerName === ORIGIN_GUARD_HEADER && !expiry) {
+      throw new Error('x-truyn-origin-token requires an explicit expiry');
+    }
+    return { value, expiresAt: expiry ? new Date(expiry).toISOString() : null };
+  });
+}
+
 function writeJson(res, status, body) {
   if (res.writableEnded) return;
   const data = JSON.stringify(body);
@@ -62,25 +94,72 @@ function responseHead(response) {
   return `${head}\r\n`;
 }
 
-export function createRuntimeOriginGuardConfig(env = process.env) {
+export function createRuntimeOriginGuardConfig(env = process.env, { now = () => new Date() } = {}) {
   const active = enabled(env.TRUYN_ORIGIN_GUARD);
   const token = String(env.TRUYN_ORIGIN_GUARD_TOKEN || '').trim();
+  const tokenExpiryRaw = String(env.TRUYN_ORIGIN_GUARD_TOKEN_EXPIRES_AT || '').trim();
+  const previousToken = String(env.TRUYN_ORIGIN_GUARD_PREVIOUS_TOKEN || '').trim();
+  const previousExpiryRaw = String(env.TRUYN_ORIGIN_GUARD_PREVIOUS_TOKEN_EXPIRES_AT || '').trim();
   const configuredHeader = String(env.TRUYN_ORIGIN_GUARD_HEADER || '').trim();
+
+  const anyGuardConfig = token || tokenExpiryRaw || previousToken || previousExpiryRaw || configuredHeader;
+  if (!active && anyGuardConfig) throw new Error('origin guard settings require explicit TRUYN_ORIGIN_GUARD=1');
   if (active && !token) throw new Error('TRUYN_ORIGIN_GUARD=1 requires TRUYN_ORIGIN_GUARD_TOKEN');
-  if (!active && token) throw new Error('TRUYN_ORIGIN_GUARD_TOKEN requires explicit TRUYN_ORIGIN_GUARD=1');
-  if (!active && configuredHeader) throw new Error('TRUYN_ORIGIN_GUARD_HEADER requires explicit TRUYN_ORIGIN_GUARD=1');
+
   const headerName = active ? normalizeHeaderName(configuredHeader || ORIGIN_GUARD_HEADER) : ORIGIN_GUARD_HEADER;
-  return { enabled: active, token: active ? token : null, headerName };
+  if (!active) {
+    return secretSafeConfig({
+      enabled: false,
+      headerName,
+      tokenExpiresAt: null,
+      previousTokenExpiresAt: null,
+      acceptedTokenCount: 0,
+      rotationEnabled: false
+    });
+  }
+
+  const tokenExpiry = parseExpiry(tokenExpiryRaw, 'TRUYN_ORIGIN_GUARD_TOKEN_EXPIRES_AT');
+  if (headerName === ORIGIN_GUARD_HEADER && !tokenExpiry) {
+    throw new Error('TRUYN_ORIGIN_GUARD_TOKEN_EXPIRES_AT is required for x-truyn-origin-token');
+  }
+  if (tokenExpiry && tokenExpiry <= now().getTime()) throw new Error('TRUYN_ORIGIN_GUARD_TOKEN is expired');
+
+  if (previousToken && !previousExpiryRaw) {
+    throw new Error('TRUYN_ORIGIN_GUARD_PREVIOUS_TOKEN requires TRUYN_ORIGIN_GUARD_PREVIOUS_TOKEN_EXPIRES_AT');
+  }
+  if (!previousToken && previousExpiryRaw) {
+    throw new Error('TRUYN_ORIGIN_GUARD_PREVIOUS_TOKEN_EXPIRES_AT requires TRUYN_ORIGIN_GUARD_PREVIOUS_TOKEN');
+  }
+  const previousExpiry = parseExpiry(previousExpiryRaw, 'TRUYN_ORIGIN_GUARD_PREVIOUS_TOKEN_EXPIRES_AT');
+
+  const acceptedTokens = [{ value: token, expiresAt: tokenExpiry ? new Date(tokenExpiry).toISOString() : null }];
+  if (previousToken && previousExpiry > now().getTime()) {
+    acceptedTokens.push({ value: previousToken, expiresAt: new Date(previousExpiry).toISOString() });
+  }
+
+  const safe = {
+    enabled: true,
+    headerName,
+    tokenExpiresAt: tokenExpiry ? new Date(tokenExpiry).toISOString() : null,
+    previousTokenExpiresAt: previousExpiry ? new Date(previousExpiry).toISOString() : null,
+    acceptedTokenCount: acceptedTokens.length,
+    rotationEnabled: acceptedTokens.length > 1
+  };
+  return secretSafeConfig(safe, { token, tokens: acceptedTokens });
 }
 
-export function createOriginGuard({ targetHost = '127.0.0.1', targetPort, token, headerName = ORIGIN_GUARD_HEADER } = {}) {
+export function createOriginGuard({ targetHost = '127.0.0.1', targetPort, token = null, tokenExpiresAt = null, tokens = null, headerName = ORIGIN_GUARD_HEADER, now = () => Date.now() } = {}) {
   if (!Number.isInteger(targetPort) || targetPort <= 0 || targetPort > 65535) throw new Error('targetPort is required');
-  if (!String(token || '').trim()) throw new Error('origin guard token is required');
-  const expectedToken = String(token).trim();
   const expectedHeader = normalizeHeaderName(headerName);
+  const expectedTokens = normalizeTokenRecords({ token, tokenExpiresAt, tokens, headerName: expectedHeader });
 
   function authorized(req) {
-    return constantTimeEqual(req.headers[expectedHeader], expectedToken);
+    const current = Number(now());
+    return expectedTokens.some((record) => {
+      const expiry = record.expiresAt ? Date.parse(record.expiresAt) : null;
+      if (expiry && (!Number.isFinite(current) || current >= expiry)) return false;
+      return constantTimeEqual(req.headers[expectedHeader], record.value);
+    });
   }
 
   function proxyHttp(req, res) {

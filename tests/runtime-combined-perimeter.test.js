@@ -87,6 +87,7 @@ test('combined runtime perimeter requires edge proof before provider M2M proof',
       TRUYN_ALLOWED_NODE_IDS: identity.nodeId,
       TRUYN_ORIGIN_GUARD: '1',
       TRUYN_ORIGIN_GUARD_TOKEN: 'edge-proof',
+      TRUYN_ORIGIN_GUARD_TOKEN_EXPIRES_AT: '2099-01-01T00:00:00.000Z',
       TRUYN_PROTECTED_PROVIDER_NODE_IDS: identity.nodeId,
       TRUYN_PROVIDER_BACKCHANNEL_TOKEN: 'provider-proof',
       TRUYN_PUBLIC_NETWORK: '0'

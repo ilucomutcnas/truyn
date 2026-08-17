@@ -31,7 +31,11 @@ async function readJson(req, maxBodyBytes) {
   let total = 0;
   for await (const chunk of req) {
     total += chunk.length;
-    if (total > maxBodyBytes) throw httpError(413, 'request_too_large');
+    if (total > maxBodyBytes) {
+      const error = httpError(413, 'request_too_large');
+      error.closeConnection = true;
+      throw error;
+    }
     chunks.push(chunk);
   }
   if (chunks.length === 0) return {};
@@ -106,8 +110,13 @@ export function createRelay({
   allowPublicRegistration = false,
   allowPublicDispatch = false,
   localDevelopmentMode = false,
+  productionMode = false,
   exposeDiagnostics = false
 } = {}) {
+  if (localDevelopmentMode && (productionMode || allowPublicRegistration || allowPublicDispatch)) {
+    throw new Error('localDevelopmentMode cannot be combined with production or public relay access');
+  }
+
   const nodes = new Map();
   const sessions = new Map();
   const offers = new Map();
@@ -819,6 +828,10 @@ export function createRelay({
       return json(res, 404, { ok: false, error: 'not_found' });
     } catch (error) {
       const status = Number.isInteger(error.httpStatus) ? error.httpStatus : 500;
+      if ((error.closeConnection || status === 413) && !res.headersSent) {
+        res.shouldKeepAlive = false;
+        res.setHeader('connection', 'close');
+      }
       return json(res, status, { ok: false, error: error.publicCode || (status < 500 ? error.message : 'internal_error') });
     }
   });

@@ -11,10 +11,12 @@ function jsonResponse(status, body) {
   });
 }
 
-function resolveOriginConfig(env = {}) {
+function resolveOriginConfig(env = {}, now = Date.now()) {
   const rawOrigin = String(env.TRUYN_ORIGIN_URL || '').trim();
   const token = String(env.TRUYN_ORIGIN_GUARD_TOKEN || '').trim();
-  if (!rawOrigin || !token) return null;
+  const expiresAtRaw = String(env.TRUYN_ORIGIN_GUARD_TOKEN_EXPIRES_AT || '').trim();
+  const expiresAt = Date.parse(expiresAtRaw);
+  if (!rawOrigin || !token || !expiresAtRaw || !Number.isFinite(expiresAt) || expiresAt <= now) return null;
 
   let origin;
   try {
