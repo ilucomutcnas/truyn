@@ -47,12 +47,16 @@ jobs:
               importNeedle,
               `${importNeedle}import { createProviderAccessPolicy } from '../core/security/provider-access.js';\n`,
             );
-            const hostNeedle = "    publicKeysByNodeId: requesterPublicKeys,\n";
-            const occurrences = text.split(hostNeedle).length - 1;
-            if (occurrences !== 2) throw new Error(`expected 2 public host config anchors, got ${occurrences}`);
-            text = text.replaceAll(
-              hostNeedle,
-              `    publicKeysByNodeId: requesterPublicKeys,\n    accessPolicy: createProviderAccessPolicy({ mode: 'public' }),\n`,
+            const researchNeedle = "  const researchHost = new TruynAdapterHost({\n    node: researchNode,\n";
+            const reviewNeedle = "  const reviewHost = new TruynAdapterHost({\n    node: reviewNode,\n";
+            if (!text.includes(researchNeedle) || !text.includes(reviewNeedle)) throw new Error('mvp provider host anchors missing');
+            text = text.replace(
+              researchNeedle,
+              `${researchNeedle}    accessPolicy: createProviderAccessPolicy({ mode: 'public' }),\n`,
+            );
+            text = text.replace(
+              reviewNeedle,
+              `${reviewNeedle}    accessPolicy: createProviderAccessPolicy({ mode: 'public' }),\n`,
             );
             fs.writeFileSync(path, text);
           }
