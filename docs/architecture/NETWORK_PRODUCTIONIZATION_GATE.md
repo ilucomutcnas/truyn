@@ -51,6 +51,10 @@ The productionization branch extends the generic `TruynNetworkNode` underlay wit
 - atomic identity-bound network-state snapshots;
 - durable valid peer records and DHT records;
 - monotonic peer-record sequence across restart;
+- automatic signed peer-record renewal before lease expiry;
+- durability-before-dissemination for each renewed peer-record sequence;
+- authenticated QUIC `peer.announce` dissemination with bounded fanout;
+- current self-record piggyback on PING and self `FIND_NODE` responses so missed proactive announcements can repair on later contact;
 - routing restoration without mandatory re-bootstrap;
 - configurable DHT replication factor and write quorum;
 - fail-closed `TRUYN_DHT_WRITE_QUORUM` when required acknowledgements cannot be reached;
@@ -60,6 +64,7 @@ The productionization branch extends the generic `TruynNetworkNode` underlay wit
 - P2P QUIC client cache binding to signed peer-record sequence + endpoint;
 - DHT RPC QUIC client cache binding to signed peer-record sequence + endpoint;
 - deterministic stale-client invalidation when a newer signed peer record is accepted;
+- deferred PING-response peer-record ingestion so stale-client eviction cannot tear down the active native QUIC response stack re-entrantly;
 - deterministic peer partition/heal fault injection;
 - deterministic relay `healthy / degraded / down` fault modes;
 - explicit bounded admission/backpressure before handler execution;
@@ -77,6 +82,11 @@ CI has executable proof for:
 
 - crash-style restart with identity continuity;
 - peer-record sequence monotonicity after restart;
+- automatic signed peer-record renewal before expiry;
+- persistence of the renewed sequence before any peer announcement;
+- authenticated peer-record dissemination to known peers;
+- stale P2P and DHT-RPC client invalidation after a newer signed record is accepted;
+- recovery of a missed proactive renewal announcement from a later PING response;
 - restored routing and DHT state;
 - replicated DHT write and read recovery;
 - failed-holder replacement repair;
@@ -127,7 +137,7 @@ The measured direct and repair latencies are guest-side TRUYN control-request me
 
 The accepted Azure harness used `TRUYN_PEER_RECORD_TTL_MS=1800000` (30 minutes) because serial Azure VM RunCommand orchestration is much slower than normal peer-to-peer operation and can exceed the five-minute reference/default peer lease before assertions execute.
 
-This is a benchmark-harness override only. The protocol/reference default remains unchanged. Automatic peer-record renewal and dissemination before lease expiry remains an open productionization item.
+This remains historical Class B benchmark truth. The later reference runtime now has automatic signed lease renewal/dissemination and CI proof for that lifecycle, but the accepted four-host Class B run itself did **not** exercise automatic renewal. No WAN/NAT claim is inferred from the later CI slice.
 
 ## Class B acceptance criteria — closed
 
@@ -176,7 +186,6 @@ Until separate evidence closes them, TRUYN does **not** claim completion of:
 - packet-path WAN partition/healing; the Class B partition was deterministic TRUYN peer fault injection, not physical/route-level WAN loss;
 - heterogeneous multi-region / multi-provider failure-domain proof;
 - real NAT/CGNAT traversal coverage;
-- automatic signed peer-record lease renewal/dissemination under long-lived operation;
 - relay outage production SLOs;
 - replicated accepted-work queue survival after underlying host/volume loss;
 - transactional exactly-once semantics for arbitrary external side effects;
