@@ -50,7 +50,7 @@ export function verifyPeerRecord(record, { now = Date.now(), allowExpired = fals
 }
 
 export class PeerDiscovery {
-  constructor({ identity, k = 20, alpha = 3, rpc = null } = {}) {
+  constructor({ identity, k = 20, alpha = 3, rpc = null, onChange = null } = {}) {
     assertIdentity(identity);
     this.identity = identity;
     this.k = k;
@@ -58,16 +58,19 @@ export class PeerDiscovery {
     this.routing = new KademliaRoutingTable({ localNodeId: identity.nodeId, k });
     this.records = new Map();
     this.rpc = rpc;
+    this.onChange = onChange;
   }
 
   ingest(record, options = {}) {
-    const verification = verifyPeerRecord(record, options);
+    const { notify = true, ...verifyOptions } = options;
+    const verification = verifyPeerRecord(record, verifyOptions);
     if (!verification.ok) return { accepted: false, reason: verification.reason };
     const existing = this.records.get(record.nodeId);
     if (existing && existing.sequence > record.sequence) return { accepted: false, reason: 'peer_record_older_sequence' };
     if (existing && existing.sequence === record.sequence && existing.recordId !== record.recordId) return { accepted: false, reason: 'peer_record_equivocation' };
     this.records.set(record.nodeId, structuredClone(record));
     this.routing.upsert({ nodeId: record.nodeId, endpoints: record.endpoints, publicKey: record.publicKey, lastSeenAt: new Date().toISOString() });
+    if (notify) this.onChange?.();
     return { accepted: true, nodeId: record.nodeId };
   }
 
@@ -76,12 +79,31 @@ export class PeerDiscovery {
     return record && verifyPeerRecord(record, { now }).ok ? structuredClone(record) : null;
   }
 
-  bootstrap(records, options = {}) {
-    return (records || []).map((record) => this.ingest(record, options));
+  bootstrap(records, options = {}) { return (records || []).map((record) => this.ingest(record, options)); }
+  closest(targetNodeId, count = this.k) { return this.routing.closest(targetNodeId, count); }
+
+  snapshot({ now = Date.now() } = {}) {
+    return [...this.records.values()].filter((record) => verifyPeerRecord(record, { now }).ok).map((record) => structuredClone(record));
   }
 
-  closest(targetNodeId, count = this.k) {
-    return this.routing.closest(targetNodeId, count);
+  restore(records = [], options = {}) {
+    let accepted = 0;
+    for (const record of records) if (this.ingest(record, { ...options, notify: false }).accepted) accepted += 1;
+    return accepted;
+  }
+
+  sweep({ now = Date.now(), notify = true } = {}) {
+    let removed = 0;
+    for (const [nodeId, record] of this.records) {
+      if (!verifyPeerRecord(record, { now }).ok) {
+        this.records.delete(nodeId);
+        this.routing.remove(nodeId);
+        this.rpc?.forget?.(nodeId);
+        removed += 1;
+      }
+    }
+    if (removed && notify) this.onChange?.();
+    return removed;
   }
 
   async findNode(targetNodeId, { maxRounds = 16 } = {}) {
@@ -97,7 +119,7 @@ export class PeerDiscovery {
       if (batch.length === 0) break;
       for (const peer of batch) queried.add(peer.nodeId);
       const responses = await Promise.all(batch.map(async (peer) => {
-        try { return await this.rpc.findNode(peer, targetNodeId); } catch { return null; }
+        try { return await this.rpc.findNode(peer, targetNodeId); } catch { this.rpc?.forget?.(peer.nodeId); return null; }
       }));
       for (const response of responses) {
         for (const record of response?.records || []) this.ingest(record);

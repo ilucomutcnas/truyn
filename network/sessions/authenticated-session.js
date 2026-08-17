@@ -32,6 +32,13 @@ export function createSessionHello({ identity, transport = 'quic', endpoints = [
   return { ...body, publicKey: identity.publicKeyPem, signature: signValue(body, identity.privateKeyPem) };
 }
 
+export function sessionHandshakeBinding(hello) {
+  if (!hello || hello.protocol !== PEER_SESSION_PROTOCOL || hello.kind !== 'HELLO' || !hello.nodeId || !hello.nonce) {
+    throw new Error('session hello is required for handshake binding');
+  }
+  return `quic:hello:${digest({ ...hello, signature: undefined })}`;
+}
+
 export function verifySessionHello(hello, { now = Date.now(), maxSkewMs = DEFAULT_MAX_SKEW_MS, replayCache = null } = {}) {
   try {
     if (!hello || hello.protocol !== PEER_SESSION_PROTOCOL || hello.kind !== 'HELLO') return { ok: false, reason: 'session_hello_protocol' };

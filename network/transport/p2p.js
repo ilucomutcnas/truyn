@@ -1,3 +1,5 @@
+import { BoundedAdmissionQueue } from '../admission/bounded-queue.js';
+
 function parseQuicEndpoint(value) {
   if (typeof value !== 'string' || !value.startsWith('quic://')) return null;
   try {
@@ -8,51 +10,52 @@ function parseQuicEndpoint(value) {
   } catch { return null; }
 }
 
-export class ExplicitBackpressureQueue {
-  constructor({ maxInFlight = 64, maxQueued = 256 } = {}) {
-    this.maxInFlight = maxInFlight;
-    this.maxQueued = maxQueued;
-    this.inFlight = 0;
-    this.queue = [];
+function selectedQuicEndpoint(peerRecord) {
+  for (const value of peerRecord?.endpoints || []) {
+    const endpoint = parseQuicEndpoint(value);
+    if (endpoint) return { value, endpoint };
   }
+  return null;
+}
 
-  async run(task) {
-    if (this.inFlight >= this.maxInFlight) {
-      if (this.queue.length >= this.maxQueued) {
-        const error = new Error('p2p_backpressure');
-        error.code = 'TRUYN_BACKPRESSURE';
-        throw error;
-      }
-      await new Promise((resolve) => this.queue.push(resolve));
-    }
-    this.inFlight += 1;
-    try { return await task(); }
-    finally {
-      this.inFlight -= 1;
-      const next = this.queue.shift();
-      if (next) next();
-    }
+function peerRecordBinding(peerRecord, endpointValue) {
+  return `${Number.isInteger(peerRecord?.sequence) ? peerRecord.sequence : 'na'}:${endpointValue}`;
+}
+
+export class ExplicitBackpressureQueue extends BoundedAdmissionQueue {
+  constructor({ maxInFlight = 64, maxQueued = 256 } = {}) {
+    super({ maxInFlight, maxQueued, errorCode: 'TRUYN_BACKPRESSURE', errorMessage: 'p2p_backpressure' });
   }
 }
 
 export class DirectFirstP2P {
-  constructor({ quicTransport, discovery, relayFallback = null, maxInFlight = 64, maxQueued = 256 } = {}) {
+  constructor({ quicTransport, discovery, relayFallback = null, maxInFlight = 64, maxQueued = 256, faults = null } = {}) {
     if (!quicTransport) throw new Error('quicTransport is required');
     if (!discovery) throw new Error('peer discovery is required');
     this.quic = quicTransport;
     this.discovery = discovery;
     this.relayFallback = relayFallback;
+    this.faults = faults;
     this.connections = new Map();
     this.queue = new ExplicitBackpressureQueue({ maxInFlight, maxQueued });
   }
 
+  async #discardConnection(peerNodeId) {
+    const existing = this.connections.get(peerNodeId);
+    this.connections.delete(peerNodeId);
+    if (!existing?.client || typeof this.quic.disconnect !== 'function') return;
+    try { await this.quic.disconnect(existing.client); } catch { /* stale connection disposal is best-effort */ }
+  }
+
   async #directClient(peerRecord) {
+    const selected = selectedQuicEndpoint(peerRecord);
+    if (!selected) throw new Error('peer_has_no_quic_endpoint');
+    const binding = peerRecordBinding(peerRecord, selected.value);
     const existing = this.connections.get(peerRecord.nodeId);
-    if (existing) return existing;
-    const endpoint = peerRecord.endpoints.map(parseQuicEndpoint).find(Boolean);
-    if (!endpoint) throw new Error('peer_has_no_quic_endpoint');
-    const client = await this.quic.connect(endpoint);
-    this.connections.set(peerRecord.nodeId, client);
+    if (existing?.binding === binding) return existing.client;
+    if (existing) await this.#discardConnection(peerRecord.nodeId);
+    const client = await this.quic.connect(selected.endpoint);
+    this.connections.set(peerRecord.nodeId, { client, binding });
     return client;
   }
 
@@ -63,23 +66,31 @@ export class DirectFirstP2P {
       let directError = null;
       if (record) {
         try {
+          this.faults?.assertPeer(peerNodeId, 'direct');
           const client = await this.#directClient(record);
           const result = await this.quic.sendEnvelope(client, envelope);
           return { transport: 'quic-direct', result };
         } catch (error) {
           directError = error;
-          this.connections.delete(peerNodeId);
+          await this.#discardConnection(peerNodeId);
         }
       } else {
         directError = new Error('peer_not_discovered');
       }
       if (!allowRelayFallback || typeof this.relayFallback !== 'function') throw directError;
+      try {
+        await this.faults?.beforeRelay(peerNodeId);
+      } catch (error) {
+        error.directFailure = directError?.message || 'unknown';
+        throw error;
+      }
       const result = await this.relayFallback(peerNodeId, envelope);
       return { transport: 'relay-fallback', result, directFailure: directError?.message || 'unknown' };
     });
   }
 
-  forget(peerNodeId) { this.connections.delete(peerNodeId); }
+  async forget(peerNodeId) { await this.#discardConnection(peerNodeId); }
+  admissionSnapshot() { return this.queue.snapshot(); }
 }
 
 export { parseQuicEndpoint };
