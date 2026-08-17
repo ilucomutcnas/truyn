@@ -60,6 +60,24 @@ jobs:
             );
             fs.writeFileSync(path, text);
           }
+
+          {
+            const path = 'tests/adapters.test.js';
+            let text = fs.readFileSync(path, 'utf8');
+            const importNeedle = "import { createFunctionAdapter, TruynAdapterHost } from '../adapters/sdk/index.js';\n";
+            if (!text.includes(importNeedle)) throw new Error('adapter public-policy import anchor missing');
+            text = text.replace(
+              importNeedle,
+              `${importNeedle}import { createProviderAccessPolicy } from '../core/security/provider-access.js';\n`,
+            );
+            const hostNeedle = "  const host = new TruynAdapterHost({ node: provider, adapter });\n";
+            if (!text.includes(hostNeedle)) throw new Error('adapter provider host anchor missing');
+            text = text.replace(
+              hostNeedle,
+              "  const host = new TruynAdapterHost({ node: provider, adapter, accessPolicy: createProviderAccessPolicy({ mode: 'public' }) });\n",
+            );
+            fs.writeFileSync(path, text);
+          }
           NODE
           rm -f .github/workflows/security-hardening-apply.yml .github/workflows/security-hardening-runner.yml
       - name: Run full regression suite
