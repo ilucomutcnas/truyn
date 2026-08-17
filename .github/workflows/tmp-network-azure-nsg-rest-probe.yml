@@ -57,9 +57,16 @@ jobs:
             }
           }
           JSON
-          az rest --method put --uri "$URI" --headers 'Content-Type=application/json' --body @/tmp/nsg.json --only-show-errors >/tmp/nsg-created.json
-          state="$(jq -r '.properties.provisioningState // empty' /tmp/nsg-created.json)"
-          rule="$(jq -r '.properties.securityRules[]? | select(.name=="allow-truyn-quic") | .properties.destinationPortRange' /tmp/nsg-created.json)"
-          [[ "$state" == Succeeded && "$rule" == 4433 ]] || { echo "::error title=TRUYN NSG REST Probe::provisioningState=$state destinationPort=$rule"; exit 12; }
+          az rest --method put --uri "$URI" --headers 'Content-Type=application/json' --body @/tmp/nsg.json --only-show-errors >/dev/null
+          state=''; rule=''
+          for attempt in $(seq 1 30); do
+            az rest --method get --uri "$URI" --only-show-errors >/tmp/nsg-state.json
+            state="$(jq -r '.properties.provisioningState // empty' /tmp/nsg-state.json)"
+            rule="$(jq -r '.properties.securityRules[]? | select(.name=="allow-truyn-quic") | .properties.destinationPortRange' /tmp/nsg-state.json)"
+            [[ "$state" == Succeeded ]] && break
+            [[ "$state" == Failed ]] && { echo "::error title=TRUYN NSG REST Probe::provisioningState=$state"; exit 12; }
+            sleep 2
+          done
+          [[ "$state" == Succeeded && "$rule" == 4433 ]] || { echo "::error title=TRUYN NSG REST Probe::provisioningState=$state destinationPort=$rule"; exit 13; }
           echo "::notice title=TRUYN Azure NSG REST PASS::apiVersion=$API provisioningState=$state udpPort=$rule"
           echo "TRUYN_AZURE_NSG_REST=PASS apiVersion=$API provisioningState=$state udpPort=$rule"
