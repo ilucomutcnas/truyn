@@ -1,0 +1,34 @@
+name: Temporary Durable Inbox Debug
+
+on:
+  push:
+    branches: [network/productionization-gate]
+    paths:
+      - '.github/workflows/tmp-durable-debug.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  durable-debug:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install --ignore-scripts --no-audit --no-fund
+      - name: Run durable tests with explicit failure annotation
+        shell: bash
+        run: |
+          set +e
+          node --test tests/durable-inbox-productionization.test.js > /tmp/durable.log 2>&1
+          rc=$?
+          cat /tmp/durable.log
+          if [[ "$rc" != 0 ]]; then
+            detail="$(tail -n 80 /tmp/durable.log | sed ':a;N;$!ba;s/%/%25/g;s/\r/%0D/g;s/\n/%0A/g')"
+            echo "::error title=TRUYN Durable Inbox Test Failure::$detail"
+            exit "$rc"
+          fi
+          echo 'TRUYN_DURABLE_INBOX=PASS'
