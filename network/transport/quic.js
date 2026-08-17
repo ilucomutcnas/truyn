@@ -1,7 +1,7 @@
 import { createHmac, randomFillSync, randomBytes, timingSafeEqual } from 'node:crypto';
 import { QUICSocket, QUICServer, QUICClient, events } from '@matrixai/quic';
 import { verifyEnvelope } from '../../core/protocol/index.js';
-import { createSessionHello, createSessionAccept, verifySessionHello, verifySessionAccept, sessionId, SessionReplayCache } from '../sessions/authenticated-session.js';
+import { createSessionHello, createSessionAccept, verifySessionHello, verifySessionAccept, sessionHandshakeBinding, sessionId, SessionReplayCache } from '../sessions/authenticated-session.js';
 
 export const TRUYN_QUIC_ALPN = 'truyn/1';
 
@@ -62,12 +62,6 @@ async function requestJson(connection, value, maxBytes) {
   await writeJson(stream, value);
   const body = await responseP;
   return JSON.parse(decoder.decode(body));
-}
-
-function transportBinding(connection) {
-  const meta = connection.meta();
-  const endpoints = [`${meta.localHost}:${meta.localPort}`, `${meta.remoteHost}:${meta.remotePort}`].sort();
-  return `quic:${endpoints.join('|')}`;
 }
 
 function boundedHandlerError(error, fallback) {
@@ -141,7 +135,7 @@ export class TruynQuicTransport {
     if (message?.kind === 'session-hello') {
       const verification = verifySessionHello(message.hello, { replayCache: this.replayCache });
       if (!verification.ok) { await writeJson(stream, { ok: false, error: verification.reason }); return; }
-      const binding = transportBinding(connection);
+      const binding = sessionHandshakeBinding(message.hello);
       const accept = createSessionAccept({ identity: this.identity, hello: message.hello, transportBinding: binding });
       const id = sessionId(message.hello, accept);
       this.serverSessions.set(connection, { id, peerNodeId: message.hello.nodeId, peerPublicKey: message.hello.publicKey, binding });
@@ -205,7 +199,7 @@ export class TruynQuicTransport {
     const hello = createSessionHello({ identity: this.identity, endpoints: [`quic://${this.host}:${this.port}`] });
     const response = await requestJson(client.connection, { kind: 'session-hello', hello }, this.maxMessageBytes);
     if (!response?.ok) { await client.destroy({ force: true }); throw new Error(response?.error || 'quic_session_rejected'); }
-    const binding = transportBinding(client.connection);
+    const binding = sessionHandshakeBinding(hello);
     const verification = verifySessionAccept(response.accept, hello, { expectedTransportBinding: binding });
     if (!verification.ok) { await client.destroy({ force: true }); throw new Error(`quic_session_accept_invalid:${verification.reason}`); }
     const expectedSessionId = sessionId(hello, response.accept);

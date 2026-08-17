@@ -27,6 +27,9 @@ async function startMesh(root, count, { relayFallback = null } = {}) {
     dhtRpcTimeoutMs: 1_000,
     relayFallback: i === 0 ? relayFallback : null
   }));
+  for (const node of nodes) {
+    node.onEnvelope(async (envelope, context) => ({ ok: true, transport: context.transport, type: envelope.type, from: node.identity.nodeId }));
+  }
   const records = await Promise.all(nodes.map((node) => node.start()));
   for (let i = 0; i < nodes.length; i += 1) nodes[i].bootstrap(records.filter((_, j) => i !== j));
   return nodes;
