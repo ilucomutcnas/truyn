@@ -32,24 +32,12 @@ export async function createQuicKademliaNode({
         protocol: TRUYN_KAD_PROTOCOL,
         clientMode: false,
         kBucketSize,
-        // TRUYN testnets must support both loopback/private test peers and public
-        // internet peers. The default WAN mapper removes private multiaddrs, which
-        // would leave a real local QUIC testnet connected in PeerStore but absent
-        // from the Kademlia routing table. Authorization is handled above routing,
-        // so the DHT keeps all directly reachable peer addresses here.
         peerInfoMapper: passthroughMapper,
-        // A fresh private testnet must be able to issue its first query before the
-        // background self-query has completed. The query still goes through the
-        // real Kad routing/content-routing implementation and remote ADD_PROVIDER.
         allowQueryWithZeroPeers: true
       })
     }
   });
 
-  // Current Kad topology handling adds peers on protocol connect, but does not
-  // remove routing-table contacts on libp2p disconnect. Under churn that leaves a
-  // dead bootstrap/peer eligible for closest-peer queries and can abort provider
-  // publication. Keep the Kad routing table aligned with live libp2p connectivity.
   node.addEventListener('peer:disconnect', (event) => {
     const peerId = event.detail;
     if (!peerId || node.status !== 'started') return;
@@ -85,9 +73,10 @@ export async function connectQuicPeers(node, peers) {
   return connected;
 }
 
-export async function refreshKademliaRoutingTable(node, { timeoutMs = 10_000 } = {}) {
+export async function refreshKademliaRoutingTable(node, { timeoutMs = 10_000, externalAbort = true } = {}) {
   if (!node?.services?.dht?.refreshRoutingTable) throw new Error('truyn_kademlia_refresh_unavailable');
-  await node.services.dht.refreshRoutingTable({ signal: AbortSignal.timeout(timeoutMs) });
+  const options = externalAbort ? { signal: AbortSignal.timeout(timeoutMs) } : {};
+  await node.services.dht.refreshRoutingTable(options);
   return {
     mode: node.services.dht.getMode?.() || null,
     routingTableSize: node.services.dht.routingTable?.size ?? null,
