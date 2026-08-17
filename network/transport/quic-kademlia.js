@@ -27,10 +27,23 @@ export async function createQuicKademliaNode({
       clientMode: false,
       kBucketSize,
       peerInfoMapper: passthroughMapper,
-      allowQueryWithZeroPeers: true
+      allowQueryWithZeroPeers: true,
+      // Routing-table eviction pings are maintenance traffic. Keep them bounded so
+      // a scale test cannot starve application protocol streams on the same QUIC
+      // connections while still retaining the Kad liveness signal.
+      pingConcurrency: 2,
+      pingTimeout: 2_000,
+      maxInboundStreams: 64,
+      maxOutboundStreams: 64
     })
   };
-  if (pingEnabled) services.ping = ping();
+  if (pingEnabled) {
+    services.ping = ping({
+      timeout: 2_000,
+      maxInboundStreams: 64,
+      maxOutboundStreams: 64
+    });
+  }
 
   const node = await createLibp2p({
     start: false,
