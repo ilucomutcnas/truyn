@@ -170,13 +170,13 @@ export class AdversarialScaleNode {
     }
   }
 
-  async advertise(key, { timeoutMs = 8_000, externalAbort = false } = {}) {
+  async advertise(key, { timeoutMs = 25_000, externalAbort = false } = {}) {
     const cid = key instanceof CID ? key : await scaleContentCid(key);
     const options = externalAbort ? { signal: AbortSignal.timeout(timeoutMs) } : {};
     try {
       const publication = this.node.contentRouting.provide(cid, options);
       if (externalAbort) await publication;
-      else await softDeadline(publication, timeoutMs + 4_000, `truyn_scale_provide_${this.index}`);
+      else await softDeadline(publication, timeoutMs + 5_000, `truyn_scale_provide_${this.index}`);
       return cid;
     } catch (error) {
       if (error.code === 'ERR_TRUYN_SCALE_SOFT_DEADLINE') this.telemetry.advertisementSoftDeadlines += 1;
