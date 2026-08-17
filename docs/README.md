@@ -8,6 +8,7 @@ Human-facing documentation for TRUYN architecture, concepts, setup, operations, 
 
 - [Architecture Contract](architecture/ARCHITECTURE_CONTRACT.md) — canonical architecture constraints and concept ownership.
 - [v0.1 Connect Network Underlay](architecture/NETWORK_UNDERLAY_V01.md) — implemented real QUIC/UDP, authenticated peer sessions, Kademlia discovery/state RPC, direct-first P2P, STUN/same-port hole punching, backpressure and relay-fallback contract.
+- [Network Productionization Gate](architecture/NETWORK_PRODUCTIONIZATION_GATE.md) — failure-oriented underlay productionization status; Class B real four-host public QUIC/DHT milestone is measured and closed, while packet-path WAN partitions, NAT/CGNAT, real 100/1,000-node scale and adversarial mainnet gates remain open.
 - [Provider Ownership](architecture/PROVIDER_OWNERSHIP.md) — provider owner/tenant/visibility/billing boundary.
 - [Authorization Model](architecture/AUTHORIZATION_MODEL.md) — server-side fail-closed provider authorization.
 - [Relay Security](architecture/RELAY_SECURITY.md) — public relay, owner control plane, provider backchannel, and legacy-route rules.
@@ -34,6 +35,7 @@ Human-facing documentation for TRUYN architecture, concepts, setup, operations, 
 ### Benchmarks and evidence
 
 - [Benchmark evidence policy and index](benchmarks/README.md) — append-only evidence rules and the current public benchmark record.
+- [Network Productionization Azure Four-Host Class B — 2026-08-17](benchmarks/NETWORK_PRODUCTIONIZATION_AZURE_4HOST_2026-08-17.md) — four independent Azure hosts, real public direct QUIC with zero relay, injected partition/heal, 3-of-3 DHT replication + remote read, real holder-process failure, 5,097 ms repair, restart identity/sequence continuity, stale DHT-client reconnection and complete cleanup.
 - [v0.1 Connect Gate — 2026-08-17](benchmarks/V01_CONNECT_GATE_2026-08-17.md) — 184/184 full-suite proof for real QUIC direct messaging, relay-free three-node Kademlia discovery, networked DHT state, composed runtime, STUN, same-QUIC-port hole punching and explicit backpressure.
 - [Cross-Cloud A/B — 2026-08-15](benchmarks/CROSS_CLOUD_AB_2026-08-15.md) — immutable measured baseline.
 - [Cross-Cloud 8× Optimization — 2026-08-15](benchmarks/CROSS_CLOUD_8X_OPTIMIZATION_2026-08-15.md) — fixed hot-path optimization gate.
@@ -71,7 +73,7 @@ Documents explicitly label whether they describe:
 - approved target architecture;
 - planned future work.
 
-An approved architecture document is **not** an implementation-complete security claim. The v0.1 underlay is now implemented and CI-proven as a reference network layer, while WAN churn/partition durability, real 100/1,000-node network scale, universal NAT reachability and mainnet operations remain separate future gates.
+An approved architecture document is **not** an implementation-complete security claim. The v0.1 underlay is implemented and CI-proven as a reference network layer, and the Class B four-host public QUIC/DHT productionization milestone is now measured. Packet-path WAN churn/partition durability, automatic long-lived peer-record renewal, universal NAT/CGNAT reachability, real 100/1,000-node network scale, production adversarial resistance and mainnet operations remain separate future gates.
 
 ## Public documentation rule
 
