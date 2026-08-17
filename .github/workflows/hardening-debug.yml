@@ -1,0 +1,36 @@
+name: Hardening targeted debug
+
+on:
+  push:
+    branches:
+      - security/hardening-debug
+
+permissions:
+  contents: read
+
+jobs:
+  targeted:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: security/hardening-debug
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install --ignore-scripts --no-audit --no-fund
+      - name: Apply patch in workspace
+        shell: bash
+        run: |
+          PATCH_B64="$(sed -n 's/^      PATCH_B64: "\(.*\)"$/\1/p' .github/workflows/security-hardening-apply.yml)"
+          test -n "$PATCH_B64"
+          printf '%s' "$PATCH_B64" | base64 -d | gzip -d > /tmp/apply-security-hardening.mjs
+          node /tmp/apply-security-hardening.mjs
+      - name: 413 regression only
+        run: timeout 45s node --test tests/relay-body-limit.test.js
+      - name: Access/dev/billing/origin regressions
+        run: timeout 90s node --test tests/provider-access.test.js tests/runtime-relay-security.test.js tests/provider-billing.test.js tests/origin-guard.test.js tests/cloudflare-origin-proxy.test.js
+        env:
+          TRUYN_LOCAL_DEVELOPMENT: '1'
