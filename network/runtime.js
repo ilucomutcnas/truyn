@@ -12,7 +12,8 @@ export class TruynNetworkNode {
   constructor({
     identity = createIdentity(), host = '0.0.0.0', port = 0, advertiseHost = null, tls,
     k = 20, alpha = 3, relayFallback = null, nat = null, capabilities = [], peerRecordTtlMs = 300_000,
-    maxInFlight = 64, maxQueued = 256, statePath = null, dhtReplicationFactor = 3, dhtWriteQuorum = 2
+    maxInFlight = 64, maxQueued = 256, statePath = null, dhtReplicationFactor = 3, dhtWriteQuorum = 2,
+    dhtRpcTimeoutMs = 5_000
   } = {}) {
     if (!tls?.key || !tls?.cert) throw new Error('network runtime TLS key/certificate are required');
     this.identity = identity;
@@ -36,7 +37,7 @@ export class TruynNetworkNode {
     this.recordStore = new KademliaRecordStore({ onChange: onStateChange });
     this.quic = new TruynQuicTransport({ identity, host, port, tls });
     this.discovery = new PeerDiscovery({ identity, k, alpha, onChange: onStateChange });
-    this.rpc = new QuicDiscoveryRpc({ quicTransport: this.quic });
+    this.rpc = new QuicDiscoveryRpc({ quicTransport: this.quic, timeoutMs: dhtRpcTimeoutMs });
     this.discovery.rpc = this.rpc;
     this.replication = new DhtReplicationManager({
       discovery: this.discovery,
