@@ -1,0 +1,51 @@
+syntax = "proto3";
+package truyn.v2;
+
+import "proto/v1/common.proto";
+
+message VerifierAuthorityCommitment {
+  bytes source_owner_id = 1;
+  bytes root_certificate_id = 2;
+  bytes delegation_id = 3;
+  bytes authority_chain_digest = 4;
+}
+
+message LifecycleHeadCommitment {
+  bytes log_id = 1;
+  bytes source_owner_id = 2;
+  uint64 sequence = 3;
+  bytes head_hash = 4;
+  bytes revocation_state_digest = 5;
+}
+
+message RevocationSubjectState {
+  bytes target_id = 1;
+  bool revoked = 2;
+  bytes revocation_entry_hash = 3;
+  uint64 revocation_sequence = 4;
+}
+
+message RevocationStateCommitment {
+  bytes log_id = 1;
+  bytes source_owner_id = 2;
+  uint64 sequence = 3;
+  bytes head_hash = 4;
+  bytes state_digest = 5;
+  repeated RevocationSubjectState relevant = 6;
+}
+
+message TrustReceiptV2 {
+  bytes receipt_id = 1;
+  bytes claim_id = 2;
+  bytes claim_digest = 3;
+  bytes verifier_node_id = 4;
+  bytes policy_digest = 5;
+  bytes truth_assessment_digest = 6;
+  bytes provenance_graph_digest = 7;
+  repeated bytes attestation_commitments = 8;
+  VerifierAuthorityCommitment verifier_authority = 9;
+  LifecycleHeadCommitment lifecycle_head = 10;
+  RevocationStateCommitment revocation_state = 11;
+  uint64 generated_at_unix_ms = 12;
+  truyn.v1.Signature signature = 13;
+}
