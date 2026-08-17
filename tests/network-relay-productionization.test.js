@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { createIdentity } from '../core/identity/index.js';
+import { createEnvelope } from '../core/protocol/index.js';
 import { TruynNetworkNode } from '../network/runtime.js';
 import { HttpPollingRelayClient, acceptRelayedEnvelope } from '../network/transport/http-relay.js';
 import { createTestnetRelayService } from '../network/testnet/relay-service.js';
@@ -21,6 +22,17 @@ async function generateTls() {
 
 function relayUrl(service) {
   return `http://127.0.0.1:${service.address.port}`;
+}
+
+function signedNeed(identity, to, value) {
+  return createEnvelope({
+    type: 'NEED',
+    from: identity.nodeId,
+    to,
+    payload: { capability: { name: 'echo' }, input: { value }, policy: {} },
+    privateKeyPem: identity.privateKeyPem,
+    publicKeyPem: identity.publicKeyPem
+  });
 }
 
 test('Class C: direct-impossible NEED falls back through signed relay and survives relay down/up', { timeout: 30_000 }, async () => {
@@ -96,18 +108,7 @@ test('Class C: relay recipient independently rejects tampering and wrong-recipie
     envelopeHandler: async () => ({ ok: true })
   };
 
-  const signed = new TruynNetworkNode.prototype.constructor;
-  void signed;
-  const envelopeSource = {
-    identity: aIdentity,
-    envelopeHandler: null
-  };
-  // Use the runtime envelope shape without starting QUIC: create a temporary prototype-bound
-  // object containing only the identity required by TruynNetworkNode.envelope().
-  const envelope = TruynNetworkNode.prototype.envelope.call(envelopeSource, 'NEED', {
-    capability: { name: 'echo' }, input: { value: 1 }, policy: {}
-  }, { to: bIdentity.nodeId });
-
+  const envelope = signedNeed(aIdentity, bIdentity.nodeId, 1);
   const accepted = await acceptRelayedEnvelope(fakeNode, envelope, { relayMessageId: 'test-message' });
   assert.deepEqual(accepted, { ok: true });
 
@@ -120,15 +121,12 @@ test('Class C: relay recipient independently rejects tampering and wrong-recipie
 
   const wrongRecipient = structuredClone(envelope);
   wrongRecipient.to = aIdentity.nodeId;
-  // Re-signing is intentionally not done; signature validation must fail before recipient trust.
   await assert.rejects(
     acceptRelayedEnvelope(fakeNode, wrongRecipient),
     (error) => error?.code === 'TRUYN_RELAY_INVALID_ENVELOPE:invalid_signature'
   );
 
-  const correctlySignedWrongRecipient = TruynNetworkNode.prototype.envelope.call(envelopeSource, 'NEED', {
-    capability: { name: 'echo' }, input: { value: 2 }, policy: {}
-  }, { to: aIdentity.nodeId });
+  const correctlySignedWrongRecipient = signedNeed(aIdentity, aIdentity.nodeId, 2);
   await assert.rejects(
     acceptRelayedEnvelope(fakeNode, correctlySignedWrongRecipient),
     (error) => error?.code === 'TRUYN_RELAY_RECIPIENT_MISMATCH'
