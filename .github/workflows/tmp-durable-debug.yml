@@ -19,7 +19,7 @@ jobs:
         with:
           node-version: 22
       - run: npm install --ignore-scripts --no-audit --no-fund
-      - name: Run full suite with explicit failure annotation
+      - name: Run full suite with exact failure annotation
         shell: bash
         run: |
           set +e
@@ -27,8 +27,9 @@ jobs:
           rc=$?
           cat /tmp/suite.log
           if [[ "$rc" != 0 ]]; then
-            detail="$(tail -n 140 /tmp/suite.log | sed ':a;N;$!ba;s/%/%25/g;s/\r/%0D/g;s/\n/%0A/g')"
-            echo "::error title=TRUYN Full Suite Failure::$detail"
+            grep -n -B 18 -A 45 'not ok' /tmp/suite.log > /tmp/failures.log || tail -n 180 /tmp/suite.log > /tmp/failures.log
+            detail="$(cat /tmp/failures.log | tail -n 220 | sed ':a;N;$!ba;s/%/%25/g;s/\r/%0D/g;s/\n/%0A/g')"
+            echo "::error title=TRUYN Exact Full Suite Failure::$detail"
             exit "$rc"
           fi
           echo 'TRUYN_FULL_SUITE=PASS'
