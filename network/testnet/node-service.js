@@ -174,6 +174,11 @@ export async function createTestnetNodeService({
     requireFaultControl();
     return { enabled: true, ...node.setRelayFault({ mode: body.mode, delayMs: int(body.delayMs, 0, { min: 0, max: 120_000 }) }) };
   };
+  const storeFaultRecord = async (body = {}) => {
+    requireFaultControl();
+    if (!body.nodeId || !body.record || typeof body.record !== 'object') throw new Error('fault_store_nodeId_and_record_required');
+    return node.storeAt(body.nodeId, body.record);
+  };
 
   const replicate = async (body = {}) => {
     const record = node.createRecord(body.namespace, body.key, body.value, {
@@ -246,6 +251,7 @@ export async function createTestnetNodeService({
     if (command === 'partition') return partition(input);
     if (command === 'heal') return heal(input);
     if (command === 'relay') return relayFault(input);
+    if (command === 'store') return storeFaultRecord(input);
     throw new Error('unsupported_testnet_operator_command');
   });
 
@@ -269,6 +275,7 @@ export async function createTestnetNodeService({
       if (req.method === 'POST' && url.pathname === '/faults/partition') return json(res, 200, partition(await readJson(req)));
       if (req.method === 'POST' && url.pathname === '/faults/heal') return json(res, 200, heal(await readJson(req)));
       if (req.method === 'POST' && url.pathname === '/faults/relay') return json(res, 200, relayFault(await readJson(req)));
+      if (req.method === 'POST' && url.pathname === '/faults/store') return json(res, 200, await storeFaultRecord(await readJson(req)));
       return json(res, 404, { ok: false, error: 'not_found' });
     } catch (error) {
       return json(res, error?.statusCode || 500, {
