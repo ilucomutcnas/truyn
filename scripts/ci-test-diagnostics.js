@@ -24,7 +24,6 @@ try {
   const [recordA, recordB] = await Promise.all([a.start(), b.start()]);
   a.bootstrap([recordB]);
   b.bootstrap([recordA]);
-
   const deadline = Date.now() + 5_000;
   while (Date.now() < deadline && a.localPeerRecord.sequence <= recordA.sequence) await sleep(25);
   if (a.localPeerRecord.sequence <= recordA.sequence) code = 21;
@@ -40,4 +39,5 @@ try {
   await Promise.allSettled([a.close(), b.close()]);
   await rm(root, { recursive: true, force: true });
 }
+if (code) console.log(`::error file=scripts/ci-test-diagnostics.js,line=1,title=PING_RECOVERY_CHECKPOINT::${code}`);
 process.exit(code);
