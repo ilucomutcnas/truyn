@@ -18,9 +18,11 @@ function parseEndpoint(value) {
 }
 
 export class QuicDiscoveryRpc {
-  constructor({ quicTransport } = {}) {
+  constructor({ quicTransport, timeoutMs = 5_000 } = {}) {
     if (!quicTransport) throw new Error('quicTransport is required');
+    if (!Number.isInteger(timeoutMs) || timeoutMs < 100 || timeoutMs > 120_000) throw new Error('DHT RPC timeoutMs must be between 100 and 120000');
     this.quic = quicTransport;
+    this.timeoutMs = timeoutMs;
     this.clients = new Map();
   }
 
@@ -34,40 +36,79 @@ export class QuicDiscoveryRpc {
     return client;
   }
 
+  async bounded(peer, operation) {
+    let timer = null;
+    try {
+      return await Promise.race([
+        operation(),
+        new Promise((_, reject) => {
+          timer = setTimeout(() => {
+            const error = new Error(`TRUYN_DHT_RPC_TIMEOUT:${peer.nodeId}`);
+            error.code = 'TRUYN_DHT_RPC_TIMEOUT';
+            reject(error);
+          }, this.timeoutMs);
+          timer.unref?.();
+        })
+      ]);
+    } catch (error) {
+      this.forget(peer.nodeId);
+      throw error;
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
   async ping(peer) {
-    const client = await this.client(peer);
-    const result = await this.quic.requestControl(client, QUIC_DHT_METHOD_PING, null);
-    return Boolean(result?.pong);
+    return this.bounded(peer, async () => {
+      const client = await this.client(peer);
+      const result = await this.quic.requestControl(client, QUIC_DHT_METHOD_PING, null);
+      return Boolean(result?.pong);
+    });
   }
 
   async findNode(peer, targetNodeId) {
-    const client = await this.client(peer);
-    const result = await this.quic.requestControl(client, QUIC_DISCOVERY_METHOD_FIND_NODE, { targetNodeId });
-    const records = [];
-    for (const record of result?.records || []) {
-      if (verifyPeerRecord(record).ok) records.push(record);
-    }
-    return { records };
+    return this.bounded(peer, async () => {
+      const client = await this.client(peer);
+      const result = await this.quic.requestControl(client, QUIC_DISCOVERY_METHOD_FIND_NODE, { targetNodeId });
+      const records = [];
+      for (const record of result?.records || []) {
+        if (verifyPeerRecord(record).ok) records.push(record);
+      }
+      return { records };
+    });
   }
 
   async store(peer, record) {
     const verification = verifyDhtRecord(record);
     if (!verification.ok) throw new Error(`invalid DHT record: ${verification.reason}`);
-    const client = await this.client(peer);
-    return this.quic.requestControl(client, QUIC_DHT_METHOD_STORE, { record });
+    return this.bounded(peer, async () => {
+      const client = await this.client(peer);
+      return this.quic.requestControl(client, QUIC_DHT_METHOD_STORE, { record });
+    });
   }
 
   async findValue(peer, namespace, key) {
-    const client = await this.client(peer);
-    const result = await this.quic.requestControl(client, QUIC_DHT_METHOD_FIND_VALUE, { namespace, key });
-    const records = [];
-    for (const record of result?.records || []) {
-      if (verifyDhtRecord(record).ok) records.push(record);
-    }
-    return { records };
+    return this.bounded(peer, async () => {
+      const client = await this.client(peer);
+      const result = await this.quic.requestControl(client, QUIC_DHT_METHOD_FIND_VALUE, { namespace, key });
+      const records = [];
+      for (const record of result?.records || []) {
+        if (verifyDhtRecord(record).ok) records.push(record);
+      }
+      return { records };
+    });
   }
 
-  forget(nodeId) { this.clients.delete(nodeId); }
+  forget(nodeId) {
+    const client = this.clients.get(nodeId);
+    this.clients.delete(nodeId);
+    if (typeof client?.destroy === 'function') {
+      try {
+        const destroyed = client.destroy();
+        if (destroyed?.catch) void destroyed.catch(() => {});
+      } catch {}
+    }
+  }
 }
 
 export function createQuicDiscoveryControlHandler(discovery, { maxRecords = null, recordStore = null } = {}) {
