@@ -1,0 +1,42 @@
+name: Temporary GCP Class C IAM Repair
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/tmp-gcp-class-c-iam-repair.yml'
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GCP_WIF_PROVIDER_VALUE: ${{ vars.GCP_WIF_PROVIDER || secrets.GCP_WIF_PROVIDER }}
+      GCP_DEPLOYER_SERVICE_ACCOUNT_EMAIL_VALUE: ${{ vars.GCP_DEPLOYER_SERVICE_ACCOUNT_EMAIL || secrets.GCP_DEPLOYER_SERVICE_ACCOUNT_EMAIL }}
+    steps:
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ env.GCP_WIF_PROVIDER_VALUE }}
+          service_account: ${{ env.GCP_DEPLOYER_SERVICE_ACCOUNT_EMAIL_VALUE }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - name: Grant minimum Compute deployment contract
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          SA="$GCP_DEPLOYER_SERVICE_ACCOUNT_EMAIL_VALUE"
+          PROJECT="$(gcloud config get-value project 2>/dev/null || true)"
+          if [[ -z "$PROJECT" || "$PROJECT" == '(unset)' ]]; then
+            PROJECT="${SA#*@}"; PROJECT="${PROJECT%.iam.gserviceaccount.com}"
+            gcloud config set project "$PROJECT" >/dev/null
+          fi
+          [[ -n "$SA" && -n "$PROJECT" ]]
+          echo "::add-mask::$SA"
+          echo "::add-mask::$PROJECT"
+          MEMBER="serviceAccount:$SA"
+          gcloud projects add-iam-policy-binding "$PROJECT" --member="$MEMBER" --role='roles/compute.instanceAdmin.v1' --condition=None --quiet >/dev/null
+          gcloud projects add-iam-policy-binding "$PROJECT" --member="$MEMBER" --role='roles/compute.networkUser' --condition=None --quiet >/dev/null
+          echo 'TRUYN_GCP_CLASS_C_IAM=PASS instanceAdmin=true networkUser=true broadOwnerEditor=false'
