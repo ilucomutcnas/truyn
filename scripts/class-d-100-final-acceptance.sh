@@ -36,9 +36,34 @@ p = Path(sys.argv[1])
 s = p.read_text()
 s = s.replace('npm install --ignore-scripts --no-audit --no-fund', 'npm install --no-audit --no-fund')
 # Ubuntu command-not-found APT post-hook is irrelevant to ephemeral benchmark
-# guests and has produced false-negative bootstrap failures. Disable only that
-# hook; apt update/install remain mandatory and fail closed.
-s = s.replace('apt-get update -qq', 'rm -f /etc/apt/apt.conf.d/50command-not-found\napt-get update -qq')
+# guests. Mirror/index resolution can also be transient; retry the mandatory
+# update+package install boundary a bounded number of times and still fail
+# closed if required tools are not installable.
+apt_old = '''apt-get update -qq
+apt-get install -y -qq git curl jq openssl ca-certificates python3 iptables >/dev/null
+major=0; command -v node >/dev/null 2>&1 && major=\$(node -p 'parseInt(process.versions.node)' 2>/dev/null || echo 0)
+if [ "\$major" -lt 22 ]; then curl -fsSL https://deb.nodesource.com/setup_22.x | bash - >/dev/null; apt-get install -y -qq nodejs >/dev/null; fi'''
+apt_new = '''rm -f /etc/apt/apt.conf.d/50command-not-found
+apt_ok=0
+for apt_attempt in 1 2 3 4; do
+  if apt-get update -qq && apt-get install -y -qq git curl jq openssl ca-certificates python3 iptables >/dev/null; then apt_ok=1; break; fi
+  echo "TRUYN_APT_TRANSIENT_RETRY attempt=\$apt_attempt max=4" >&2
+  sleep 3
+done
+[ "\$apt_ok" -eq 1 ]
+major=0; command -v node >/dev/null 2>&1 && major=\$(node -p 'parseInt(process.versions.node)' 2>/dev/null || echo 0)
+if [ "\$major" -lt 22 ]; then
+  node_ok=0
+  for node_attempt in 1 2 3 4; do
+    if curl -fsSL https://deb.nodesource.com/setup_22.x | bash - >/dev/null && apt-get install -y -qq nodejs >/dev/null; then node_ok=1; break; fi
+    echo "TRUYN_NODE_BOOTSTRAP_TRANSIENT_RETRY attempt=\$node_attempt max=4" >&2
+    sleep 3
+  done
+  [ "\$node_ok" -eq 1 ]
+fi'''
+if apt_old not in s:
+    raise SystemExit('expected Class D guest apt bootstrap block not found')
+s = s.replace(apt_old, apt_new, 1)
 old = '''remote() {
   local vm="$1" script="$2"
   retry az vm run-command invoke -g "$RG" -n "$vm" --command-id RunShellScript --scripts "$script" --query 'value[0].message' -o tsv --only-show-errors
@@ -46,7 +71,7 @@ old = '''remote() {
 new = '''remote() {
   local vm="$1" script="$2" enc remote_script
   enc="$(printf '%s' "$script" | base64 -w0)"
-  remote_script="printf '%s' '$enc' | base64 -d >/tmp/truyn-d100-run.sh; chmod 700 /tmp/truyn-d100-run.sh; /bin/bash /tmp/truin-d100-run.sh"
+  remote_script="printf '%s' '$enc' | base64 -d >/tmp/truyn-d100-run.sh; chmod 700 /tmp/truin-d100-run.sh; /bin/bash /tmp/truin-d100-run.sh"
   remote_script="${remote_script//truin-d100-run/truyn-d100-run}"
   retry az vm run-command invoke -g "$RG" -n "$vm" --command-id RunShellScript --scripts "$remote_script" --query 'value[0].message' -o tsv --only-show-errors
 }'''
