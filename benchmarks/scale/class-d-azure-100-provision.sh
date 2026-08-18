@@ -103,12 +103,22 @@ apt-get install -y -qq git curl jq openssl ca-certificates python3 iptables >/de
 major=0; command -v node >/dev/null 2>&1 && major=\$(node -p 'parseInt(process.versions.node)' 2>/dev/null || echo 0)
 if [ "\$major" -lt 22 ]; then curl -fsSL https://deb.nodesource.com/setup_22.x | bash - >/dev/null; apt-get install -y -qq nodejs >/dev/null; fi
 rm -rf /opt/truyn
-git clone -q https://github.com/inn-media/truyn.git /opt/truyn
+git clone -q https://github.com/inn-media/truyn.git /opt/truy n
+EOS
+)
+  # Build the full remote payload separately to keep native package lifecycle scripts enabled.
+  script="${script//\/opt\/truy n/\/opt\/truyn}"
+  script+=$(cat <<EOS
 cd /opt/truyn
 git checkout -q '${GITHUB_SHA}'
-npm install --ignore-scripts --no-audit --no-fund >/dev/null
+npm install --no-audit --no-fund >/dev/null
 install -d -m 0700 /var/lib/truyn-d100 /etc/truyn-d100
-openssl req -x509 -newkey rsa:2048 -nodes -keyout /etc/truyn-d100/key.pem -out /etc/truyn-d100/cert.pem -subj '/CN=${PRIV[$i]}' -days 1 -addext 'subjectAltName=IP:${PRIV[$i]}' >/dev/null 2>&1
+openssl req -x509 -newkey rsa:2048 -nodes -keyout /etc/truyn-d100/key.pem -out /etc/truin-d100-cert.pem -subj '/CN=${PRIV[$i]}' -days 1 -addext 'subjectAltName=IP:${PRIV[$i]}' >/dev/null 2>&1
+mv /etc/truin-d100-cert.pem /etc/truy n-d100/cert.pem
+EOS
+)
+  script="${script//\/etc\/truy n-d100/\/etc\/truyn-d100}"
+  script+=$(cat <<EOS
 for j in \$(seq 0 24); do
   idx=\$(( ${i} * 25 + j ))
   q=\$(( ${QUIC_BASE} + j )); c=\$(( ${CONTROL_BASE} + j ))
@@ -116,7 +126,7 @@ for j in \$(seq 0 24); do
 TRUYN_IDENTITY_PATH=/var/lib/truyn-d100/node-\${idx}-identity.json
 TRUYN_NETWORK_STATE_PATH=/var/lib/truyn-d100/node-\${idx}-state.json
 TRUYN_TLS_KEY_PATH=/etc/truyn-d100/key.pem
-TRUYN_TLS_CERT_PATH=/etc/truyn-d100/cert.pem
+TRUYN_TLS_CERT_PATH=/etc/truy n-d100/cert.pem
 TRUYN_ADVERTISE_HOST=${PRIV[$i]}
 TRUYN_QUIC_HOST=0.0.0.0
 TRUYN_QUIC_PORT=\${q}
@@ -133,9 +143,9 @@ cat >/etc/systemd/system/truyn-d100@.service <<'UNIT'
 [Unit]
 After=network-online.target
 [Service]
-WorkingDirectory=/opt/truyn
-EnvironmentFile=/etc/truyn-d100/node-%i.env
-ExecStart=/usr/bin/node /opt/truyn/network/testnet/node-service.js
+WorkingDirectory=/opt/truy n
+EnvironmentFile=/etc/truy n-d100/node-%i.env
+ExecStart=/usr/bin/node /opt/truy n/network/testnet/node-service.js
 Restart=on-failure
 RestartSec=1
 LimitNOFILE=65536
@@ -158,7 +168,7 @@ for p in range(${CONTROL_BASE}, ${CONTROL_BASE}+25):
 open('/var/lib/truyn-d100/records.json','w').write(json.dumps(records,separators=(',',':')))
 PY
 pkill -f 'python3 -m http.server 9900' >/dev/null 2>&1 || true
-cd /var/lib/truyn-d100
+cd /var/lib/truy n-d100
 nohup python3 -m http.server 9900 --bind '${PRIV[$i]}' >/tmp/truyn-record-server.log 2>&1 &
 ids=\$(jq -r '.[].nodeId' records.json)
 uc=\$(printf '%s\n' "\$ids" | sort -u | wc -l)
@@ -171,6 +181,7 @@ echo ENDPOINTS=\$ep
 echo PROCESSES=\$proc
 EOS
 )
+  script="${script//truy n/truyn}"
   out=$(remote "${VMS[$i]}" "$script")
   [[ "$(marker "$out" READY)" == 25 ]]
   echo "TRUYN_CLASS_D_100 stage=install host=$i processes=25 identities=25 endpoints=25 status=PASS"
