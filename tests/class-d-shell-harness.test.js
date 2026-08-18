@@ -29,6 +29,13 @@ test('final launchers patch known native/runtime hazards before cloud execution'
   assert.match(d100, /attempt >= TRUYN_AZ_CLI_RETRIES/);
   assert.match(d100, /return "\$rc"/);
   assert.doesNotMatch(d100, /command az "\$@"\s*\|\|\s*true/);
+  assert.match(d100, /TRUYN_APT_TRANSIENT_RETRY/);
+  assert.match(d100, /for apt_attempt in 1 2 3 4/);
+  assert.match(d100, /apt-get update -qq && apt-get install -y -qq git curl jq openssl ca-certificates python3 iptables/);
+  assert.match(d100, /TRUYN_NODE_BOOTSTRAP_TRANSIENT_RETRY/);
+  assert.match(d100, /for node_attempt in 1 2 3 4/);
+  assert.match(d100, /expected Class D guest apt bootstrap block not found/);
+  assert.doesNotMatch(d100, /apt-get (?:update|install)[^\n]*\|\|\s*true/);
   assert.match(d100, /\/bin\/bash \/tmp\/truy?n-d100-run\.sh|\/bin\/bash \/tmp\/truyn-d100-run\.sh/);
 
   const d1000 = await readFile('scripts/class-d-1000-final-acceptance.sh', 'utf8');
