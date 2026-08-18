@@ -33,7 +33,9 @@ export -f az
 # semantics while preventing Azure RunCommand from reaping the detached child.
 # Linux interface names are limited to IFNAMSIZ-1 (15) characters, so the
 # historical truyn-cgnat-{host,inner} veth names are shortened in the generated
-# proof script before the namespace topology is created.
+# proof script before the namespace topology is created. Azure RunCommand also
+# wraps stdout, so inner-record transport uses an explicit marker rather than a
+# positional tail-line assumption.
 base_script="$(dirname "$0")/class-c-final-acceptance.sh"
 patched_script="$(mktemp)"
 trap 'rm -f "$patched_script"' EXIT
@@ -57,12 +59,26 @@ extra = [
     "inner_lines = s.splitlines()",
     "inner_matches = [i for i, line in enumerate(inner_lines) if 'ip netns exec truyn-cgnat runuser -u truyn -- env' in line and 'nohup node' in line]",
     "if len(inner_matches) != 1: raise SystemExit('expected Class C inner NAT launch line not found')",
-    "inner_lines[inner_matches[0]] = \"INNER_SETUP+=$'\\\\ncat >/etc/systemd/system/truyn-cgnat.service <<UNIT\\\\n[Unit]\\\\nAfter=network-online.target\\\\n[Service]\\\\nType=simple\\\\nWorkingDirectory=/opt/truyn\\\\nExecStartPre=/usr/bin/test -e /run/netns/truyn-cgnat\\\\nExecStartPre=/usr/bin/test -r /etc/truropyn-cgnat/key.pem\\\\nExecStartPre=/usr/bin/test -r /etc/truropyn-cgnat/cert.pem\\\\nExecStart=/usr/bin/ip netns exec truyn-cgnat /usr/sbin/runuser -u truyn -- /usr/bin/env TRUYN_TESTNET_DATA_DIR=/var/lib/truropyn-cgnat TRUYN_TLS_KEY_PATH=/etc/truropyn-cgnat/key.pem TRUYN_TLS_CERT_PATH=/etc/truropyn-cgnat/cert.pem TRUYN_ADVERTISE_HOST=192.168.55.2 TRUYN_QUIC_HOST=0.0.0.0 TRUYN_QUIC_PORT=4433 TRUYN_CONTROL_HOST=127.0.0.1 TRUYN_CONTROL_PORT=8788 TRUYN_PEER_RECORD_TTL_MS=1800000 /usr/bin/node /opt/truropyn/network/testnet/node-service.js\\\\nStandardOutput=append:/var/lib/truropyn-cgnat.log\\\\nStandardError=append:/var/lib/truropyn-cgnat.log\\\\nRestart=no\\\\nUNIT\\\\nsed -i s/truropyn/truyn/g /etc/systemd/system/truropyn-cgnat.service /etc/systemd/system/truyn-cgnat.service 2>/dev/null || true\\\\nsystemctl daemon-reload\\\\nsystemctl stop truyn-cgnat.service >/dev/null 2>&1 || true\\\\nsystemctl reset-failed truyn-cgnat.service >/dev/null 2>&1 || true\\\\nsystemctl start truyn-cgnat.service'\".replace('truropyn', 'truyn')",
+    "inner_lines[inner_matches[0]] = \"INNER_SETUP+=$'\\\\ncat >/etc/systemd/system/truyn-cgnat.service <<UNIT\\\\n[Unit]\\\\nAfter=network-online.target\\\\n[Service]\\\\nType=simple\\\\nWorkingDirectory=/opt/truyn\\\\nExecStartPre=/usr/bin/test -e /run/netns/truyn-cgnat\\\\nExecStartPre=/usr/bin/test -r /etc/truropyn-cgnat/key.pem\\\\nExecStartPre=/usr/bin/test -r /etc/truropyn-cgnat/cert.pem\\\\nExecStart=/usr/bin/ip netns exec truyn-cgnat /usr/sbin/runuser -u truyn -- /usr/bin/env TRUYN_TESTNET_DATA_DIR=/var/lib/truropyn-cgnat TRUYN_TLS_KEY_PATH=/etc/truropyn-cgnat/key.pem TRUYN_TLS_CERT_PATH=/etc/truropyn-cgnat/cert.pem TRUYN_ADVERTISE_HOST=192.168.55.2 TRUYN_QUIC_HOST=0.0.0.0 TRUYN_QUIC_PORT=4433 TRUYN_CONTROL_HOST=127.0.0.1 TRUYN_CONTROL_PORT=8788 TRUYN_PEER_RECORD_TTL_MS=1800000 /usr/bin/node /opt/truropyn/network/testnet/node-service.js\\\\nStandardOutput=append:/var/lib/truropyn-cgnat.log\\\\nStandardError=append:/var/lib/truropyn-cgnat.log\\\\nRestart=no\\\\nUNIT\\\\nsed -i s/truropyn/truyn/g /etc/systemd/system/truropyn-cgnat.service /etc/systemd/system/truropyn-cgnat.service 2>/dev/null || true\\\\nsystemctl daemon-reload\\\\nsystemctl stop truyn-cgnat.service >/dev/null 2>&1 || true\\\\nsystemctl reset-failed truyn-cgnat.service >/dev/null 2>&1 || true\\\\nsystemctl start truyn-cgnat.service'\".replace('truropyn', 'truyn')",
     "s = '\\n'.join(inner_lines) + '\\n'",
     "old_inner_check = 'DOUB=\"$(az_remote \"$AZ_AN\" \"$INNER_SETUP\")\"; grep -Fq TRUYN_INNER_READY <<<\"$DOUB\" || fail double_nat_inner_start 80'",
-    "new_inner_check = '''DOUB=\"$(az_remote \"$AZ_AN\" \"$INNER_SETUP\")\"; if ! grep -Fq TRUYN_INNER_READY <<<\"$DOUB\"; then printf '%s\\n' \"$DOUB\"; az_remote \"$AZ_AN\" \"systemctl --no-pager --full status truyn-cgnat.service || true; journalctl -u truyn-cgnat.service --no-pager -n 160 || true; ip netns list || true; ip netns exec truyn-cgnat ip addr || true; ip netns exec truyn-cgnat ip route || true; ls -ld /run/netns/truyn-cgnat /opt/truyn /var/lib/truropyn-cgnat /etc/truropyn-cgnat 2>&1 || true; ls -l /etc/truropyn-cgnat 2>&1 || true; cat /var/lib/truropyn-cgnat.log 2>/dev/null || true\"; fail double_nat_inner_start 80; fi'''.replace('truropyn', 'truyn')",
+    "new_inner_check = '''DOUB=\"$(az_remote \"$AZ_AN\" \"$INNER_SETUP\")\"; if ! grep -Fq TRUYN_INNER_READY <<<\"$DOUB\"; then printf '%s\\n' \"$DOUB\"; az_remote \"$AZ_AN\" \"systemctl --no-pager --full status truyn-cgnat.service || true; journalctl -u truyn-cgnat.service --no-pager -n 160 || true; ip netns list || true; ip netns exec truyn-cgnat ip addr || true; ip netns exec truyn-cgnat ip route || true; ls -ld /run/netns/truyn-cgnat /opt/truropyn /var/lib/truropyn-cgnat /etc/truropyn-cgnat 2>&1 || true; ls -l /etc/truropyn-cgnat 2>&1 || true; cat /var/lib/truropyn-cgnat.log 2>/dev/null || true\"; fail double_nat_inner_start 80; fi'''.replace('truropyn', 'truyn')",
     "if old_inner_check not in s: raise SystemExit('expected Class C inner NAT readiness check not found')",
     "s = s.replace(old_inner_check, new_inner_check, 1)",
+    "record_start = s.find('INNER_REC_OUT=\"$(az_remote \"$AZ_AN\"')",
+    "record_end = s.find('\\nBOOT_A2=', record_start)",
+    "if record_start < 0 or record_end < 0: raise SystemExit('expected Class C inner NAT record decode block not found')",
+    "record_lines = [",
+    "    'INNER_REC_OUT=\"$(az_remote \"$AZ_AN\" \"set -Eeuo pipefail; ip netns exec truyn-cgnat curl -fsS http://127.0.0.1:8788/record | base64 -w0 | sed s/^/TRUYN_INNER_REC_B64=/\")\"',",
+    "    'INNER_REC64=\"$(marker \\\"$INNER_REC_OUT\\\" TRUYN_INNER_REC_B64)\"',",
+    "    '[[ -n \"$INNER_REC64\" ]] || fail double_nat_record_missing 81',",
+    "    'if ! INNER_REC=\"$(printf \\\'%s\\\' \\\"$INNER_REC64\\\" | base64 -d 2>/dev/null)\"; then fail double_nat_record_decode 82; fi',",
+    "    'INNER_ID=\"$(jq -r \\\'.record.nodeId // empty\\\' <<<\\\"$INNER_REC\\\" 2>/dev/null || true)\"',",
+    "    '[[ \"$INNER_ID\" == truyn:node:* ]] || fail double_nat_identity 83',",
+    "    'mask \"$INNER_ID\"',",
+    "]",
+    "record_replacement = '\\n'.join(record_lines)",
+    "s = s[:record_start] + record_replacement + s[record_end:]",
 ]
 src = src.replace(needle, needle + "\n" + "\n".join(extra), 1)
 Path(sys.argv[2]).write_text(src)
