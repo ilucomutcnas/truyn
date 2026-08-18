@@ -37,13 +37,16 @@ test('Class C wrapper isolates runner/orchestration noise without weakening WAN 
   assert.match(script, /systemctl start truyn-cgnat\.service/);
 
   // Azure RunCommand wraps stdout. Inner peer-record transport therefore uses
-  // a semantic marker, never a positional "last line is base64" assumption.
+  // a semantic marker and self-contained Bash extraction, never an undefined
+  // helper or a positional "last line is base64" assumption.
   assert.match(script, /TRUYN_INNER_REC_B64/);
-  assert.match(script, /marker .*INNER_REC_OUT.*TRUYN_INNER_REC_B64/);
+  assert.match(script, /INNER_REC_OUT##\*TRUYN_INNER_REC_B64=/);
   assert.match(script, /double_nat_record_missing/);
+  assert.match(script, /double_nat_record_empty/);
   assert.match(script, /double_nat_record_decode/);
+  assert.match(script, /base64 -di/);
   assert.match(script, /expected Class C inner NAT record decode block not found/);
-  assert.doesNotMatch(script, /INNER_REC64=.*tail -1/);
+  assert.doesNotMatch(script, /marker .*INNER_REC_OUT.*TRUYN_INNER_REC_B64/);
 
   // A failed inner start must preserve enough evidence to diagnose the next
   // fault without another blind paid cloud rerun.
