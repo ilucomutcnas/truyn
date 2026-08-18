@@ -31,6 +31,9 @@ export -f az
 # by systemd, while the service itself enters the pre-created netns as root and
 # only then drops to the truyn user. This preserves the original ip-netns/runuser
 # semantics while preventing Azure RunCommand from reaping the detached child.
+# Linux interface names are limited to IFNAMSIZ-1 (15) characters, so the
+# historical truyn-cgnat-{host,inner} veth names are shortened in the generated
+# proof script before the namespace topology is created.
 base_script="$(dirname "$0")/class-c-final-acceptance.sh"
 patched_script="$(mktemp)"
 trap 'rm -f "$patched_script"' EXIT
@@ -44,6 +47,7 @@ if needle not in src:
 extra = [
     "s = s.replace('apt-get update -qq', 'rm -f /etc/apt/apt.conf.d/50command-not-found\\napt-get update -qq')",
     "s = s.replace(': \"${PEER_TTL_MS:=30000}\"', 'PEER_TTL_MS=1800000')",
+    "s = s.replace('truyn-cgnat-host', 'tcgn-host').replace('truyn-cgnat-inner', 'tcgn-inner')",
     "lease_start = s.find('STAGE=lease-gossip\\n')",
     "lease_end = s.find('STAGE=packet-partition\\n', lease_start)",
     "if lease_start < 0 or lease_end < 0: raise SystemExit('expected Class C lease block not found')",
