@@ -19,16 +19,13 @@ for old, new in (
     ('/var/lib/truin-cgnat', '/var/lib/truyn-cgnat'),
 ):
     s = s.replace(old, new)
-s = s.replace(
-    'npm install --ignore-scripts --no-audit --no-fund',
-    'npm install --no-audit --no-fund'
-)
+s = s.replace('npm install --ignore-scripts --no-audit --no-fund', 'npm install --no-audit --no-fund')
 
 old_remote = '''az_remote(){ retry az vm run-command invoke -g "$AZ_RG" -n "$1" --command-id RunShellScript --scripts "$2" --query 'value[0].message' -o tsv --only-show-errors; }'''
 new_remote = '''az_remote(){
   local vm="$1" body="$2" enc remote
   enc="$(printf '%s' "$body" | base64 -w0)"
-  remote="printf '%s' '$enc' | base64 -d >/tmp/truyn-run.sh; chmod 700 /tmp/truy n-run.sh; /bin/bash /tmp/truy n-run.sh"
+  remote="printf '%s' '$enc' | base64 -d >/tmp/truyn-run.sh; chmod 700 /tmp/truyn-run.sh; /bin/bash /tmp/truy n-run.sh"
   remote="${remote//truy n/truyn}"
   retry az vm run-command invoke -g "$AZ_RG" -n "$vm" --command-id RunShellScript --scripts "$remote" --query 'value[0].message' -o tsv --only-show-errors
 }'''
