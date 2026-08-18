@@ -42,6 +42,10 @@ The repository regression suite treats the evidence files below as protected and
 - [`TRUST_NETWORK_V2_2026-08-16.md`](TRUST_NETWORK_V2_2026-08-16.md) — decentralized placement + Byzantine read-quorum + active Trustability proof.
 - [`ORIGIN_BYPASS_SECURITY_EVALUATION_2026-08-16.md`](ORIGIN_BYPASS_SECURITY_EVALUATION_2026-08-16.md) — production origin-bypass security evaluation preserving negative experiments and limitations.
 
+### Unaccepted / negative scale evidence
+
+- [`CLASS_D_100_ATTEMPT_2026-08-17.md`](CLASS_D_100_ATTEMPT_2026-08-17.md) — preserved first Class D 100-node launch attempt. No durable accepted run result was available, so this record is explicitly **not a PASS claim**; the 100-node productionization gate remains open until a fresh run satisfies the canonical evaluator and post-cleanup evidence gate.
+
 ### Methodology / planned parity
 
 - [`MULTIMODAL_PROVIDER_PARITY.md`](MULTIMODAL_PROVIDER_PARITY.md) — apples-to-apples methodology for text, image and video provider comparisons; it does not claim a completed multimodal benchmark result.
