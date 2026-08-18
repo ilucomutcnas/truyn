@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 # GitHub-hosted Azure CLI processes can occasionally fail before issuing the
-# control-plane request (for example, a Python import/module-lock crash).  The
+# control-plane request (for example, a Python import/module-lock crash). The
 # Class C gate must distinguish that runner/tooling noise from a TRUYN network
 # result, while remaining fail-closed on persistent failures.
 : "${TRUYN_AZ_CLI_RETRIES:=4}"
@@ -13,8 +13,9 @@ az() {
   while true; do
     if command az "$@"; then
       return 0
+    else
+      rc=$?
     fi
-    rc=$?
     if (( attempt >= TRUYN_AZ_CLI_RETRIES )); then
       return "$rc"
     fi
