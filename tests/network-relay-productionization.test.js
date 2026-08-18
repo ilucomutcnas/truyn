@@ -35,6 +35,26 @@ function signedNeed(identity, to, value) {
   });
 }
 
+test('Class C: testnet relay refuses to start without an authentication token', async () => {
+  await assert.rejects(
+    createTestnetRelayService({ host: '127.0.0.1' }),
+    /testnet relay token is required/
+  );
+});
+
+test('Class C: relay endpoints reject a wrong bearer token', async () => {
+  const relay = await createTestnetRelayService({ host: '127.0.0.1', token: 'expected-token' });
+  try {
+    const response = await fetch(`${relayUrl(relay)}/v1/poll?nodeId=test`, {
+      headers: { authorization: 'Bearer wrong-token' }
+    });
+    assert.equal(response.status, 401);
+    assert.equal((await response.json()).error, 'TRUYN_RELAY_UNAUTHORIZED');
+  } finally {
+    await relay.close();
+  }
+});
+
 test('Class C: direct-impossible NEED falls back through signed relay and survives relay down/up', { timeout: 30_000 }, async () => {
   const tls = await generateTls();
   const token = 'class-c-ephemeral-test-token';
