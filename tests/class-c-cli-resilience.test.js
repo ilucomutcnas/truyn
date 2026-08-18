@@ -12,12 +12,29 @@ test('Class C wrapper isolates runner/orchestration noise without weakening WAN 
   assert.match(script, /return "\$rc"/);
   assert.match(script, /export -f az/);
   assert.doesNotMatch(script, /command az "\$@"\s*\|\|\s*true/);
+
+  // Ephemeral Ubuntu mirrors/package indexes are orchestration noise. Retry the
+  // update+required package set as one bounded boundary and remain fail-closed.
+  assert.match(script, /TRUYN_APT_TRANSIENT_RETRY/);
+  assert.match(script, /for apt_attempt in 1 2 3 4/);
+  assert.match(script, /apt-get update -qq && apt-get install -y -qq git curl jq openssl ca-certificates iproute2 iptables/);
+  assert.match(script, /\[\[ .*apt_ok.* == 1 \]\]/);
+  assert.match(script, /TRUYN_NODE_BOOTSTRAP_TRANSIENT_RETRY/);
+  assert.match(script, /for node_attempt in 1 2 3 4/);
   assert.match(script, /50command-not-found/);
+  assert.doesNotMatch(script, /apt-get (?:update|install)[^\n]*\|\|\s*true/);
+
   assert.match(script, /PEER_TTL_MS=1800000/);
   assert.match(script, /lease_start/);
   assert.match(script, /renewalRetested=false/);
   assert.match(script, /peerLeaseLifecycleEvidence/);
   assert.match(script, /separate-ci-prerequisite/);
+
+  // The canonical final-acceptance relay block uses marker(). The resilient
+  // wrapper must inject that helper into the historical harness before relay.
+  assert.match(script, /marker_anchor/);
+  assert.match(script, /marker\(\)\{ printf/);
+  assert.match(script, /expected Class C marker helper anchor not found/);
 
   // Linux IFNAMSIZ is 16 including NUL, so real interface names must be <=15.
   assert.ok('tcgn-host'.length <= 15);
@@ -37,8 +54,8 @@ test('Class C wrapper isolates runner/orchestration noise without weakening WAN 
   assert.match(script, /systemctl start truyn-cgnat\.service/);
 
   // Azure RunCommand wraps stdout. Inner peer-record transport therefore uses
-  // a semantic marker and self-contained Bash extraction, never an undefined
-  // helper or a positional "last line is base64" assumption.
+  // a semantic marker and self-contained Bash extraction rather than a
+  // positional "last line is base64" assumption.
   assert.match(script, /TRUYN_INNER_REC_B64/);
   assert.match(script, /INNER_REC_OUT##\*TRUYN_INNER_REC_B64=/);
   assert.match(script, /double_nat_record_missing/);
