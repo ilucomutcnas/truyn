@@ -41,7 +41,7 @@ async function readJson(req) {
 }
 
 function authorized(req, token) {
-  if (!token) return true;
+  if (!token) return false;
   const supplied = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '');
   const a = Buffer.from(supplied);
   const b = Buffer.from(token);
@@ -55,6 +55,7 @@ export async function createTestnetRelayService({
   messageTtlMs = DEFAULT_MESSAGE_TTL_MS,
   disabled = false
 } = {}) {
+  if (!token) throw new Error('testnet relay token is required');
   const messages = new Map();
   const queues = new Map();
   const waiters = new Map();
