@@ -36,7 +36,10 @@ test('final launchers patch known native/runtime hazards before cloud execution'
   assert.match(d100, /for node_attempt in 1 2 3 4/);
   assert.match(d100, /expected Class D guest apt bootstrap block not found/);
   assert.doesNotMatch(d100, /apt-get (?:update|install)[^\n]*\|\|\s*true/);
-  assert.match(d100, /\/bin\/bash \/tmp\/truy?n-d100-run\.sh|\/bin\/bash \/tmp\/truyn-d100-run\.sh/);
+  // The generated remote body deliberately contains the historical misspelling
+  // and fixes it before execution; lock both halves of that transformation.
+  assert.match(d100, /\/bin\/bash \/tmp\/truin-d100-run\.sh/);
+  assert.match(d100, /truin-d100-run\/truyn-d100-run/);
 
   const d1000 = await readFile('scripts/class-d-1000-final-acceptance.sh', 'utf8');
   assert.match(d1000, /14400000/);
