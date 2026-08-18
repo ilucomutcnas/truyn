@@ -63,7 +63,7 @@ ${Object.entries(evaluation.checks).map(([name, passed]) => `| ${name} | ${bool(
 | acknowledged durable write loss | ${value(n.safety.acknowledgedWriteLossCount)} |
 | invalid signed state accepted | ${value(n.safety.invalidSignedStateAcceptedCount)} |
 | stale/revoked receipt accepted | ${value(n.safety.staleRevokedReceiptAcceptedCount)} |
-| randomized churn exercised | ${bool(n.adversarial.churn.exercised)} |
+| bounded churn / restart exercised | ${bool(n.adversarial.churn.exercised)} |
 | real packet partition exercised | ${bool(n.adversarial.packetPartition.exercised)} |
 | Byzantine replica exercise | ${bool(n.adversarial.byzantine.exercised)} |
 | Sybil pressure exercise | ${bool(n.adversarial.sybil.exercised)} |
@@ -77,9 +77,9 @@ ${Object.entries(evaluation.checks).map(([name, passed]) => `| ${name} | ${bool(
 
 ## Interpretation boundary
 
-A PASS proves the bounded 100-real-process resilience gate defined by the repository: 100 simultaneously running TRUYN node processes with distinct identities/sockets across at least four hosts, routing/recovery thresholds, zero listed safety violations, required adversarial exercises, and verified cleanup.
+A PASS proves the bounded 100-real-process resilience gate defined by the repository: 100 simultaneously running TRUYN node processes with distinct identities/sockets across at least four hosts, routing/recovery thresholds, zero listed safety violations, required bounded adversarial exercises, and verified cleanup.
 
-It does **not** prove 1,000-real-node scale, broad heterogeneous Internet geography, or stable/mainnet compatibility. Those remain later gates.
+It does **not** prove the later multi-seed randomized adversarial campaign, 1,000-real-node scale, broad heterogeneous Internet geography, or stable/mainnet compatibility. Those remain later gates.
 `;
 
 await writeFile(outputPath, markdown, 'utf8');
