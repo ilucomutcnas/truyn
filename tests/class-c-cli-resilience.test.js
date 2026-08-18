@@ -31,7 +31,7 @@ test('Class C wrapper isolates runner/orchestration noise without weakening WAN 
   assert.match(script, /separate-ci-prerequisite/);
 
   // The canonical final-acceptance relay block uses marker(). The resilient
-  // wrapper must inject that helper into the historical harness before relay.
+  // wrapper injects that helper into the historical harness before relay.
   assert.match(script, /marker_anchor/);
   assert.match(script, /marker\(\)\{ printf/);
   assert.match(script, /expected Class C marker helper anchor not found/);
@@ -53,17 +53,17 @@ test('Class C wrapper isolates runner/orchestration noise without weakening WAN 
   assert.doesNotMatch(script, /NetworkNamespacePath=\/run\/netns\/truyn-cgnat/);
   assert.match(script, /systemctl start truyn-cgnat\.service/);
 
-  // Azure RunCommand wraps stdout. Inner peer-record transport therefore uses
-  // a semantic marker and self-contained Bash extraction rather than a
-  // positional "last line is base64" assumption.
-  assert.match(script, /TRUYN_INNER_REC_B64/);
-  assert.match(script, /INNER_REC_OUT##\*TRUYN_INNER_REC_B64=/);
-  assert.match(script, /double_nat_record_missing/);
-  assert.match(script, /double_nat_record_empty/);
-  assert.match(script, /double_nat_record_decode/);
-  assert.match(script, /base64 -di/);
-  assert.match(script, /expected Class C inner NAT record decode block not found/);
-  assert.doesNotMatch(script, /marker .*INNER_REC_OUT.*TRUYN_INNER_REC_B64/);
+  // Azure RunCommand wraps stdout. Return only semantic markers from inside
+  // the namespace; never decode base64 that came back through RunCommand.
+  assert.match(script, /TRUYN_INNER_ID=/);
+  assert.match(script, /\.record\.nodeId \/\/ empty/);
+  assert.match(script, /expected Class C inner NAT record block not found/);
+  assert.match(script, /TRUYN_DOUBLE_NAT_TRANSPORT=/);
+  assert.match(script, /DTRANSPORT/);
+  assert.match(script, /expected Class C double NAT outbound block not found/);
+  assert.doesNotMatch(script, /TRUYN_INNER_REC_B64/);
+  assert.doesNotMatch(script, /INNER_REC64/);
+  assert.doesNotMatch(script, /DB64=/);
 
   // A failed inner start must preserve enough evidence to diagnose the next
   // fault without another blind paid cloud rerun.
