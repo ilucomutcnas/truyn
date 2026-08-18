@@ -23,7 +23,14 @@ test('final launchers patch known native/runtime hazards before cloud execution'
   const { readFile } = await import('node:fs/promises');
   const d100 = await readFile('scripts/class-d-100-final-acceptance.sh', 'utf8');
   assert.match(d100, /npm install --no-audit --no-fund/);
+  assert.match(d100, /50command-not-found/);
+  assert.match(d100, /TRUYN_AZ_CLI_RETRIES:=4/);
+  assert.match(d100, /if command az "\$@"; then/);
+  assert.match(d100, /attempt >= TRUYN_AZ_CLI_RETRIES/);
+  assert.match(d100, /return "\$rc"/);
+  assert.doesNotMatch(d100, /command az "\$@"\s*\|\|\s*true/);
   assert.match(d100, /\/bin\/bash \/tmp\/truy?n-d100-run\.sh|\/bin\/bash \/tmp\/truyn-d100-run\.sh/);
+
   const d1000 = await readFile('scripts/class-d-1000-final-acceptance.sh', 'utf8');
   assert.match(d1000, /14400000/);
   assert.match(d1000, /truin-d1000@.*truyn-d1000@/s);
