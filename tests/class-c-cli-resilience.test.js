@@ -17,6 +17,10 @@ test('Class C wrapper isolates runner/orchestration noise without weakening WAN 
   assert.match(script, /renewalRetested=false/);
   assert.match(script, /peerLeaseLifecycleEvidence/);
   assert.match(script, /separate-ci-prerequisite/);
+  assert.match(script, /NetworkNamespacePath=\/run\/netns\/truyn-cgnat/);
+  assert.match(script, /ExecStart=\/usr\/bin\/node \/opt\/truyn\/network\/testnet\/node-service\.js/);
+  assert.match(script, /StandardOutput=append:\/var\/lib\/truyn-cgnat\.log/);
+  assert.match(script, /expected Class C inner NAT launch line not found/);
   assert.match(script, /class-c-final-acceptance\.sh/);
   assert.doesNotMatch(script, /\|\| true/);
 });
