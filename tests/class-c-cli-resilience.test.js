@@ -19,6 +19,12 @@ test('Class C wrapper isolates runner/orchestration noise without weakening WAN 
   assert.match(script, /peerLeaseLifecycleEvidence/);
   assert.match(script, /separate-ci-prerequisite/);
 
+  // Linux IFNAMSIZ is 16 including NUL, so real interface names must be <=15.
+  assert.ok('tcgn-host'.length <= 15);
+  assert.ok('tcgn-inner'.length <= 15);
+  assert.match(script, /replace\('truyn-cgnat-host', 'tcgn-host'\)/);
+  assert.match(script, /replace\('truyn-cgnat-inner', 'tcgn-inner'\)/);
+
   // The inner double-NAT node must be owned by systemd so Azure RunCommand
   // cannot reap it, but namespace entry itself stays explicit and privileged;
   // the node process only then drops to the unprivileged truyn account.
