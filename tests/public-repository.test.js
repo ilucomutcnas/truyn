@@ -13,6 +13,11 @@ const BENCHMARK_EVIDENCE_DIR = 'docs/benchmarks/';
 
 const protectedBenchmarkEvidence = [
   {
+    path: 'docs/benchmarks/CLASS_C_HETEROGENEOUS_WAN_2026-08-18.md',
+    minBytes: 5000,
+    markers: ['# TRUYN Class C Heterogeneous WAN Acceptance', '## Evidence', '## Measured result', '## What this result does NOT prove']
+  },
+  {
     path: 'docs/benchmarks/CROSS_CLOUD_AB_2026-08-15.md',
     minBytes: 5000,
     markers: ['# TRUYN Cross-Cloud A/B Benchmark', '## Evidence', '## Primary measured result', '## Per-sample evidence']
