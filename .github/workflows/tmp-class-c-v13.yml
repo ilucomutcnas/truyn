@@ -1,0 +1,85 @@
+name: Temporary Class C Acceptance V13
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/tmp-class-c-v13.yml']
+permissions:
+  contents: read
+  id-token: write
+  issues: write
+jobs:
+  class-c:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      TESTED_COMMIT: 5f672d2f4ecb8106062f71a0093d12a36b5ea08a
+      WORKDIR: /tmp/truyn-tested
+      AZURE_LOCATION: eastus2
+      AZURE_VM_SIZE: Standard_B1ms
+      AZURE_CLIENT_ID_VALUE: ${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID_VALUE: ${{ vars.AZURE_TENANT_ID || secrets.AZURE_TENANT_ID }}
+      AZURE_SUBSCRIPTION_ID_VALUE: ${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}
+      GCP_WIF_PROVIDER_VALUE: ${{ vars.GCP_WIF_PROVIDER || secrets.GCP_WIF_PROVIDER }}
+      GCP_DEPLOYER_SERVICE_ACCOUNT_EMAIL_VALUE: ${{ vars.GCP_DEPLOYER_SERVICE_ACCOUNT_EMAIL || secrets.GCP_DEPLOYER_SERVICE_ACCOUNT_EMAIL }}
+      GCP_RUNTIME_SERVICE_ACCOUNT_EMAIL_VALUE: ${{ vars.GCP_RUNTIME_SERVICE_ACCOUNT_EMAIL || secrets.GCP_RUNTIME_SERVICE_ACCOUNT_EMAIL }}
+      GCP_REGION_VALUE: ${{ vars.GCP_REGION || secrets.GCP_REGION }}
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0, persist-credentials: false}
+      - name: Publish start marker
+        env: {GH_TOKEN: '${{ github.token }}'}
+        run: |
+          curl -fsSL -X POST -H "Authorization: Bearer ${GH_TOKEN}" -H 'Accept: application/vnd.github+json' "https://api.github.com/repos/${GITHUB_REPOSITORY}/issues" -d "$(jq -nc --arg title 'TRUYN CLASS C V13 RUN STARTED' --arg body "run_id=${GITHUB_RUN_ID} tested_commit=${TESTED_COMMIT}" '{title:$title,body:$body}')" >/dev/null
+      - name: Immutable security preflight
+        run: |
+          set -Eeuo pipefail
+          rm -rf "$WORKDIR"
+          git worktree add --detach "$WORKDIR" "$TESTED_COMMIT"
+          cd "$WORKDIR"
+          bash scripts/assert-security-clean-tested-commit.sh "$TESTED_COMMIT"
+          npm install --ignore-scripts --no-audit --no-fund
+          TRUYN_LOCAL_DEVELOPMENT=1 node --test tests/public-repository.test.js tests/class-c-cli-resilience.test.js tests/peer-record-renewal-productionization.test.js tests/class-d-shell-harness.test.js
+          bash -n scripts/class-c-final-acceptance-resilient.sh
+          bash -n scripts/class-c-final-acceptance.sh
+          bash -n scripts/class-d-100-final-acceptance.sh
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID_VALUE }}
+          tenant-id: ${{ env.AZURE_TENANT_ID_VALUE }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID_VALUE }}
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ env.GCP_WIF_PROVIDER_VALUE }}
+          service_account: ${{ env.GCP_DEPLOYER_SERVICE_ACCOUNT_EMAIL_VALUE }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - name: Execute Class C V13 proof
+        id: proof
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          cd "$WORKDIR"
+          bash scripts/class-c-final-acceptance-resilient.sh 2>&1 | tee /tmp/class-c-final.log
+      - name: Normalize evidence
+        if: always()
+        env: {PROOF_OUTCOME: '${{ steps.proof.outcome }}'}
+        run: |
+          set -Eeuo pipefail
+          mkdir -p /tmp/class-c-evidence
+          cp /tmp/class-c-final.log /tmp/class-c-evidence/class-c-final.log 2>/dev/null || true
+          final_json="$(sed -n 's/^TRUYN_CLASS_C=//p' /tmp/class-c-final.log 2>/dev/null | tail -1 || true)"
+          cleanup=false; grep -q 'TRUYN_CLASS_C_CLEANUP=PASS' /tmp/class-c-final.log 2>/dev/null && cleanup=true
+          gate=FAIL
+          if [[ "$PROOF_OUTCOME" == success && "$cleanup" == true ]] && printf '%s' "$final_json" | jq -e '.gate=="PASS" and .cloudProviders>=2 and .cloudRegions>=2 and .crossCloudDirectQuic==true and .relayCalls==0 and .packetPathPartition==true and .packetDropCount>0 and .realAzureNatGateway==true and .natSourceObserved==true and .privateNatNodePublicIp==false and .doubleNatCgnatLikeOutbound==true and .relayFallback==true and .relayFallbackAuthenticated==true and .relayOutageFailClosed==true and .relayRecovery==true' >/dev/null 2>&1; then gate=PASS; fi
+          measured=null; if printf '%s' "$final_json" | jq -e . >/dev/null 2>&1; then measured="$final_json"; fi
+          jq -nc --arg gate "$gate" --arg proofOutcome "$PROOF_OUTCOME" --arg testedCommit "$TESTED_COMMIT" --arg runId "$GITHUB_RUN_ID" --argjson cleanup "$cleanup" --argjson measured "$measured" '{gate:$gate,proofOutcome:$proofOutcome,testedCommit:$testedCommit,runId:$runId,cleanup:$cleanup,measured:$measured}' > /tmp/class-c-evidence/summary.json
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with: {name: 'class-c-v13-${{ github.run_id }}', path: /tmp/class-c-evidence, if-no-files-found: error, retention-days: 30}
+      - name: Publish completion marker
+        if: always()
+        env: {GH_TOKEN: '${{ github.token }}'}
+        run: |
+          gate="$(jq -r '.gate // "FAIL"' /tmp/class-c-evidence/summary.json 2>/dev/null || echo FAIL)"; cleanup="$(jq -r '.cleanup // false' /tmp/class-c-evidence/summary.json 2>/dev/null || echo false)"
+          curl -fsSL -X POST -H "Authorization: Bearer ${GH_TOKEN}" -H 'Accept: application/vnd.github+json' "https://api.github.com/repos/${GITHUB_REPOSITORY}/issues" -d "$(jq -nc --arg title "TRUYN CLASS C V13 ${gate}" --arg body "run_id=${GITHUB_RUN_ID} tested_commit=${TESTED_COMMIT} cleanup=${cleanup}" '{title:$title,body:$body}')" >/dev/null
+          test "$gate" = PASS
