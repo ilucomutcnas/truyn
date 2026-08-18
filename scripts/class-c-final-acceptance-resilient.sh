@@ -2,9 +2,8 @@
 set -Eeuo pipefail
 
 # GitHub-hosted Azure CLI processes can occasionally fail before issuing the
-# control-plane request (for example, a Python import/module-lock crash). The
-# Class C gate must distinguish that runner/tooling noise from a TRUYN network
-# result, while remaining fail-closed on persistent failures.
+# control-plane request. Retry only the CLI process boundary; persistent cloud
+# failures remain terminal.
 : "${TRUYN_AZ_CLI_RETRIES:=4}"
 export TRUYN_AZ_CLI_RETRIES
 
@@ -26,13 +25,11 @@ az() {
 }
 export -f az
 
-# The historical Class C harness used a 30-second peer lease while orchestrating
-# peer-record reads through serial cloud control-plane RunCommand calls. That can
-# expire a valid signed record before bootstrap and produce peer_not_discovered
-# without testing WAN reachability at all. Peer-record renewal is already a
-# separately CI-proven prerequisite; this WAN gate therefore uses a bounded
-# 30-minute orchestration lease and records that lifecycle renewal is not
-# re-proven by this run.
+# Class C is a WAN/reachability gate. Signed peer-record renewal remains a
+# separate CI-proven prerequisite, so cloud-control orchestration uses a bounded
+# 30-minute signed-record lease. The generated inner double-NAT node is run by
+# systemd inside the Linux network namespace rather than by a fragile detached
+# RunCommand child process.
 base_script="$(dirname "$0")/class-c-final-acceptance.sh"
 patched_script="$(mktemp)"
 trap 'rm -f "$patched_script"' EXIT
@@ -52,6 +49,11 @@ extra = [
     "lease_replacement = '''STAGE=lease-gossip\\nNA0=\"$RA0\"; NA2=\"$RA2\"; NAN=\"$RAN\"; NG0=\"$RG0\"\\necho 'TRUYN_CLASS_C_STAGE leases=PREREQUISITE separateCi=true orchestrationTtlMs=1800000 renewalRetested=false'\\n\\n'''",
     "s = s[:lease_start] + lease_replacement + s[lease_end:]",
     "s = s.replace('autonomousPeerLease:true,signedPeerGossip:true', 'autonomousPeerLease:false,signedPeerGossip:false,peerLeaseLifecycleEvidence:\"separate-ci-prerequisite\"')",
+    "inner_lines = s.splitlines()",
+    "inner_matches = [i for i, line in enumerate(inner_lines) if 'ip netns exec truyn-cgnat runuser -u truyn -- env' in line and 'nohup node' in line]",
+    "if len(inner_matches) != 1: raise SystemExit('expected Class C inner NAT launch line not found')",
+    "inner_lines[inner_matches[0]] = \"INNER_SETUP+=$'\\\\ncat >/etc/systemd/system/truyn-cgnat.service <<UNIT\\\\n[Unit]\\\\nAfter=network-online.target\\\\n[Service]\\\\nUser=truyn\\\\nGroup=truyn\\\\nNetworkNamespacePath=/run/netns/truyn-cgnat\\\\nWorkingDirectory=/opt/truyn\\\\nEnvironment=TRUYN_TESTNET_DATA_DIR=/var/lib/truyn-cgnat\\\\nEnvironment=TRUYN_TLS_KEY_PATH=/etc/truyn-cgnat/key.pem\\\\nEnvironment=TRUYN_TLS_CERT_PATH=/etc/truyn-cgnat/cert.pem\\\\nEnvironment=TRUYN_ADVERTISE_HOST=192.168.55.2\\\\nEnvironment=TRUYN_QUIC_HOST=0.0.0.0\\\\nEnvironment=TRUYN_QUIC_PORT=4433\\\\nEnvironment=TRUYN_CONTROL_HOST=127.0.0.1\\\\nEnvironment=TRUYN_CONTROL_PORT=8788\\\\nEnvironment=TRUYN_PEER_RECORD_TTL_MS=1800000\\\\nExecStart=/usr/bin/node /opt/truyn/network/testnet/node-service.js\\\\nStandardOutput=append:/var/lib/truyn-cgnat.log\\\\nStandardError=append:/var/lib/truin-cgnat.log\\\\nRestart=no\\\\nUNIT\\\\nsystemctl daemon-reload\\\\nsystemctl stop truyn-cgnat.service >/dev/null 2>&1 || true\\\\nsystemctl reset-failed truyn-cgnat.service >/dev/null 2>&1 || true\\\\nsystemctl start truyn-cgnat.service'\"",
+    "s = '\\n'.join(inner_lines) + '\\n'",
 ]
 src = src.replace(needle, needle + "\n" + "\n".join(extra), 1)
 Path(sys.argv[2]).write_text(src)
