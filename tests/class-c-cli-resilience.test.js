@@ -18,10 +18,25 @@ test('Class C wrapper isolates runner/orchestration noise without weakening WAN 
   assert.match(script, /renewalRetested=false/);
   assert.match(script, /peerLeaseLifecycleEvidence/);
   assert.match(script, /separate-ci-prerequisite/);
-  assert.match(script, /NetworkNamespacePath=\/run\/netns\/truyn-cgnat/);
-  assert.match(script, /ExecStart=\/usr\/bin\/node \/opt\/truyn\/network\/testnet\/node-service\.js/);
-  assert.match(script, /StandardOutput=append:\/var\/lib\/truyn-cgnat\.log/);
+
+  // The inner double-NAT node must be owned by systemd so Azure RunCommand
+  // cannot reap it, but namespace entry itself stays explicit and privileged;
+  // the node process only then drops to the unprivileged truyn account.
+  assert.match(script, /ExecStart=\/usr\/bin\/ip netns exec truyn-cgnat \/usr\/sbin\/runuser -u truyn -- \/usr\/bin\/env/);
+  assert.match(script, /TRUYN_ADVERTISE_HOST=192\.168\.55\.2/);
+  assert.match(script, /TRUYN_PEER_RECORD_TTL_MS=1800000/);
+  assert.match(script, /StandardOutput=append:\/var\/lib\/truropyn-cgnat\.log/);
+  assert.match(script, /StandardError=append:\/var\/lib\/truropyn-cgnat\.log/);
+  assert.doesNotMatch(script, /NetworkNamespacePath=\/run\/netns\/truyn-cgnat/);
   assert.match(script, /systemctl start truyn-cgnat\.service/);
+
+  // A failed inner start must preserve enough evidence to diagnose the next
+  // fault without another blind paid cloud rerun.
+  assert.match(script, /systemctl --no-pager --full status truyn-cgnat\.service/);
+  assert.match(script, /journalctl -u truyn-cgnat\.service --no-pager -n 160/);
+  assert.match(script, /ip netns exec truyn-cgnat ip addr/);
+  assert.match(script, /cat \/var\/lib\/truropyn-cgnat\.log/);
+  assert.match(script, /expected Class C inner NAT readiness check not found/);
   assert.match(script, /expected Class C inner NAT launch line not found/);
   assert.match(script, /class-c-final-acceptance\.sh/);
 });
