@@ -1,20 +1,15 @@
 import { createHash } from 'node:crypto';
-import { xorDistance } from '../../network/dht/kademlia.js';
+import { dhtId } from '../../network/dht/kademlia.js';
 
 function bitIndex(distance) {
   if (distance === 0n) return -1;
   return distance.toString(2).length - 1;
 }
 
-function score(seed, localNodeId, peerNodeId) {
+function deterministicScore(seed, localNodeId, peerNodeId) {
   return createHash('sha256').update(`${seed}:${localNodeId}:${peerNodeId}`).digest('hex');
 }
 
-/**
- * Build a bounded Kademlia-aware bootstrap set for each real node.
- * This deliberately avoids all-to-all preloading: non-bootstrap targets must
- * be resolved through iterative FIND_NODE RPCs at runtime.
- */
 export function buildClassD1000BootstrapPlan(records, {
   seed = 'truyn-class-d-1000',
   maxPeersPerNode = 32,
@@ -25,49 +20,48 @@ export function buildClassD1000BootstrapPlan(records, {
   if (!Number.isInteger(peersPerBucket) || peersPerBucket < 1) throw new Error('peersPerBucket must be >= 1');
 
   const unique = new Set();
+  const dhtIds = new Map();
   for (const record of records) {
     if (!record?.nodeId) throw new Error('every record requires nodeId');
     if (unique.has(record.nodeId)) throw new Error(`duplicate nodeId: ${record.nodeId}`);
     unique.add(record.nodeId);
+    dhtIds.set(record.nodeId, BigInt(`0x${dhtId(record.nodeId)}`));
   }
 
   const plan = new Map();
   for (const local of records) {
+    const localDhtId = dhtIds.get(local.nodeId);
     const buckets = new Map();
     for (const peer of records) {
       if (peer.nodeId === local.nodeId) continue;
-      const bucket = bitIndex(xorDistance(local.nodeId, peer.nodeId));
+      const bucket = bitIndex(localDhtId ^ dhtIds.get(peer.nodeId));
       const items = buckets.get(bucket) || [];
-      items.push(peer);
+      items.push({ peer, bucketScore: deterministicScore(seed, local.nodeId, peer.nodeId), fillScore: deterministicScore(`${seed}:fill`, local.nodeId, peer.nodeId) });
       buckets.set(bucket, items);
     }
 
     const selected = [];
     const selectedIds = new Set();
-    const orderedBuckets = [...buckets.keys()].sort((a, b) => a - b);
-    for (const bucket of orderedBuckets) {
-      const candidates = buckets.get(bucket)
-        .slice()
-        .sort((a, b) => score(seed, local.nodeId, a.nodeId).localeCompare(score(seed, local.nodeId, b.nodeId)));
-      for (const peer of candidates.slice(0, peersPerBucket)) {
+    for (const bucket of [...buckets.keys()].sort((a, b) => a - b)) {
+      const candidates = buckets.get(bucket).slice().sort((a, b) => a.bucketScore.localeCompare(b.bucketScore));
+      for (const candidate of candidates.slice(0, peersPerBucket)) {
         if (selected.length >= maxPeersPerNode) break;
-        selected.push(peer);
-        selectedIds.add(peer.nodeId);
+        selected.push(candidate.peer);
+        selectedIds.add(candidate.peer.nodeId);
       }
       if (selected.length >= maxPeersPerNode) break;
     }
 
     if (selected.length < maxPeersPerNode) {
-      const remaining = records
-        .filter((peer) => peer.nodeId !== local.nodeId && !selectedIds.has(peer.nodeId))
-        .sort((a, b) => score(`${seed}:fill`, local.nodeId, a.nodeId).localeCompare(score(`${seed}:fill`, local.nodeId, b.nodeId)));
-      for (const peer of remaining) {
+      const remaining = [];
+      for (const items of buckets.values()) for (const candidate of items) if (!selectedIds.has(candidate.peer.nodeId)) remaining.push(candidate);
+      remaining.sort((a, b) => a.fillScore.localeCompare(b.fillScore));
+      for (const candidate of remaining) {
         if (selected.length >= maxPeersPerNode) break;
-        selected.push(peer);
-        selectedIds.add(peer.nodeId);
+        selected.push(candidate.peer);
+        selectedIds.add(candidate.peer.nodeId);
       }
     }
-
     plan.set(local.nodeId, selected);
   }
   return plan;
@@ -75,11 +69,5 @@ export function buildClassD1000BootstrapPlan(records, {
 
 export function summarizeClassD1000BootstrapPlan(plan) {
   const sizes = [...plan.values()].map((peers) => peers.length);
-  return {
-    nodeCount: plan.size,
-    minPeers: sizes.length ? Math.min(...sizes) : 0,
-    maxPeers: sizes.length ? Math.max(...sizes) : 0,
-    meanPeers: sizes.length ? sizes.reduce((sum, value) => sum + value, 0) / sizes.length : 0,
-    allToAll: sizes.length > 0 && sizes.every((size) => size === plan.size - 1)
-  };
+  return { nodeCount: plan.size, minPeers: sizes.length ? Math.min(...sizes) : 0, maxPeers: sizes.length ? Math.max(...sizes) : 0, meanPeers: sizes.length ? sizes.reduce((sum, value) => sum + value, 0) / sizes.length : 0, allToAll: sizes.length > 0 && sizes.every((size) => size === plan.size - 1) };
 }
