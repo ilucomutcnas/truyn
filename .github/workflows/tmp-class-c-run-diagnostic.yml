@@ -1,0 +1,43 @@
+name: Temporary Class C Run Diagnostic
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/tmp-class-c-run-diagnostic.yml'
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: true
+          fetch-depth: 0
+      - name: Read target workflow run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: 83eabf64aca2cfc04fa619bbda5175bc12ea2662
+        run: |
+          set -Eeuo pipefail
+          mkdir -p docs/operations
+          payload="$(curl -fsSL -H "Authorization: Bearer ${GH_TOKEN}" -H 'Accept: application/vnd.github+json' "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/runs?head_sha=${TARGET_SHA}&event=push&per_page=20")"
+          run="$(printf '%s' "$payload" | jq -c --arg sha "$TARGET_SHA" '[.workflow_runs[] | select(.head_sha==$sha) | {id,name,status,conclusion,created_at,updated_at,run_attempt,event,head_sha}] | sort_by(.created_at) | first // {}')"
+          [[ "$(printf '%s' "$run" | jq -r '.id // empty')" != '' ]]
+          printf '%s\n' "$run" > docs/operations/CLASS_C_RUN_DIAGNOSTIC.json
+      - name: Self clean and publish diagnostic
+        run: |
+          set -Eeuo pipefail
+          git rm -f .github/workflows/tmp-class-c-run-diagnostic.yml
+          git add docs/operations/CLASS_C_RUN_DIAGNOSTIC.json
+          git config user.name 'truyn-ops-bot'
+          git config user.email 'actions@users.noreply.github.com'
+          git commit -m 'ops: record Class C run diagnostic'
+          git pull --rebase origin main
+          git push origin HEAD:main
