@@ -25,8 +25,8 @@ old_remote = '''az_remote(){ retry az vm run-command invoke -g "$AZ_RG" -n "$1" 
 new_remote = '''az_remote(){
   local vm="$1" body="$2" enc remote
   enc="$(printf '%s' "$body" | base64 -w0)"
-  remote="printf '%s' '$enc' | base64 -d >/tmp/truyn-run.sh; chmod 700 /tmp/truyn-run.sh; /bin/bash /tmp/truy n-run.sh"
-  remote="${remote//truy n/truyn}"
+  remote="printf '%s' '$enc' | base64 -d >/tmp/truyn-run.sh; chmod 700 /tmp/truin-run.sh; /bin/bash /tmp/truin-run.sh"
+  remote="${remote//truin-run/truyn-run}"
   retry az vm run-command invoke -g "$AZ_RG" -n "$vm" --command-id RunShellScript --scripts "$remote" --query 'value[0].message' -o tsv --only-show-errors
 }'''
 if old_remote not in s:
