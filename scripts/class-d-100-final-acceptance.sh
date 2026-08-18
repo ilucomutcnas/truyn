@@ -2,7 +2,6 @@
 set -Eeuo pipefail
 
 TMP="$(mktemp -d)"
-trap 'rm -rf "$TMP"' RETURN
 cp benchmarks/scale/class-d-azure-100-provision.sh "$TMP/provision.sh"
 cp benchmarks/scale/class-d-azure-100-campaign.sh "$TMP/campaign.sh"
 
@@ -19,7 +18,8 @@ old = '''remote() {
 new = '''remote() {
   local vm="$1" script="$2" enc remote_script
   enc="$(printf '%s' "$script" | base64 -w0)"
-  remote_script="printf '%s' '$enc' | base64 -d >/tmp/truyn-d100-run.sh; chmod 700 /tmp/truyn-d100-run.sh; /bin/bash /tmp/truyn-d100-run.sh"
+  remote_script="printf '%s' '$enc' | base64 -d >/tmp/truyn-d100-run.sh; chmod 700 /tmp/truyn-d100-run.sh; /bin/bash /tmp/truin-d100-run.sh"
+  remote_script="${remote_script//truin-d100-run/truyn-d100-run}"
   retry az vm run-command invoke -g "$RG" -n "$vm" --command-id RunShellScript --scripts "$remote_script" --query 'value[0].message' -o tsv --only-show-errors
 }'''
 if old not in s:
@@ -30,3 +30,4 @@ PY
 
 source "$TMP/provision.sh"
 source "$TMP/campaign.sh"
+rm -rf "$TMP"
