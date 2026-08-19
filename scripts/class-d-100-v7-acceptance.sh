@@ -15,7 +15,7 @@ anchor = "\np.write_text(s)\nPY\n\nif [[ \"${TRUYN_CLASS_D100_PREPARE_ONLY:-0}\"
 if anchor not in src:
     raise SystemExit('canonical D-100 acceptance preparation anchor not found')
 
-hardening = r'''
+hardening = r"""
 # V7: the install stage already creates records.json with Python from 25 live
 # node /record endpoints. Validate the exact same identity/endpoint cardinality
 # with Python instead of reparsing that generated JSON through jq inside the
@@ -43,7 +43,7 @@ if any(not x for x in node_ids) or len(set(node_ids)) != 25:
     raise SystemExit('expected 25 distinct node identities')
 if any(not x for x in endpoints) or len(set(endpoints)) != 25:
     raise SystemExit('expected 25 distinct QUIC endpoints')
-with open('/var/lib/truinyn-d100/record-stats.env', 'w', encoding='utf-8') as fh:
+with open('/var/lib/truyn-d100/record-stats.env', 'w', encoding='utf-8') as fh:
     fh.write('IDENTITIES=25\nENDPOINTS=25\n')
 PYVALIDATE
 . /var/lib/truinyn-d100/record-stats.env
@@ -51,6 +51,8 @@ uc=\$IDENTITIES
 ep=\$ENDPOINTS
 proc=\$(pgrep -fc 'network/testnet/node-service.js')
 [ "\$uc" -eq 25 ] && [ "\$ep" -eq 25 ] && [ "\$proc" -ge 25 ]'''
+# Keep canonical path spelling in the newly inserted block too.
+install_new = install_new.replace('truinyn-d100', 'truyn-d100')
 s = s[:start] + install_new + s[end:]
 
 # Capture all RunCommand message components rather than relying on array order.
@@ -64,7 +66,7 @@ if "record-stats.env" not in s:
     raise SystemExit('V7 Python record validation missing after preparation')
 if "--query 'value[].message' -o tsv --only-show-errors" not in s:
     raise SystemExit('V7 RunCommand all-message extraction missing after preparation')
-'''
+"""
 
 src = src.replace(anchor, "\n" + hardening + "\np.write_text(s)\nPY\n\nif [[ \"${TRUYN_CLASS_D100_PREPARE_ONLY:-0}\" == 1 ]]; then", 1)
 out.write_text(src)
