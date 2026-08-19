@@ -39,11 +39,11 @@ s = s.replace('npm install --ignore-scripts --no-audit --no-fund', 'npm install 
 # guests. Mirror/index resolution can also be transient; retry the mandatory
 # update+package install boundary a bounded number of times and still fail
 # closed if required tools are not installable.
-apt_old = '''apt-get update -qq
+apt_old = r'''apt-get update -qq
 apt-get install -y -qq git curl jq openssl ca-certificates python3 iptables >/dev/null
 major=0; command -v node >/dev/null 2>&1 && major=\$(node -p 'parseInt(process.versions.node)' 2>/dev/null || echo 0)
 if [ "\$major" -lt 22 ]; then curl -fsSL https://deb.nodesource.com/setup_22.x | bash - >/dev/null; apt-get install -y -qq nodejs >/dev/null; fi'''
-apt_new = '''rm -f /etc/apt/apt.conf.d/50command-not-found
+apt_new = r'''rm -f /etc/apt/apt.conf.d/50command-not-found
 apt_ok=0
 for apt_attempt in 1 2 3 4; do
   if apt-get update -qq && apt-get install -y -qq git curl jq openssl ca-certificates python3 iptables >/dev/null; then apt_ok=1; break; fi
@@ -64,11 +64,11 @@ fi'''
 if apt_old not in s:
     raise SystemExit('expected Class D guest apt bootstrap block not found')
 s = s.replace(apt_old, apt_new, 1)
-old = '''remote() {
+old = r'''remote() {
   local vm="$1" script="$2"
   retry az vm run-command invoke -g "$RG" -n "$vm" --command-id RunShellScript --scripts "$script" --query 'value[0].message' -o tsv --only-show-errors
 }'''
-new = '''remote() {
+new = r'''remote() {
   local vm="$1" script="$2" enc remote_script
   enc="$(printf '%s' "$script" | base64 -w0)"
   remote_script="printf '%s' '$enc' | base64 -d >/tmp/truyn-d100-run.sh; chmod 700 /tmp/truin-d100-run.sh; /bin/bash /tmp/truin-d100-run.sh"
@@ -77,7 +77,51 @@ new = '''remote() {
 }'''
 if old not in s:
     raise SystemExit('expected Class D remote helper not found')
-s = s.replace(old, new)
+s = s.replace(old, new, 1)
+
+# D-100 bootstrap must validate the invariant the protocol actually promises.
+# Kademlia k=20 intentionally bounds each routing bucket, so routing.size()
+# is not a full-membership list and a >=90 peerCount gate is invalid. Require
+# every one of the 25 processes on each host to accept all 100 signed peer
+# records; keep the routing table bounded/non-empty; later baseline/healed
+# traffic still has to satisfy the unchanged >=99% canonical routing gate.
+bootstrap_old = r'''payload=\$(jq -c '{records:.}' /tmp/all-records.json)
+t0=\$(date +%s%3N)
+for j in \$(seq 0 24); do curl -fsS --max-time 60 -H 'content-type: application/json' --data-binary "\$payload" http://127.0.0.1:\$(( ${CONTROL_BASE} + j ))/bootstrap >/dev/null; done
+t1=\$(date +%s%3N)
+peers=0
+for j in \$(seq 0 24); do p=\$(curl -fsS http://127.0.0.1:\$(( ${CONTROL_BASE} + j ))/status | jq -r '.peerCount'); [ "\$p" -ge 90 ] && peers=\$((peers+1)); done
+[ "\$peers" -eq 25 ]
+echo RECORDS=100
+echo BOOTSTRAP_MS=\$((t1-t0))
+echo FULL_PEERS=\$peers'''
+bootstrap_new = r'''payload=\$(jq -c '{records:.}' /tmp/all-records.json)
+t0=\$(date +%s%3N)
+accepted_nodes=0
+routing_min=1000000
+routing_max=0
+for j in \$(seq 0 24); do
+  response=\$(curl -fsS --max-time 60 -H 'content-type: application/json' --data-binary "\$payload" http://127.0.0.1:\$(( ${CONTROL_BASE} + j ))/bootstrap)
+  accepted=\$(printf '%s' "\$response" | jq '[.results[] | select(.accepted == true)] | length')
+  [ "\$accepted" -eq 100 ]
+  p=\$(curl -fsS --max-time 10 http://127.0.0.1:\$(( ${CONTROL_BASE} + j ))/status | jq -r '.peerCount')
+  [ "\$p" -gt 0 ]
+  [ "\$p" -lt "\$routing_min" ] && routing_min=\$p
+  [ "\$p" -gt "\$routing_max" ] && routing_max=\$p
+  accepted_nodes=\$((accepted_nodes+1))
+done
+t1=\$(date +%s%3N)
+[ "\$accepted_nodes" -eq 25 ]
+echo RECORDS=100
+echo BOOTSTRAP_MS=\$((t1-t0))
+echo BOOTSTRAPPED_NODES=\$accepted_nodes
+echo ROUTING_MIN=\$routing_min
+echo ROUTING_MAX=\$routing_max'''
+if bootstrap_old not in s:
+    raise SystemExit('expected invalid Class D full-routing bootstrap gate not found')
+s = s.replace(bootstrap_old, bootstrap_new, 1)
+s = s.replace('[[ "$(marker "$out" FULL_PEERS)" == 25 ]]', '[[ "$(marker "$out" BOOTSTRAPPED_NODES)" == 25 ]]', 1)
+s = s.replace('records=100 fullRoutingNodes=25 bootstrapMs=$(marker "$out" BOOTSTRAP_MS)', 'records=100 bootstrappedNodes=25 routingMin=$(marker "$out" ROUTING_MIN) routingMax=$(marker "$out" ROUTING_MAX) bootstrapMs=$(marker "$out" BOOTSTRAP_MS)', 1)
 p.write_text(s)
 PY
 
