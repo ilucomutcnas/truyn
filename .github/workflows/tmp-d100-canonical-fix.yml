@@ -13,11 +13,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - name: Start marker
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh api repos/${GITHUB_REPOSITORY}/issues -f title='TRUYN D100 CANONICAL FIX STARTED' -f body="run=${GITHUB_RUN_ID} workflow_sha=${GITHUB_SHA}" >/dev/null
       - uses: actions/checkout@v4
         with:
           ref: main
@@ -29,15 +24,13 @@ jobs:
           set -Eeuo pipefail
           python3 - <<'PY'
           from pathlib import Path
-
           provision = Path('benchmarks/scale/class-d-azure-100-provision.sh')
           s = provision.read_text()
           for bad, good in (('truqyn','truyn'), ('truinyn','truyn'), ('truin-d100','truyn-d100')):
               s = s.replace(bad, good)
           s = s.replace('GITHUB_SHA', 'TRUYN_TESTED_COMMIT')
           checkout = "git checkout -q '${TRUYN_TESTED_COMMIT}'"
-          if checkout not in s:
-              raise SystemExit('canonical guest checkout line not found')
+          if checkout not in s: raise SystemExit('canonical guest checkout line not found')
           if 'git rev-parse HEAD' not in s:
               s = s.replace(checkout, checkout + "\ntest \"\\$(git rev-parse HEAD)\" = '${TRUYN_TESTED_COMMIT}'", 1)
           if 'echo TESTED_COMMIT=' not in s:
@@ -47,13 +40,11 @@ jobs:
               s = s.replace(outer, '[[ "$(marker "$out" TESTED_COMMIT)" == "$TRUYN_TESTED_COMMIT" ]]\n  ' + outer, 1)
           s = s.replace('stage=preflight status=PASS commit=${TRUYN_TESTED_COMMIT}', 'stage=preflight status=PASS testedCommit=${TRUYN_TESTED_COMMIT}')
           for bad in ('truqyn','truinyn','truin-d100','GITHUB_SHA'):
-              if bad in s:
-                  raise SystemExit('forbidden token remains in provision: ' + bad)
+              if bad in s: raise SystemExit('forbidden token remains: ' + bad)
           provision.write_text(s)
 
           campaign = Path('benchmarks/scale/class-d-azure-100-campaign.sh')
-          c = campaign.read_text().replace('GITHUB_SHA', 'TRUYN_TESTED_COMMIT')
-          campaign.write_text(c)
+          campaign.write_text(campaign.read_text().replace('GITHUB_SHA', 'TRUYN_TESTED_COMMIT'))
 
           wrapper = Path('scripts/class-d-100-final-acceptance.sh')
           w = wrapper.read_text()
@@ -61,7 +52,6 @@ jobs:
               w = w.replace('set -Eeuo pipefail\n', 'set -Eeuo pipefail\n\nif [[ "${TRUYN_CLASS_D100_PREPARE_ONLY:-0}" != 1 ]]; then\n  : "${TRUYN_TESTED_COMMIT:?TRUYN_TESTED_COMMIT is required for accepted D-100}"\nfi\n', 1)
           wrapper.write_text(w)
           PY
-
           cat > tests/class-d-canonical-pin-regression.test.js <<'JS'
           import assert from 'node:assert/strict';
           import { readFileSync } from 'node:fs';
@@ -79,24 +69,21 @@ jobs:
             assert.match(wrapper, /TRUYN_TESTED_COMMIT is required for accepted D-100/);
           });
           JS
-
           bash -n benchmarks/scale/class-d-azure-100-provision.sh
           bash -n benchmarks/scale/class-d-azure-100-campaign.sh
           bash -n scripts/class-d-100-final-acceptance.sh
           TRUYN_CLASS_D100_PREPARE_ONLY=1 bash scripts/class-d-100-final-acceptance.sh
           node --test tests/class-d-canonical-pin-regression.test.js
           git diff --check
-      - name: Ready marker
+      - name: Commit and push protected-branch patch
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          gh api repos/${GITHUB_REPOSITORY}/issues -f title='TRUYN D100 CANONICAL FIX READY' -f body="run=${GITHUB_RUN_ID} source_before=${GITHUB_SHA}" >/dev/null
-      - name: Commit canonical fix
         run: |
           set -Eeuo pipefail
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add benchmarks/scale/class-d-azure-100-provision.sh benchmarks/scale/class-d-azure-100-campaign.sh scripts/class-d-100-final-acceptance.sh tests/class-d-canonical-pin-regression.test.js
-          if git diff --cached --quiet; then exit 0; fi
           git commit -m 'fix: canonicalize D-100 guest paths and tested SHA propagation'
-          git push origin HEAD:main
+          git push origin HEAD:refs/heads/d100-canonical-fix-20260819
+          patch_sha="$(git rev-parse HEAD)"
+          gh api repos/${GITHUB_REPOSITORY}/issues -f title='TRUYN D100 CANONICAL PATCH PUSHED' -f body="run=${GITHUB_RUN_ID} branch=d100-canonical-fix-20260819 patch_sha=${patch_sha}" >/dev/null
