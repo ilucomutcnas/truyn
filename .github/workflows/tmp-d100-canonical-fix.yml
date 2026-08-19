@@ -19,18 +19,18 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Canonicalize source and pin contract
+      - name: Build canonical protected patch
         run: |
           set -Eeuo pipefail
           python3 - <<'PY'
           from pathlib import Path
-          provision = Path('benchmarks/scale/class-d-azure-100-provision.sh')
-          s = provision.read_text()
+          p = Path('benchmarks/scale/class-d-azure-100-provision.sh')
+          s = p.read_text()
           for bad, good in (('truqyn','truyn'), ('truinyn','truyn'), ('truin-d100','truyn-d100')):
               s = s.replace(bad, good)
           s = s.replace('GITHUB_SHA', 'TRUYN_TESTED_COMMIT')
           checkout = "git checkout -q '${TRUYN_TESTED_COMMIT}'"
-          if checkout not in s: raise SystemExit('canonical guest checkout line not found')
+          if checkout not in s: raise SystemExit('guest checkout line missing')
           if 'git rev-parse HEAD' not in s:
               s = s.replace(checkout, checkout + "\ntest \"\\$(git rev-parse HEAD)\" = '${TRUYN_TESTED_COMMIT}'", 1)
           if 'echo TESTED_COMMIT=' not in s:
@@ -40,17 +40,17 @@ jobs:
               s = s.replace(outer, '[[ "$(marker "$out" TESTED_COMMIT)" == "$TRUYN_TESTED_COMMIT" ]]\n  ' + outer, 1)
           s = s.replace('stage=preflight status=PASS commit=${TRUYN_TESTED_COMMIT}', 'stage=preflight status=PASS testedCommit=${TRUYN_TESTED_COMMIT}')
           for bad in ('truqyn','truinyn','truin-d100','GITHUB_SHA'):
-              if bad in s: raise SystemExit('forbidden token remains: ' + bad)
-          provision.write_text(s)
+              if bad in s: raise SystemExit('forbidden provision token: ' + bad)
+          p.write_text(s)
 
-          campaign = Path('benchmarks/scale/class-d-azure-100-campaign.sh')
-          campaign.write_text(campaign.read_text().replace('GITHUB_SHA', 'TRUYN_TESTED_COMMIT'))
+          p = Path('benchmarks/scale/class-d-azure-100-campaign.sh')
+          p.write_text(p.read_text().replace('GITHUB_SHA', 'TRUYN_TESTED_COMMIT'))
 
-          wrapper = Path('scripts/class-d-100-final-acceptance.sh')
-          w = wrapper.read_text()
+          p = Path('scripts/class-d-100-final-acceptance.sh')
+          w = p.read_text()
           if 'TRUYN_TESTED_COMMIT is required for accepted D-100' not in w:
               w = w.replace('set -Eeuo pipefail\n', 'set -Eeuo pipefail\n\nif [[ "${TRUYN_CLASS_D100_PREPARE_ONLY:-0}" != 1 ]]; then\n  : "${TRUYN_TESTED_COMMIT:?TRUYN_TESTED_COMMIT is required for accepted D-100}"\nfi\n', 1)
-          wrapper.write_text(w)
+          p.write_text(w)
           PY
           cat > tests/class-d-canonical-pin-regression.test.js <<'JS'
           import assert from 'node:assert/strict';
@@ -75,15 +75,16 @@ jobs:
           TRUYN_CLASS_D100_PREPARE_ONLY=1 bash scripts/class-d-100-final-acceptance.sh
           node --test tests/class-d-canonical-pin-regression.test.js
           git diff --check
-      - name: Commit and push protected-branch patch
+      - name: Commit patch including workflow removal
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -Eeuo pipefail
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git rm .github/workflows/tmp-d100-canonical-fix.yml
           git add benchmarks/scale/class-d-azure-100-provision.sh benchmarks/scale/class-d-azure-100-campaign.sh scripts/class-d-100-final-acceptance.sh tests/class-d-canonical-pin-regression.test.js
-          git commit -m 'fix: canonicalize D-100 guest paths and tested SHA propagation'
-          git push origin HEAD:refs/heads/d100-canonical-fix-20260819
-          patch_sha="$(git rev-parse HEAD)"
-          gh api repos/${GITHUB_REPOSITORY}/issues -f title='TRUYN D100 CANONICAL PATCH PUSHED' -f body="run=${GITHUB_RUN_ID} branch=d100-canonical-fix-20260819 patch_sha=${patch_sha}" >/dev/null
+          git commit -m 'fix: canonicalize D-100 guest paths and immutable tested commit'
+          git push origin HEAD:refs/heads/d100-canonical-fix-v2-20260819
+          sha="$(git rev-parse HEAD)"
+          gh api repos/${GITHUB_REPOSITORY}/issues -f title='TRUYN D100 CANONICAL V2 PATCH PUSHED' -f body="run=${GITHUB_RUN_ID} branch=d100-canonical-fix-v2-20260819 patch_sha=${sha}" >/dev/null
