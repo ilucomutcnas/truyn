@@ -37,20 +37,15 @@ export function normalizeAzureClassD100Evidence(raw = {}) {
         exercised: raw?.adversarial?.packetPartition?.realPacketPath === true &&
           finite(raw?.adversarial?.packetPartition?.blockedSuccesses, Infinity) === 0
       },
-      byzantine: {
-        exercised: raw?.adversarial?.byzantineReplica != null
-      },
-      sybil: {
-        exercised: finite(raw?.adversarial?.sybilPressure?.attackerNodes, 0) > 0
-      },
-      eclipse: {
-        exercised: raw?.adversarial?.eclipse?.exercised === true
-      },
-      collusion: {
-        exercised: finite(raw?.adversarial?.collusion?.colluders, 0) > 0
-      }
+      byzantine: { exercised: raw?.adversarial?.byzantineReplica != null },
+      sybil: { exercised: finite(raw?.adversarial?.sybilPressure?.attackerNodes, 0) > 0 },
+      eclipse: { exercised: raw?.adversarial?.eclipse?.exercised === true },
+      collusion: { exercised: finite(raw?.adversarial?.collusion?.colluders, 0) > 0 }
     },
-    cleanup: { complete: raw?.cleanup?.confirmed === true }
+    cleanup: {
+      complete: raw?.cleanup?.confirmed === true,
+      remainingResources: finite(raw?.cleanup?.remainingResources, Infinity)
+    }
   };
 
   return {
@@ -60,16 +55,12 @@ export function normalizeAzureClassD100Evidence(raw = {}) {
       testedCommit: raw?.testedCommit || null,
       workflowRunId: raw?.workflowRunId || null,
       convergenceMetric: 'healed.recoveryP95Ms',
-      cleanupMetric: 'cleanup.confirmed'
+      cleanupMetric: 'cleanup.confirmed + cleanup.remainingResources'
     }
   };
 }
 
 export function evaluateAzureClassD100Evidence(raw = {}) {
   const { normalized, derivation } = normalizeAzureClassD100Evidence(raw);
-  return {
-    ...evaluateClassD100(normalized),
-    normalized,
-    derivation
-  };
+  return { ...evaluateClassD100(normalized), normalized, derivation };
 }
