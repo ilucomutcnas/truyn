@@ -36,10 +36,19 @@ test('final launchers patch known native/runtime hazards before cloud execution'
   assert.match(d100, /for node_attempt in 1 2 3 4/);
   assert.match(d100, /expected Class D guest apt bootstrap block not found/);
   assert.doesNotMatch(d100, /apt-get (?:update|install)[^\n]*\|\|\s*true/);
-  // The generated remote body deliberately contains the historical misspelling
-  // and fixes it before execution; lock both halves of that transformation.
-  assert.match(d100, /\/bin\/bash \/tmp\/truin-d100-run\.sh/);
-  assert.match(d100, /truin-d100-run\/truyn-d100-run/);
+
+  // Canonical guest payload is normalized before any Azure execution. Lock the
+  // corrected runtime paths and reject the historical typo families.
+  assert.match(d100, /s = s\.replace\('truqyn', 'truyn'\)/);
+  assert.match(d100, /s = s\.replace\('truinyn', 'truyn'\)/);
+  assert.match(d100, /s = s\.replace\('truin-d100', 'truyn-d100'\)/);
+  assert.match(d100, /\/bin\/bash \/tmp\/truyn-d100-run\.sh/);
+  assert.doesNotMatch(d100, /\/bin\/bash \/tmp\/truin-d100-run\.sh/);
+  assert.match(d100, /invalid Class D guest path survived preparation/);
+  assert.match(d100, /\/var\/lib\/truyn-d100\/records\.json/);
+  assert.match(d100, /EnvironmentFile=\/etc\/truyn-d100\/node-%i\.env/);
+  assert.match(d100, /ExecStart=\/usr\/bin\/node \/opt\/truyn\/network\/testnet\/node-service\.js/);
+
   // Kademlia k=20 does not promise a full membership list in routing.size().
   // The accepted gate must instead prove all 100 signed records were accepted
   // by all 25 node processes per host, then prove reachability with the
@@ -54,7 +63,7 @@ test('final launchers patch known native/runtime hazards before cloud execution'
   assert.match(d1000, /truin-d1000@.*truyn-d1000@/s);
 });
 
-test('D-100 prepared harness removes invalid full-routing gate without cloud access', () => {
+test('D-100 prepared harness removes invalid bootstrap and guest paths without cloud access', () => {
   const run = spawnSync('bash', ['scripts/class-d-100-final-acceptance.sh'], {
     encoding: 'utf8',
     env: { ...process.env, TRUYN_CLASS_D100_PREPARE_ONLY: '1' }
