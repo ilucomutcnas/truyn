@@ -1,0 +1,55 @@
+name: tmp-d100-v4-preflight
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Start marker
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api repos/${GITHUB_REPOSITORY}/issues -f title='TRUYN CLASS D-100 V4 PREFLIGHT R2 STARTED' -f body="run=${GITHUB_RUN_ID} workflow_sha=${GITHUB_SHA} tested_sha=855c3f964b37bfb1bacec4071a148dbd64a620cf" >/dev/null
+      - uses: actions/checkout@v4
+        with:
+          ref: 855c3f964b37bfb1bacec4071a148dbd64a620cf
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Immutable security and acceptance preflight
+        env:
+          TRUYN_LOCAL_DEVELOPMENT: '1'
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = '855c3f964b37bfb1bacec4071a148dbd64a620cf'
+          extras="$(find .github/workflows -maxdepth 1 -type f ! -name ci.yml ! -name .gitkeep -printf '%f\n' | sort)"
+          test -z "$extras"
+          npm install --ignore-scripts --no-audit --no-fund
+          npm test
+          bash -n scripts/class-d-100-final-acceptance.sh
+          bash -n benchmarks/scale/class-d-azure-100-provision.sh
+          bash -n benchmarks/scale/class-d-azure-100-campaign.sh
+          TRUYN_CLASS_D100_PREPARE_ONLY=1 bash scripts/class-d-100-final-acceptance.sh
+          node --check benchmarks/scale/evaluate-class-d-evidence.js
+          node --check benchmarks/scale/verify-class-d-terminal.js
+      - name: PASS marker
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api repos/${GITHUB_REPOSITORY}/issues -f title='TRUYN CLASS D-100 V4 PREFLIGHT R2 PASS' -f body="run=${GITHUB_RUN_ID} tested_sha=855c3f964b37bfb1bacec4071a148dbd64a620cf result=PASS" >/dev/null
+      - name: FAIL marker
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api repos/${GITHUB_REPOSITORY}/issues -f title='TRUYN CLASS D-100 V4 PREFLIGHT R2 FAIL' -f body="run=${GITHUB_RUN_ID} tested_sha=855c3f964b37bfb1bacec4071a148dbd64a620cf result=FAIL" >/dev/null
