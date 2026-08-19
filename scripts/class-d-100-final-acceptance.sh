@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
+if [[ "${TRUYN_CLASS_D100_PREPARE_ONLY:-0}" != 1 ]]; then
+  : "${TRUYN_TESTED_COMMIT:?TRUYN_TESTED_COMMIT is required for accepted D-100}"
+fi
+
 # Keep the accepted 100-node gate strict while isolating known GitHub-hosted
 # Azure CLI process crashes at the process boundary. Persistent cloud failures
 # still fail closed after a bounded number of attempts.

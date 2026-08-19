@@ -216,7 +216,7 @@ cat >"$EVIDENCE" <<JSON
 {
   "class":"D",
   "scope":"100-real-process-resilience",
-  "testedCommit":"${GITHUB_SHA}",
+  "testedCommit":"${TRUYN_TESTED_COMMIT}",
   "workflowRunId":"${GITHUB_RUN_ID}",
   "seed":${SEED},
   "topology":{"nodeCount":100,"realProcessCount":100,"hostCount":4,"realProcessesPerHost":25,"uniqueIdentityCount":100,"uniqueEndpointCount":100,"uniqueStatePathCount":100,"syntheticNodeCount":0,"transport":"real UDP/QUIC over Azure VNet"},
