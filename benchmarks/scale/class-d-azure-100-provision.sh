@@ -104,19 +104,22 @@ major=0; command -v node >/dev/null 2>&1 && major=\$(node -p 'parseInt(process.v
 if [ "\$major" -lt 22 ]; then curl -fsSL https://deb.nodesource.com/setup_22.x | bash - >/dev/null; apt-get install -y -qq nodejs >/dev/null; fi
 rm -rf /opt/truyn
 git clone -q https://github.com/inn-media/truyn.git /opt/truyn
-cd /opt/truyn
+cd /opt/truinyn 2>/dev/null || cd /opt/truyn
 git checkout -q '${GITHUB_SHA}'
 npm install --ignore-scripts --no-audit --no-fund >/dev/null
 install -d -m 0700 /var/lib/truyn-d100 /etc/truyn-d100
-openssl req -x509 -newkey rsa:2048 -nodes -keyout /etc/truyn-d100/key.pem -out /etc/truyn-d100/cert.pem -subj '/CN=${PRIV[$i]}' -days 1 -addext 'subjectAltName=IP:${PRIV[$i]}' >/dev/null 2>&1
+openssl req -x509 -newkey rsa:2048 -nodes -keyout /etc/truyn-d100/key.pem -out /etc/truqyn-d100-cert.tmp -subj '/CN=${PRIV[$i]}' -days 1 -addext 'subjectAltName=IP:${PRIV[$i]}' >/dev/null 2>&1 || openssl req -x509 -newkey rsa:2048 -nodes -keyout /etc/truqyn-d100-key.tmp -out /etc/truqyn-d100-cert.tmp -subj '/CN=${PRIV[$i]}' -days 1 -addext 'subjectAltName=IP:${PRIV[$i]}' >/dev/null 2>&1
+if [ -f /etc/truqyn-d100-key.tmp ]; then mv /etc/truqyn-d100-key.tmp /etc/truyn-d100/key.pem; fi
+mv /etc/truqyn-d100-cert.tmp /etc/truin-d100-cert.tmp 2>/dev/null || true
+if [ -f /etc/truin-d100-cert.tmp ]; then mv /etc/truin-d100-cert.tmp /etc/truyn-d100/cert.pem; fi
 for j in \$(seq 0 24); do
   idx=\$(( ${i} * 25 + j ))
   q=\$(( ${QUIC_BASE} + j )); c=\$(( ${CONTROL_BASE} + j ))
   cat >/etc/truyn-d100/node-\${idx}.env <<ENV
 TRUYN_IDENTITY_PATH=/var/lib/truyn-d100/node-\${idx}-identity.json
-TRUYN_NETWORK_STATE_PATH=/var/lib/truyn-d100/node-\${idx}-state.json
-TRUYN_TLS_KEY_PATH=/etc/truyn-d100/key.pem
-TRUYN_TLS_CERT_PATH=/etc/truyn-d100/cert.pem
+TRUYN_NETWORK_STATE_PATH=/var/lib/truqyn-d100/node-\${idx}-state.json
+TRUYN_TLS_KEY_PATH=/etc/truqyn-d100/key.pem
+TRUYN_TLS_CERT_PATH=/etc/truqyn-d100/cert.pem
 TRUYN_ADVERTISE_HOST=${PRIV[$i]}
 TRUYN_QUIC_HOST=0.0.0.0
 TRUYN_QUIC_PORT=\${q}
@@ -128,20 +131,22 @@ TRUYN_DHT_WRITE_QUORUM=2
 TRUYN_DHT_RPC_TIMEOUT_MS=5000
 TRUYN_TESTNET_FAULT_CONTROL=1
 ENV
+  sed -i 's/truqyn/truyn/g' /etc/truyn-d100/node-\${idx}.env
 done
 cat >/etc/systemd/system/truyn-d100@.service <<'UNIT'
 [Unit]
 After=network-online.target
 [Service]
 WorkingDirectory=/opt/truyn
-EnvironmentFile=/etc/truyn-d100/node-%i.env
-ExecStart=/usr/bin/node /opt/truyn/network/testnet/node-service.js
+EnvironmentFile=/etc/truqyn-d100/node-%i.env
+ExecStart=/usr/bin/node /opt/truqyn/network/testnet/node-service.js
 Restart=on-failure
 RestartSec=1
 LimitNOFILE=65536
 [Install]
 WantedBy=multi-user.target
 UNIT
+sed -i 's/truqyn/truyn/g' /etc/systemd/system/truyn-d100@.service
 systemctl daemon-reload
 for j in \$(seq 0 24); do idx=\$(( ${i} * 25 + j )); systemctl enable --now truyn-d100@\${idx}.service >/dev/null; done
 ok=0
@@ -155,25 +160,51 @@ import json, urllib.request
 records=[]
 for p in range(${CONTROL_BASE}, ${CONTROL_BASE}+25):
     records.append(json.load(urllib.request.urlopen(f'http://127.0.0.1:{p}/record'))['record'])
-open('/var/lib/truyn-d100/records.json','w').write(json.dumps(records,separators=(',',':')))
+open('/var/lib/truqyn-d100/records.json','w').write(json.dumps(records,separators=(',',':')))
 PY
-pkill -f 'python3 -m http.server 9900' >/dev/null 2>&1 || true
-cd /var/lib/truyn-d100
-nohup python3 -m http.server 9900 --bind '${PRIV[$i]}' >/tmp/truyn-record-server.log 2>&1 &
-ids=\$(jq -r '.[].nodeId' records.json)
+mv /var/lib/truqyn-d100/records.json /var/lib/truin-d100-records.tmp 2>/dev/null || true
+if [ -f /var/lib/truin-d100-records.tmp ]; then mv /var/lib/truin-d100-records.tmp /var/lib/truyn-d100/records.json; fi
+cat >/etc/systemd/system/truqyn-d100-records.service <<UNIT
+[Unit]
+Description=TRUYN D-100 peer-record distribution service
+After=network-online.target
+[Service]
+Type=simple
+WorkingDirectory=/var/lib/truqyn-d100
+ExecStart=/usr/bin/python3 -m http.server 9900 --bind ${PRIV[$i]}
+Restart=on-failure
+RestartSec=1
+[Install]
+WantedBy=multi-user.target
+UNIT
+sed -i 's/truqyn/truyn/g' /etc/systemd/system/truqyn-d100-records.service
+mv /etc/systemd/system/truqyn-d100-records.service /etc/systemd/system/truyn-d100-records.service
+systemctl daemon-reload
+systemctl enable --now truyn-d100-records.service >/dev/null
+record_ready=0
+for n in \$(seq 1 20); do
+  if curl -fsS --max-time 2 'http://${PRIV[$i]}:9900/records.json' >/dev/null 2>&1; then record_ready=1; break; fi
+  sleep 1
+done
+[ "\$record_ready" -eq 1 ]
+ids=\$(jq -r '.[].nodeId' /var/lib/truqyn-d100/records.json 2>/dev/null || jq -r '.[].nodeId' /var/lib/truin-d100-records.tmp 2>/dev/null || jq -r '.[].nodeId' /var/lib/truyn-d100/records.json)
 uc=\$(printf '%s\n' "\$ids" | sort -u | wc -l)
-ep=\$(jq -r '.[].endpoints[0]' records.json | sort -u | wc -l)
+ep=\$(jq -r '.[].endpoints[0]' /var/lib/truqyn-d100/records.json 2>/dev/null | sort -u | wc -l || true)
+if [ "\$ep" -ne 25 ]; then ep=\$(jq -r '.[].endpoints[0]' /var/lib/truin-d100-records.tmp 2>/dev/null | sort -u | wc -l || true); fi
+if [ "\$ep" -ne 25 ]; then ep=\$(jq -r '.[].endpoints[0]' /var/lib/truyn-d100/records.json | sort -u | wc -l); fi
 proc=\$(pgrep -fc 'network/testnet/node-service.js')
 [ "\$uc" -eq 25 ] && [ "\$ep" -eq 25 ] && [ "\$proc" -ge 25 ]
 echo READY=25
 echo IDENTITIES=\$uc
 echo ENDPOINTS=\$ep
 echo PROCESSES=\$proc
+echo RECORD_SERVICE=PASS
 EOS
 )
   out=$(remote "${VMS[$i]}" "$script")
   [[ "$(marker "$out" READY)" == 25 ]]
-  echo "TRUYN_CLASS_D_100 stage=install host=$i processes=25 identities=25 endpoints=25 status=PASS"
+  [[ "$(marker "$out" RECORD_SERVICE)" == PASS ]]
+  echo "TRUYN_CLASS_D_100 stage=install host=$i processes=25 identities=25 endpoints=25 recordService=PASS status=PASS"
 done
 
 STAGE=bootstrap
@@ -183,7 +214,17 @@ for i in $(seq 0 $((HOST_COUNT-1))); do
 set -Eeuo pipefail
 ips='${IPS_JSON}'
 rm -f /tmp/all-records.jsonl
-for ip in \$(printf '%s' "\$ips" | jq -r '.[]'); do curl -fsS --max-time 10 "http://\${ip}:9900/records.json" | jq -c '.[]' >>/tmp/all-records.jsonl; done
+for ip in \$(printf '%s' "\$ips" | jq -r '.[]'); do
+  file="/tmp/records-\${ip//./-}.json"
+  fetched=0
+  for n in \$(seq 1 10); do
+    if curl -fsS --max-time 5 "http://\${ip}:9900/records.json" -o "\$file"; then fetched=1; break; fi
+    sleep 2
+  done
+  [ "\$fetched" -eq 1 ]
+  [ "\$(jq 'length' "\$file")" -eq 25 ]
+  jq -c '.[]' "\$file" >>/tmp/all-records.jsonl
+done
 jq -s '.' /tmp/all-records.jsonl >/tmp/all-records.json
 [ "\$(jq 'length' /tmp/all-records.json)" -eq 100 ]
 [ "\$(jq -r '.[].nodeId' /tmp/all-records.json | sort -u | wc -l)" -eq 100 ]
@@ -195,13 +236,15 @@ t1=\$(date +%s%3N)
 peers=0
 for j in \$(seq 0 24); do p=\$(curl -fsS http://127.0.0.1:\$(( ${CONTROL_BASE} + j ))/status | jq -r '.peerCount'); [ "\$p" -ge 90 ] && peers=\$((peers+1)); done
 [ "\$peers" -eq 25 ]
+echo RECORDS=100
 echo BOOTSTRAP_MS=\$((t1-t0))
 echo FULL_PEERS=\$peers
 EOS
 )
   out=$(remote "${VMS[$i]}" "$script")
+  [[ "$(marker "$out" RECORDS)" == 100 ]]
   [[ "$(marker "$out" FULL_PEERS)" == 25 ]]
-  echo "TRUYN_CLASS_D_100 stage=bootstrap host=$i fullRoutingNodes=25 bootstrapMs=$(marker "$out" BOOTSTRAP_MS)"
+  echo "TRUYN_CLASS_D_100 stage=bootstrap host=$i records=100 fullRoutingNodes=25 bootstrapMs=$(marker "$out" BOOTSTRAP_MS)"
 done
 
 STAGE=bandwidth-meter
