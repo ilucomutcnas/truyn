@@ -76,15 +76,54 @@ fi'''
 if apt_old not in s:
     raise SystemExit('expected Class D guest apt bootstrap block not found')
 s = s.replace(apt_old, apt_new, 1)
+
+# RunCommand is special: the generic Azure CLI retry wrapper must never replay
+# a guest script after an ordinary non-zero. We bypass that wrapper with
+# `command az` and only wait/retry when Azure explicitly says the managed
+# RunCommand extension is already busy, which means this invocation was not
+# admitted for guest execution.
 old = r'''remote() {
   local vm="$1" script="$2"
   retry az vm run-command invoke -g "$RG" -n "$vm" --command-id RunShellScript --scripts "$script" --query 'value[0].message' -o tsv --only-show-errors
 }'''
 new = r'''remote() {
   local vm="$1" script="$2" enc remote_script
+  local attempt=1 rc=0 out_file err_file
   enc="$(printf '%s' "$script" | base64 -w0)"
   remote_script="printf '%s' '$enc' | base64 -d >/tmp/truyn-d100-run.sh; chmod 700 /tmp/truyn-d100-run.sh; /bin/bash /tmp/truyn-d100-run.sh"
-  retry az vm run-command invoke -g "$RG" -n "$vm" --command-id RunShellScript --scripts "$remote_script" --query 'value[0].message' -o tsv --only-show-errors
+  out_file="$(mktemp)"
+  err_file="$(mktemp)"
+
+  while true; do
+    if command az vm run-command invoke -g "$RG" -n "$vm" --command-id RunShellScript --scripts "$remote_script" --query 'value[0].message' -o tsv --only-show-errors >"$out_file" 2>"$err_file"; then
+      cat "$out_file"
+      rm -f "$out_file" "$err_file"
+      return 0
+    else
+      rc=$?
+    fi
+
+    if grep -Fqi 'managed VM RunCommand extension execution is in progress' "$err_file" || \
+       grep -Fqi 'Please wait for completion before invoking a run command' "$err_file"; then
+      if (( attempt >= 12 )); then
+        cat "$out_file" >&2
+        cat "$err_file" >&2
+        rm -f "$out_file" "$err_file"
+        return "$rc"
+      fi
+      echo "TRUYN_AZ_RUN_COMMAND_BUSY_WAIT vm=${vm} attempt=${attempt} max=12" >&2
+      sleep 10
+      attempt=$((attempt + 1))
+      continue
+    fi
+
+    # Ordinary guest/command non-zero is terminal for this invocation.
+    # Fail closed immediately and never replay the guest script.
+    cat "$out_file" >&2
+    cat "$err_file" >&2
+    rm -f "$out_file" "$err_file"
+    return "$rc"
+  done
 }'''
 if old not in s:
     raise SystemExit('expected Class D remote helper not found')
@@ -134,10 +173,12 @@ s = s.replace(bootstrap_old, bootstrap_new, 1)
 s = s.replace('[[ "$(marker "$out" FULL_PEERS)" == 25 ]]', '[[ "$(marker "$out" BOOTSTRAPPED_NODES)" == 25 ]]', 1)
 s = s.replace('records=100 fullRoutingNodes=25 bootstrapMs=$(marker "$out" BOOTSTRAP_MS)', 'records=100 bootstrappedNodes=25 routingMin=$(marker "$out" ROUTING_MIN) routingMax=$(marker "$out" ROUTING_MAX) bootstrapMs=$(marker "$out" BOOTSTRAP_MS)', 1)
 
-bad_tokens = ('truqyn', 'truinyn', 'truin-d100', '/tmp/truin-d100-run.sh')
+bad_tokens = ('truqyn', 'truinyn', 'truin-d100', 'truqn', '/tmp/truin-d100-run.sh', 'retry az vm run-command invoke')
 remaining = [token for token in bad_tokens if token in s]
 if remaining:
-    raise SystemExit('invalid Class D guest path survived preparation: ' + ','.join(remaining))
+    raise SystemExit('invalid Class D prepared harness token survived: ' + ','.join(remaining))
+if 'TRUYN_AZ_RUN_COMMAND_BUSY_WAIT' not in s or 'command az vm run-command invoke' not in s:
+    raise SystemExit('conflict-aware Class D RunCommand helper missing after preparation')
 
 p.write_text(s)
 PY
@@ -150,8 +191,10 @@ if [[ "${TRUYN_CLASS_D100_PREPARE_ONLY:-0}" == 1 ]]; then
   grep -q '/var/lib/truyn-d100/records.json' "$TMP/provision.sh"
   grep -q 'EnvironmentFile=/etc/truyn-d100/node-%i.env' "$TMP/provision.sh"
   grep -q 'ExecStart=/usr/bin/node /opt/truyn/network/testnet/node-service.js' "$TMP/provision.sh"
-  if grep -Eq 'peerCount.*-ge 90|-ge 90.*peerCount|truqyn|truinyn|truin-d100' "$TMP/provision.sh"; then
-    echo 'invalid D-100 bootstrap or guest path survived preparation' >&2
+  grep -q 'TRUYN_AZ_RUN_COMMAND_BUSY_WAIT' "$TMP/provision.sh"
+  grep -q 'command az vm run-command invoke' "$TMP/provision.sh"
+  if grep -Eq 'peerCount.*-ge 90|-ge 90.*peerCount|truqyn|truinyn|truin-d100|truqn|retry az vm run-command invoke' "$TMP/provision.sh"; then
+    echo 'invalid D-100 bootstrap, guest path, or RunCommand retry survived preparation' >&2
     exit 1
   fi
   echo 'TRUYN_CLASS_D100_PREPARED_HARNESS=PASS'

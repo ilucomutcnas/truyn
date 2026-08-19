@@ -44,7 +44,7 @@ test('final launchers patch known native/runtime hazards before cloud execution'
   assert.match(d100, /s = s\.replace\('truin-d100', 'truyn-d100'\)/);
   assert.match(d100, /\/bin\/bash \/tmp\/truyn-d100-run\.sh/);
   assert.doesNotMatch(d100, /\/bin\/bash \/tmp\/truin-d100-run\.sh/);
-  assert.match(d100, /invalid Class D guest path survived preparation/);
+  assert.match(d100, /invalid Class D prepared harness token survived/);
   assert.match(d100, /\/var\/lib\/truyn-d100\/records\.json/);
   assert.match(d100, /EnvironmentFile=\/etc\/truyn-d100\/node-%i\.env/);
   assert.match(d100, /ExecStart=\/usr\/bin\/node \/opt\/truyn\/network\/testnet\/node-service\.js/);
