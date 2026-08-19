@@ -40,8 +40,25 @@ test('final launchers patch known native/runtime hazards before cloud execution'
   // and fixes it before execution; lock both halves of that transformation.
   assert.match(d100, /\/bin\/bash \/tmp\/truin-d100-run\.sh/);
   assert.match(d100, /truin-d100-run\/truyn-d100-run/);
+  // Kademlia k=20 does not promise a full membership list in routing.size().
+  // The accepted gate must instead prove all 100 signed records were accepted
+  // by all 25 node processes per host, then prove reachability with the
+  // unchanged canonical baseline/healed routing-success thresholds.
+  assert.match(d100, /expected invalid Class D full-routing bootstrap gate not found/);
+  assert.match(d100, /BOOTSTRAPPED_NODES/);
+  assert.match(d100, /accepted.*-eq 100/s);
+  assert.match(d100, /TRUYN_CLASS_D100_PREPARE_ONLY/);
 
   const d1000 = await readFile('scripts/class-d-1000-final-acceptance.sh', 'utf8');
   assert.match(d1000, /14400000/);
   assert.match(d1000, /truin-d1000@.*truyn-d1000@/s);
+});
+
+test('D-100 prepared harness removes invalid full-routing gate without cloud access', () => {
+  const run = spawnSync('bash', ['scripts/class-d-100-final-acceptance.sh'], {
+    encoding: 'utf8',
+    env: { ...process.env, TRUYN_CLASS_D100_PREPARE_ONLY: '1' }
+  });
+  assert.equal(run.status, 0, run.stderr || run.stdout);
+  assert.match(run.stdout, /TRUYN_CLASS_D100_PREPARED_HARNESS=PASS/);
 });
