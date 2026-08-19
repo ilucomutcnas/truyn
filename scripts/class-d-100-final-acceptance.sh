@@ -125,6 +125,20 @@ s = s.replace('records=100 fullRoutingNodes=25 bootstrapMs=$(marker "$out" BOOTS
 p.write_text(s)
 PY
 
+if [[ "${TRUYN_CLASS_D100_PREPARE_ONLY:-0}" == 1 ]]; then
+  bash -n "$TMP/provision.sh"
+  bash -n "$TMP/campaign.sh"
+  grep -q 'BOOTSTRAPPED_NODES' "$TMP/provision.sh"
+  grep -q 'accepted.*-eq 100' "$TMP/provision.sh"
+  if grep -Eq 'peerCount.*-ge 90|-ge 90.*peerCount' "$TMP/provision.sh"; then
+    echo 'invalid full-routing bootstrap gate survived preparation' >&2
+    exit 1
+  fi
+  echo 'TRUYN_CLASS_D100_PREPARED_HARNESS=PASS'
+  rm -rf "$TMP"
+  exit 0
+fi
+
 source "$TMP/provision.sh"
 source "$TMP/campaign.sh"
 rm -rf "$TMP"
