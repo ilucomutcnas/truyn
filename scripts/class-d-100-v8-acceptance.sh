@@ -50,6 +50,15 @@ proc=\$(pgrep -fc 'network/testnet/node-service.js')
 [ "\$uc" -eq 25 ] && [ "\$ep" -eq 25 ] && [ "\$proc" -ge 25 ]'''
 s = s[:start] + install_new + s[end:]
 
+# V8 exposed the exact guest-side blocker: GNU mv rejects a source and
+# destination that are the same file. Under set -e that harmless no-op became
+# a hard install failure after the 25 real node services were already healthy.
+# Remove exactly that one command; no acceptance threshold is changed.
+self_move = 'mv /etc/systemd/system/truyn-d100-records.service /etc/systemd/system/truwyn-d100-records.service'
+if s.count(self_move) != 1:
+    raise SystemExit(f'expected exactly one D-100 record-service self-move, got {s.count(self_move)}')
+s = s.replace(self_move, ': # record-service unit already at canonical path', 1)
+
 # Capture every RunCommand message component. The command remains fail-closed;
 # this only makes a guest-side failure observable in immutable run evidence.
 s = s.replace("--query 'value[0].message' -o tsv --only-show-errors", "--query 'value[].message' -o tsv --only-show-errors", 1)
@@ -87,6 +96,8 @@ s = s.replace(marker_block, marker_diag, 1)
 
 if install_start in s:
     raise SystemExit('legacy D-100 install jq validation survived V8 preparation')
+if self_move in s:
+    raise SystemExit('fatal D-100 record-service self-move survived V8 preparation')
 if "TRUYN_D100_INSTALL_DIAG readiness=FAIL" not in s:
     raise SystemExit('V8 guest install diagnostics missing after preparation')
 if "printf '%s\\n' \"$out\" >&2" not in s:
