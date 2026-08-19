@@ -34,6 +34,14 @@ from pathlib import Path
 import sys
 p = Path(sys.argv[1])
 s = p.read_text()
+
+# Normalize the canonical D-100 guest filesystem/service names before any
+# cloud execution. These historical typo-paths previously made the first
+# RunCommand install fail under set -e before its fallback code was reachable.
+s = s.replace('truqyn', 'truyn')
+s = s.replace('truinyn', 'truyn')
+s = s.replace('truin-d100', 'truyn-d100')
+
 s = s.replace('npm install --ignore-scripts --no-audit --no-fund', 'npm install --no-audit --no-fund')
 # Ubuntu command-not-found APT post-hook is irrelevant to ephemeral benchmark
 # guests. Mirror/index resolution can also be transient; retry the mandatory
@@ -71,8 +79,7 @@ old = r'''remote() {
 new = r'''remote() {
   local vm="$1" script="$2" enc remote_script
   enc="$(printf '%s' "$script" | base64 -w0)"
-  remote_script="printf '%s' '$enc' | base64 -d >/tmp/truyn-d100-run.sh; chmod 700 /tmp/truin-d100-run.sh; /bin/bash /tmp/truin-d100-run.sh"
-  remote_script="${remote_script//truin-d100-run/truyn-d100-run}"
+  remote_script="printf '%s' '$enc' | base64 -d >/tmp/truyn-d100-run.sh; chmod 700 /tmp/truyn-d100-run.sh; /bin/bash /tmp/truyn-d100-run.sh"
   retry az vm run-command invoke -g "$RG" -n "$vm" --command-id RunShellScript --scripts "$remote_script" --query 'value[0].message' -o tsv --only-show-errors
 }'''
 if old not in s:
@@ -122,6 +129,12 @@ if bootstrap_old not in s:
 s = s.replace(bootstrap_old, bootstrap_new, 1)
 s = s.replace('[[ "$(marker "$out" FULL_PEERS)" == 25 ]]', '[[ "$(marker "$out" BOOTSTRAPPED_NODES)" == 25 ]]', 1)
 s = s.replace('records=100 fullRoutingNodes=25 bootstrapMs=$(marker "$out" BOOTSTRAP_MS)', 'records=100 bootstrappedNodes=25 routingMin=$(marker "$out" ROUTING_MIN) routingMax=$(marker "$out" ROUTING_MAX) bootstrapMs=$(marker "$out" BOOTSTRAP_MS)', 1)
+
+bad_tokens = ('truqyn', 'truinyn', 'truin-d100', '/tmp/truin-d100-run.sh')
+remaining = [token for token in bad_tokens if token in s]
+if remaining:
+    raise SystemExit('invalid Class D guest path survived preparation: ' + ','.join(remaining))
+
 p.write_text(s)
 PY
 
@@ -130,8 +143,11 @@ if [[ "${TRUYN_CLASS_D100_PREPARE_ONLY:-0}" == 1 ]]; then
   bash -n "$TMP/campaign.sh"
   grep -q 'BOOTSTRAPPED_NODES' "$TMP/provision.sh"
   grep -q 'accepted.*-eq 100' "$TMP/provision.sh"
-  if grep -Eq 'peerCount.*-ge 90|-ge 90.*peerCount' "$TMP/provision.sh"; then
-    echo 'invalid full-routing bootstrap gate survived preparation' >&2
+  grep -q '/var/lib/truyn-d100/records.json' "$TMP/provision.sh"
+  grep -q 'EnvironmentFile=/etc/truyn-d100/node-%i.env' "$TMP/provision.sh"
+  grep -q 'ExecStart=/usr/bin/node /opt/truyn/network/testnet/node-service.js' "$TMP/provision.sh"
+  if grep -Eq 'peerCount.*-ge 90|-ge 90.*peerCount|truqyn|truinyn|truin-d100' "$TMP/provision.sh"; then
+    echo 'invalid D-100 bootstrap or guest path survived preparation' >&2
     exit 1
   fi
   echo 'TRUYN_CLASS_D100_PREPARED_HARNESS=PASS'
