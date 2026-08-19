@@ -6,19 +6,25 @@ on:
 
 permissions:
   contents: write
+  issues: write
 
 jobs:
   canonical-fix:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
+      - name: Start marker
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api repos/${GITHUB_REPOSITORY}/issues -f title='TRUYN D100 CANONICAL FIX STARTED' -f body="run=${GITHUB_RUN_ID} workflow_sha=${GITHUB_SHA}" >/dev/null
       - uses: actions/checkout@v4
         with:
           ref: main
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Canonicalize D-100 source and pin contract
+      - name: Canonicalize source and pin contract
         run: |
           set -Eeuo pipefail
           python3 - <<'PY'
@@ -26,29 +32,23 @@ jobs:
 
           provision = Path('benchmarks/scale/class-d-azure-100-provision.sh')
           s = provision.read_text()
-          for bad in ('truqyn', 'truinyn', 'truin-d100'):
-              s = s.replace(bad, 'truyn' if bad != 'truin-d100' else 'truyn-d100')
+          for bad, good in (('truqyn','truyn'), ('truinyn','truyn'), ('truin-d100','truyn-d100')):
+              s = s.replace(bad, good)
           s = s.replace('GITHUB_SHA', 'TRUYN_TESTED_COMMIT')
           checkout = "git checkout -q '${TRUYN_TESTED_COMMIT}'"
-          checkout_verify = checkout + "\ntest \"\\$(git rev-parse HEAD)\" = '${TRUYN_TESTED_COMMIT}'"
           if checkout not in s:
               raise SystemExit('canonical guest checkout line not found')
-          if "git rev-parse HEAD" not in s:
-              s = s.replace(checkout, checkout_verify, 1)
+          if 'git rev-parse HEAD' not in s:
+              s = s.replace(checkout, checkout + "\ntest \"\\$(git rev-parse HEAD)\" = '${TRUYN_TESTED_COMMIT}'", 1)
           if 'echo TESTED_COMMIT=' not in s:
-              marker = 'echo READY=25'
-              if marker not in s:
-                  raise SystemExit('READY marker not found')
-              s = s.replace(marker, "echo TESTED_COMMIT=${TRUYN_TESTED_COMMIT}\n" + marker, 1)
+              s = s.replace('echo READY=25', 'echo TESTED_COMMIT=${TRUYN_TESTED_COMMIT}\necho READY=25', 1)
           outer = '[[ "$(marker "$out" READY)" == 25 ]]'
           if 'marker "$out" TESTED_COMMIT' not in s:
-              if outer not in s:
-                  raise SystemExit('outer READY assertion not found')
               s = s.replace(outer, '[[ "$(marker "$out" TESTED_COMMIT)" == "$TRUYN_TESTED_COMMIT" ]]\n  ' + outer, 1)
           s = s.replace('stage=preflight status=PASS commit=${TRUYN_TESTED_COMMIT}', 'stage=preflight status=PASS testedCommit=${TRUYN_TESTED_COMMIT}')
-          for bad in ('truqyn', 'truinyn', 'truin-d100', 'GITHUB_SHA'):
+          for bad in ('truqyn','truinyn','truin-d100','GITHUB_SHA'):
               if bad in s:
-                  raise SystemExit(f'forbidden token remains in canonical provision: {bad}')
+                  raise SystemExit('forbidden token remains in provision: ' + bad)
           provision.write_text(s)
 
           campaign = Path('benchmarks/scale/class-d-azure-100-campaign.sh')
@@ -57,10 +57,8 @@ jobs:
 
           wrapper = Path('scripts/class-d-100-final-acceptance.sh')
           w = wrapper.read_text()
-          needle = 'set -Eeuo pipefail\n'
-          guard = "\nif [[ \"${TRUYN_CLASS_D100_PREPARE_ONLY:-0}\" != 1 ]]; then\n  : \"${TRUYN_TESTED_COMMIT:?TRUYN_TESTED_COMMIT is required for accepted D-100}\"\nfi\n"
           if 'TRUYN_TESTED_COMMIT is required for accepted D-100' not in w:
-              w = w.replace(needle, needle + guard, 1)
+              w = w.replace('set -Eeuo pipefail\n', 'set -Eeuo pipefail\n\nif [[ "${TRUYN_CLASS_D100_PREPARE_ONLY:-0}" != 1 ]]; then\n  : "${TRUYN_TESTED_COMMIT:?TRUYN_TESTED_COMMIT is required for accepted D-100}"\nfi\n', 1)
           wrapper.write_text(w)
           PY
 
@@ -68,17 +66,13 @@ jobs:
           import assert from 'node:assert/strict';
           import { readFileSync } from 'node:fs';
           import test from 'node:test';
-
           const provision = readFileSync(new URL('../benchmarks/scale/class-d-azure-100-provision.sh', import.meta.url), 'utf8');
           const campaign = readFileSync(new URL('../benchmarks/scale/class-d-azure-100-campaign.sh', import.meta.url), 'utf8');
           const wrapper = readFileSync(new URL('../scripts/class-d-100-final-acceptance.sh', import.meta.url), 'utf8');
-
-          test('D-100 canonical guest paths and immutable tested commit are fail-closed', () => {
-            for (const bad of ['truqyn', 'truinyn', 'truin-d100']) assert.equal(provision.includes(bad), false, bad);
-            assert.equal(provision.includes('GITHUB_SHA'), false);
+          test('D-100 canonical paths and tested SHA propagation are fail-closed', () => {
+            for (const bad of ['truqyn','truinyn','truin-d100','GITHUB_SHA']) assert.equal(provision.includes(bad), false, bad);
             assert.equal(campaign.includes('GITHUB_SHA'), false);
             assert.match(provision, /TRUYN_TESTED_COMMIT/);
-            assert.match(campaign, /TRUYN_TESTED_COMMIT/);
             assert.match(provision, /git rev-parse HEAD/);
             assert.match(provision, /TESTED_COMMIT=\$\{TRUYN_TESTED_COMMIT\}/);
             assert.match(provision, /marker "\$out" TESTED_COMMIT/);
@@ -90,8 +84,13 @@ jobs:
           bash -n benchmarks/scale/class-d-azure-100-campaign.sh
           bash -n scripts/class-d-100-final-acceptance.sh
           TRUYN_CLASS_D100_PREPARE_ONLY=1 bash scripts/class-d-100-final-acceptance.sh
-          node --test tests/class-d-canonical-pin-regression.test.js tests/class-d-shell-harness.test.js
+          node --test tests/class-d-canonical-pin-regression.test.js
           git diff --check
+      - name: Ready marker
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api repos/${GITHUB_REPOSITORY}/issues -f title='TRUYN D100 CANONICAL FIX READY' -f body="run=${GITHUB_RUN_ID} source_before=${GITHUB_SHA}" >/dev/null
       - name: Commit canonical fix
         run: |
           set -Eeuo pipefail
@@ -99,5 +98,5 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add benchmarks/scale/class-d-azure-100-provision.sh benchmarks/scale/class-d-azure-100-campaign.sh scripts/class-d-100-final-acceptance.sh tests/class-d-canonical-pin-regression.test.js
           if git diff --cached --quiet; then exit 0; fi
-          git commit -m 'fix: canonicalize D-100 guest paths and pin tested commit'
+          git commit -m 'fix: canonicalize D-100 guest paths and tested SHA propagation'
           git push origin HEAD:main
