@@ -70,6 +70,66 @@ if 'command -v npm >/dev/null 2>&1' not in s or '[ "\\$major" -ge 22 ]' not in s
     raise SystemExit('V11 verified Node/npm readiness gate missing')
 if 'TRUYN_D100_NODE_BOOTSTRAP_DIAG' not in s:
     raise SystemExit('V11 Node bootstrap diagnostics missing')
+
+# V11 cleanup hardening: V10 cleanup left one prefixed resource after an early
+# install failure. Preserve the explicit first delete pass, then repeatedly
+# inventory and delete the remaining run-prefixed resources. Acceptance still
+# requires cleanup.confirmed=true and remainingResources=0.
+cleanup_start = s.find('\ncleanup() {')
+cleanup_end = s.find('\n}\ntrap cleanup EXIT', cleanup_start)
+if cleanup_start < 0 or cleanup_end < 0 or s.count('\ncleanup() {') != 1:
+    raise SystemExit('V11 canonical cleanup function boundary missing')
+cleanup_new = r'''
+cleanup() {
+  set +e
+  STAGE=cleanup
+  CLEANUP_CONFIRMED=false
+  for vm in "${VMS[@]}"; do az vm delete -g "$RG" -n "$vm" --yes --force-deletion --only-show-errors >/dev/null 2>&1 || true; done
+  for nic in "${NICS[@]}"; do az network nic delete -g "$RG" -n "$nic" --only-show-errors >/dev/null 2>&1 || true; done
+  for pip in "${PIPS[@]}"; do az network public-ip delete -g "$RG" -n "$pip" --only-show-errors >/dev/null 2>&1 || true; done
+  for disk in "${DISKS[@]}"; do az disk delete -g "$RG" -n "$disk" --yes --only-show-errors >/dev/null 2>&1 || true; done
+  az network vnet delete -g "$RG" -n "$VNET" --only-show-errors >/dev/null 2>&1 || true
+  az network nsg delete -g "$RG" -n "$NSG" --only-show-errors >/dev/null 2>&1 || true
+
+  left=999
+  for cleanup_pass in 1 2 3 4 5 6 7 8; do
+    ids_out=$(az resource list -g "$RG" --query "[?starts_with(name, '${PREFIX}')].id" -o tsv --only-show-errors 2>/dev/null)
+    inventory_rc=$?
+    if [[ "$inventory_rc" -ne 0 ]]; then
+      echo "TRUYN_CLASS_D_100_CLEANUP_INVENTORY_RETRY pass=${cleanup_pass} max=8" >&2
+      sleep 10
+      continue
+    fi
+    mapfile -t ids <<<"$ids_out"
+    filtered=()
+    for id in "${ids[@]}"; do [[ -n "$id" ]] && filtered+=("$id"); done
+    left=${#filtered[@]}
+    if [[ "$left" == 0 ]]; then
+      CLEANUP_CONFIRMED=true
+      break
+    fi
+    echo "TRUYN_CLASS_D_100_CLEANUP_RETRY pass=${cleanup_pass} max=8 remaining=${left}" >&2
+    for id in "${filtered[@]}"; do az resource delete --ids "$id" --only-show-errors >/dev/null 2>&1 || true; done
+    sleep 10
+  done
+
+  if [[ "$CLEANUP_CONFIRMED" != true ]]; then
+    ids_out=$(az resource list -g "$RG" --query "[?starts_with(name, '${PREFIX}')].id" -o tsv --only-show-errors 2>/dev/null)
+    inventory_rc=$?
+    if [[ "$inventory_rc" -eq 0 ]]; then
+      left=$(printf '%s\n' "$ids_out" | sed '/^[[:space:]]*$/d' | wc -l | tr -d ' ')
+      [[ "$left" == 0 ]] && CLEANUP_CONFIRMED=true
+    else
+      left=999
+    fi
+  fi
+
+  if [[ -f "$EVIDENCE" ]]; then tmp="${EVIDENCE}.tmp"; jq --argjson confirmed "$CLEANUP_CONFIRMED" --argjson remaining "$left" ".cleanup.confirmed=\$confirmed | .cleanup.remainingResources=\$remaining" "$EVIDENCE" >"$tmp" && mv "$tmp" "$EVIDENCE"; fi
+  echo "TRUYN_CLASS_D_100_CLEANUP confirmed=${CLEANUP_CONFIRMED} remaining=${left}"
+}'''
+s = s[:cleanup_start] + cleanup_new + s[cleanup_end + 2:]
+if 'TRUYN_CLASS_D_100_CLEANUP_RETRY' not in s or 'az resource delete --ids' not in s:
+    raise SystemExit('V11 bounded cleanup recovery missing')
 """
 
 src = src[:pos] + '\n' + addition + src[pos:]
