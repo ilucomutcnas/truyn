@@ -90,7 +90,7 @@ new = r'''remote() {
   local vm="$1" script="$2" enc remote_script
   local attempt=1 rc=0 out_file err_file
   enc="$(printf '%s' "$script" | base64 -w0)"
-  remote_script="printf '%s' '$enc' | base64 -d >/tmp/truyn-d100-run.sh; chmod 700 /tmp/truqn-d100-run.sh 2>/dev/null || chmod 700 /tmp/truyn-d100-run.sh; /bin/bash /tmp/truyn-d100-run.sh"
+  remote_script="printf '%s' '$enc' | base64 -d >/tmp/truyn-d100-run.sh; chmod 700 /tmp/truyn-d100-run.sh; /bin/bash /tmp/truyn-d100-run.sh"
   out_file="$(mktemp)"
   err_file="$(mktemp)"
 
@@ -173,7 +173,7 @@ s = s.replace(bootstrap_old, bootstrap_new, 1)
 s = s.replace('[[ "$(marker "$out" FULL_PEERS)" == 25 ]]', '[[ "$(marker "$out" BOOTSTRAPPED_NODES)" == 25 ]]', 1)
 s = s.replace('records=100 fullRoutingNodes=25 bootstrapMs=$(marker "$out" BOOTSTRAP_MS)', 'records=100 bootstrappedNodes=25 routingMin=$(marker "$out" ROUTING_MIN) routingMax=$(marker "$out" ROUTING_MAX) bootstrapMs=$(marker "$out" BOOTSTRAP_MS)', 1)
 
-bad_tokens = ('truqyn', 'truinyn', 'truin-d100', '/tmp/truin-d100-run.sh', 'retry az vm run-command invoke')
+bad_tokens = ('truqyn', 'truinyn', 'truin-d100', 'truqn', '/tmp/truin-d100-run.sh', 'retry az vm run-command invoke')
 remaining = [token for token in bad_tokens if token in s]
 if remaining:
     raise SystemExit('invalid Class D prepared harness token survived: ' + ','.join(remaining))
@@ -193,7 +193,7 @@ if [[ "${TRUYN_CLASS_D100_PREPARE_ONLY:-0}" == 1 ]]; then
   grep -q 'ExecStart=/usr/bin/node /opt/truyn/network/testnet/node-service.js' "$TMP/provision.sh"
   grep -q 'TRUYN_AZ_RUN_COMMAND_BUSY_WAIT' "$TMP/provision.sh"
   grep -q 'command az vm run-command invoke' "$TMP/provision.sh"
-  if grep -Eq 'peerCount.*-ge 90|-ge 90.*peerCount|truqyn|truinyn|truin-d100|retry az vm run-command invoke' "$TMP/provision.sh"; then
+  if grep -Eq 'peerCount.*-ge 90|-ge 90.*peerCount|truqyn|truinyn|truin-d100|truqn|retry az vm run-command invoke' "$TMP/provision.sh"; then
     echo 'invalid D-100 bootstrap, guest path, or RunCommand retry survived preparation' >&2
     exit 1
   fi
