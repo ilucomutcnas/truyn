@@ -1,0 +1,146 @@
+name: TEMP D100 RunCommand branch patch
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'd100-runcommand-fix-20260819'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: d100-runcommand-fix-20260819
+          fetch-depth: 0
+      - name: Apply and validate fail-closed RunCommand patch
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git config user.name 'truyn-automation'
+          git config user.email 'actions@users.noreply.github.com'
+          python3 <<'PY'
+          from pathlib import Path
+
+          provision_path = Path('benchmarks/scale/class-d-azure-100-provision.sh')
+          provision = provision_path.read_text()
+          old_remote = '''remote() {
+            local vm="$1" script="$2"
+            retry az vm run-command invoke -g "$RG" -n "$vm" --command-id RunShellScript --scripts "$script" --query 'value[0].message' -o tsv --only-show-errors
+          }'''
+          new_remote = '''remote() {
+            local vm="$1" script="$2" enc remote_script
+            local attempt=1 rc=0 out_file err_file
+            enc="$(printf '%s' "$script" | base64 -w0)"
+            remote_script="printf '%s' '$enc' | base64 -d >/tmp/truyn-d100-run.sh; chmod 700 /tmp/truyn-d100-run.sh; /bin/bash /tmp/truyn-d100-run.sh"
+            out_file="$(mktemp)"
+            err_file="$(mktemp)"
+
+            while true; do
+              if command az vm run-command invoke -g "$RG" -n "$vm" --command-id RunShellScript --scripts "$remote_script" --query 'value[0].message' -o tsv --only-show-errors >"$out_file" 2>"$err_file"; then
+                cat "$out_file"
+                rm -f "$out_file" "$err_file"
+                return 0
+              else
+                rc=$?
+              fi
+
+              if grep -Fqi 'managed VM RunCommand extension execution is in progress' "$err_file" || \
+                 grep -Fqi 'Please wait for completion before invoking a run command' "$err_file"; then
+                if (( attempt >= 12 )); then
+                  cat "$out_file" >&2
+                  cat "$err_file" >&2
+                  rm -f "$out_file" "$err_file"
+                  return "$rc"
+                fi
+                echo "TRUYN_AZ_RUN_COMMAND_BUSY_WAIT vm=${vm} attempt=${attempt} max=12" >&2
+                sleep 10
+                attempt=$((attempt + 1))
+                continue
+              fi
+
+              # Ordinary guest/command failure is never replayed.
+              cat "$out_file" >&2
+              cat "$err_file" >&2
+              rm -f "$out_file" "$err_file"
+              return "$rc"
+            done
+          }'''
+          if old_remote not in provision:
+              raise SystemExit('canonical D-100 remote helper did not match expected source')
+          provision_path.write_text(provision.replace(old_remote, new_remote, 1))
+
+          wrapper_path = Path('scripts/class-d-100-final-acceptance.sh')
+          wrapper = wrapper_path.read_text()
+          start = wrapper.find("old = r'''remote() {")
+          end_marker = '\n\n# D-100 bootstrap must validate the invariant the protocol actually promises.'
+          end = wrapper.find(end_marker, start)
+          if start < 0 or end < 0:
+              raise SystemExit('legacy wrapper RunCommand transform not found')
+          replacement = """# RunCommand transport semantics now live in canonical provision.sh.\n# It bypasses the generic az retry wrapper and only waits/retries when Azure\n# explicitly reports the managed RunCommand extension is still busy.\nif 'retry az vm run-command invoke' in s:\n    raise SystemExit('blind RunCommand retry survived canonical source')\nif 'TRUYN_AZ_RUN_COMMAND_BUSY_WAIT' not in s or 'command az vm run-command invoke' not in s:\n    raise SystemExit('conflict-aware RunCommand helper missing from canonical source')"""
+          wrapper = wrapper[:start] + replacement + wrapper[end:]
+          needle = "  grep -q 'ExecStart=/usr/bin/node /opt/truyn/network/testnet/node-service.js' \"$TMP/provision.sh\"\n"
+          if needle not in wrapper:
+              raise SystemExit('prepare-only insertion point not found')
+          wrapper = wrapper.replace(needle, needle + "  grep -q 'TRUYN_AZ_RUN_COMMAND_BUSY_WAIT' \"$TMP/provision.sh\"\n  grep -q 'command az vm run-command invoke' \"$TMP/provision.sh\"\n", 1)
+          guard = "peerCount.*-ge 90|-ge 90.*peerCount|truqyn|truinyn|truin-d100"
+          if guard not in wrapper:
+              raise SystemExit('prepare-only rejection guard not found')
+          wrapper = wrapper.replace(guard, guard + '|retry az vm run-command invoke', 1)
+          wrapper_path.write_text(wrapper)
+
+          Path('tests/class-d-run-command-regression.test.js').write_text(r'''import assert from 'node:assert/strict';
+          import { readFileSync } from 'node:fs';
+          import test from 'node:test';
+
+          const provision = readFileSync(new URL('../benchmarks/scale/class-d-azure-100-provision.sh', import.meta.url), 'utf8');
+          const wrapper = readFileSync(new URL('../scripts/class-d-100-final-acceptance.sh', import.meta.url), 'utf8');
+
+          test('D-100 RunCommand is conflict-aware and never blind-retries guest non-zero', () => {
+            assert.equal(provision.includes('retry az vm run-command invoke'), false);
+            assert.match(provision, /command az vm run-command invoke/);
+            assert.match(provision, /managed VM RunCommand extension execution is in progress/);
+            assert.match(provision, /Please wait for completion before invoking a run command/);
+            assert.match(provision, /TRUYN_AZ_RUN_COMMAND_BUSY_WAIT/);
+            assert.match(provision, /Ordinary guest\/command failure is never replayed\.[\s\S]*return "\$rc"/);
+            assert.match(wrapper, /blind RunCommand retry survived canonical source/);
+            assert.match(wrapper, /conflict-aware RunCommand helper missing from canonical source/);
+          });
+
+          test('D-100 prepared harness pins conflict-aware RunCommand transport', () => {
+            assert.match(wrapper, /grep -q 'TRUYN_AZ_RUN_COMMAND_BUSY_WAIT'/);
+            assert.match(wrapper, /grep -q 'command az vm run-command invoke'/);
+          });
+          ''')
+
+          terminal_path = Path('tests/class-d-terminal-verifier.test.js')
+          terminal = terminal_path.read_text()
+          if "strict terminal verifier CLI requires the evidence path as argv[2]" not in terminal:
+              terminal += r'''
+
+          test('strict terminal verifier CLI requires the evidence path as argv[2]', () => {
+            const missing = spawnSync(process.execPath, ['benchmarks/scale/verify-class-d-terminal.js'], { encoding: 'utf8' });
+            assert.equal(missing.status, 99, missing.stderr || missing.stdout);
+            const parsed = JSON.parse(missing.stdout);
+            assert.equal(parsed.error, 'class_d_terminal_evidence_missing');
+            const valid = run(evidence(0));
+            assert.equal(valid.status, 0, valid.stderr || valid.stdout);
+          });
+          '''
+          terminal_path.write_text(terminal)
+          PY
+
+          rm -f .github/workflows/tmp-d100-runcommand-branch-patch.yml
+          npm install --ignore-scripts --no-audit --no-fund
+          npm test
+          bash -n benchmarks/scale/class-d-azure-100-provision.sh
+          bash -n scripts/class-d-100-final-acceptance.sh
+          TRUYN_CLASS_D100_PREPARE_ONLY=1 bash scripts/class-d-100-final-acceptance.sh
+          git diff --check
+          git add -A
+          git commit -m 'fix: serialize D-100 Azure RunCommand safely'
+          git push origin HEAD:d100-runcommand-fix-20260819
