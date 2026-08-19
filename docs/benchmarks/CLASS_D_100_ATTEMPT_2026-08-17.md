@@ -1,7 +1,8 @@
 # TRUYN Class D 100 Real-Node Attempt — 2026-08-17
 
 **Run disposition:** **CLOSED / FROZEN**  
-**Acceptance status:** **UNACCEPTED / NOT A PASS CLAIM**
+**Acceptance status:** **UNACCEPTED / NOT A PASS CLAIM**  
+**Evidence status:** **UNACCEPTED / NOT A PASS CLAIM**
 
 This append-only record preserves the first Azure Class D-100 execution attempt without promoting roadmap maturity beyond durable evidence that actually exists. The run is closed as historical evidence; it is not the accepted 100-real-node gate.
 
@@ -14,7 +15,7 @@ This append-only record preserves the first Azure Class D-100 execution attempt 
 - the bounded campaign contains baseline routing, signed Byzantine-state rejection, packet-path partition/heal, bounded churn/restart, Sybil/eclipse pressure, collusion observation, durability checks and healed-baseline measurements;
 - the evaluator defines explicit Class D-100 acceptance thresholds rather than treating process count alone as success.
 
-## Why this run is closed but not accepted
+## Why this attempt is not accepted
 
 The public append-only evidence ledger did not contain a durable complete Class D-100 result report produced by the execution. The temporary privileged workflow was also incompatible with the public-default-branch workflow allowlist while it remained present. Therefore the repository could not establish the complete evidence chain required to accept the run.
 
@@ -31,7 +32,7 @@ The public default branch is required to contain only the allowlisted non-privil
 
 Class D privileged execution workflows are ephemeral operational mechanisms and must not remain on `main` after execution. Future cloud acceptance runs should execute from an isolated ops branch or equivalent non-default-branch mechanism and merge only sanitized durable evidence back into `main`.
 
-## Required accepted 100-node rerun
+## Required acceptance rerun
 
 After Class C heterogeneous WAN/reachability is closed, the accepted 100-real-node gate must be rerun and accepted only if durable sanitized evidence records at least:
 
