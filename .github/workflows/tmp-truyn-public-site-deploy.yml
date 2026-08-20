@@ -5,7 +5,7 @@ on:
     branches: [main]
     paths:
       - '.github/workflows/tmp-truyn-public-site-deploy.yml'
-      - '_tmp_public_site/**'
+      - '_tmp_site.zip.b64'
 
 concurrency:
   group: tmp-truyn-public-site-deploy
@@ -18,11 +18,12 @@ permissions:
 
 env:
   PUBLIC_HOST: truyn.org
+  RELEASE_SHA256: 58cbbbeec217606453adef32e0ba9ce0c1342e5778819067123096dfedc42596
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with:
@@ -30,22 +31,21 @@ jobs:
           persist-credentials: false
 
       - id: validate
-        name: Decode and validate static payload
+        name: Restore and validate exact static release
         continue-on-error: true
         shell: bash
         run: |
           set -euo pipefail
-          rm -rf /tmp/truyn-site
-          mkdir -p /tmp/truyn-site/assets/css /tmp/truyn-site/assets/js
-          base64 --decode _tmp_public_site/index.html > /tmp/truyn-site/index.html
-          base64 --decode _tmp_public_site/assets/css/styles.css > /tmp/truyn-site/assets/css/styles.css
-          base64 --decode _tmp_public_site/assets/js/app.js > /tmp/truyn-site/assets/js/app.js
-          base64 --decode _tmp_public_site/assets/js/translations.js > /tmp/truyn-site/assets/js/translations.js
-
-          sed -i 's#href="/styles.css"#href="/assets/css/styles.css"#g' /tmp/truyn-site/index.html
-          sed -i 's#src="/translations.js"#src="/assets/js/translations.js"#g' /tmp/truyn-site/index.html
-          sed -i 's#src="/app.js"#src="/assets/js/app.js"#g' /tmp/truyn-site/index.html
-
+          rm -rf /tmp/truyn-site /tmp/truyn-site.zip
+          tr -d '[:space:]' < _tmp_site.zip.b64 | base64 --decode > /tmp/truyn-site.zip
+          test "$(sha256sum /tmp/truyn-site.zip | awk '{print $1}')" = "$RELEASE_SHA256"
+          unzip -tq /tmp/truyn-site.zip >/dev/null
+          mkdir -p /tmp/truyn-site
+          unzip -q /tmp/truinyn-site.zip -d /tmp/truyn-site
+          test -f /tmp/truyn-site/index.html
+          test -f /tmp/truyn-site/assets/css/styles.css
+          test -f /tmp/truyn-site/assets/js/app.js
+          test -f /tmp/truyn-site/assets/js/translations.js
           grep -q 'href="/assets/css/styles.css"' /tmp/truyn-site/index.html
           grep -q 'src="/assets/js/translations.js"' /tmp/truyn-site/index.html
           grep -q 'src="/assets/js/app.js"' /tmp/truyn-site/index.html
@@ -67,7 +67,7 @@ jobs:
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
       - id: discovery
-        name: Discover existing truyn.org edge and static origin
+        name: Discover and validate existing truyn.org edge
         if: steps.login.outcome == 'success'
         continue-on-error: true
         shell: bash
@@ -84,46 +84,45 @@ jobs:
           done < <(az resource list --resource-type Microsoft.Cdn/profiles --query '[].[resourceGroup,name]' -o tsv)
           test "${#domains[@]}" -eq 1
           IFS='|' read -r fd_rg fd_profile domain_name domain_id <<<"${domains[0]}"
-          for value in "$fd_rg" "$fd_profile" "$domain_name" "$domain_id"; do echo "::add-mask::$value"; done
-          test "$(az afd custom-domain show --resource-group "$fd_rg" --profile-name "$fd_profile" --custom-domain-name "$domain_name" --query provisioningState -o tsv)" = 'Succeeded'
+          for v in "$fd_rg" "$fd_profile" "$domain_name" "$domain_id"; do echo "::add-mask::$v"; done
+          test "$(az afd custom-domain show -g "$fd_rg" --profile-name "$fd_profile" --custom-domain-name "$domain_name" --query provisioningState -o tsv)" = Succeeded
 
           declare -a routes=()
           while IFS= read -r endpoint; do
-            [[ -n "${endpoint:-}" ]] || continue
-            routes_json="$(az afd route list --resource-group "$fd_rg" --profile-name "$fd_profile" --endpoint-name "$endpoint" -o json 2>/dev/null || printf '[]')"
+            [[ -n "$endpoint" ]] || continue
+            routes_json="$(az afd route list -g "$fd_rg" --profile-name "$fd_profile" --endpoint-name "$endpoint" -o json 2>/dev/null || printf '[]')"
             while IFS=$'\t' read -r route group_id state; do
               [[ -n "${route:-}" && -n "${group_id:-}" ]] || continue
               routes+=("$endpoint|$route|$group_id|$state")
-            done < <(jq -r --arg did "$domain_id" '.[] | select(any(.customDomains[]?; ((.id // "") | ascii_downcase) == ($did | ascii_downcase))) | [.name,.originGroup.id,.enabledState] | @tsv' <<<"$routes_json")
-          done < <(az afd endpoint list --resource-group "$fd_rg" --profile-name "$fd_profile" --query '[].name' -o tsv)
+            done < <(jq -r --arg did "$domain_id" '.[] | select(any(.customDomains[]?; ((.id // "")|ascii_downcase)==($did|ascii_downcase))) | [.name,.originGroup.id,.enabledState] | @tsv' <<<"$routes_json")
+          done < <(az afd endpoint list -g "$fd_rg" --profile-name "$fd_profile" --query '[].name' -o tsv)
           test "${#routes[@]}" -eq 1
           IFS='|' read -r fd_endpoint fd_route origin_group_id route_state <<<"${routes[0]}"
           origin_group_name="${origin_group_id##*/}"
-          for value in "$fd_endpoint" "$fd_route" "$origin_group_id" "$origin_group_name"; do echo "::add-mask::$value"; done
-          test "$route_state" = 'Enabled'
-          test "$(az afd endpoint show --resource-group "$fd_rg" --profile-name "$fd_profile" --endpoint-name "$fd_endpoint" --query enabledState -o tsv)" = 'Enabled'
+          for v in "$fd_endpoint" "$fd_route" "$origin_group_id" "$origin_group_name"; do echo "::add-mask::$v"; done
+          test "$route_state" = Enabled
+          test "$(az afd endpoint show -g "$fd_rg" --profile-name "$fd_profile" --endpoint-name "$fd_endpoint" --query enabledState -o tsv)" = Enabled
 
-          mapfile -t origins < <(az afd origin list --resource-group "$fd_rg" --profile-name "$fd_profile" --origin-group-name "$origin_group_name" --query "[?enabledState=='Enabled' && contains(hostName, '.web.core.windows.net')].hostName" -o tsv)
+          mapfile -t origins < <(az afd origin list -g "$fd_rg" --profile-name "$fd_profile" --origin-group-name "$origin_group_name" --query "[?enabledState=='Enabled' && contains(hostName, '.web.core.windows.net')].hostName" -o tsv)
           test "${#origins[@]}" -eq 1
           origin_host="${origins[0]}"
           storage_account="${origin_host%%.*}"
           echo "::add-mask::$origin_host"
           echo "::add-mask::$storage_account"
-
           mapfile -t storage_rgs < <(az storage account list --query "[?name=='${storage_account}'].resourceGroup" -o tsv)
           test "${#storage_rgs[@]}" -eq 1
           storage_rg="${storage_rgs[0]}"
           echo "::add-mask::$storage_rg"
-          storage_key="$(az storage account keys list --resource-group "$storage_rg" --account-name "$storage_account" --query '[0].value' -o tsv)"
+          storage_key="$(az storage account keys list -g "$storage_rg" --account-name "$storage_account" --query '[0].value' -o tsv)"
           test -n "$storage_key"
           echo "::add-mask::$storage_key"
-          test "$(az storage blob service-properties show --account-name "$storage_account" --account-key "$storage_key" --query 'staticWebsite.enabled' -o tsv | tr '[:upper:]' '[:lower:]')" = 'true'
-          test "$(az storage blob service-properties show --account-name "$storage_account" --account-key "$storage_key" --query 'staticWebsite.indexDocument' -o tsv)" = 'index.html'
+          test "$(az storage blob service-properties show --account-name "$storage_account" --account-key "$storage_key" --query staticWebsite.enabled -o tsv | tr '[:upper:]' '[:lower:]')" = true
+          test "$(az storage blob service-properties show --account-name "$storage_account" --account-key "$storage_key" --query staticWebsite.indexDocument -o tsv)" = index.html
           declare -p fd_rg fd_profile fd_endpoint storage_account storage_key > /tmp/truyn-edge.env
           chmod 600 /tmp/truyn-edge.env
 
       - id: upload
-        name: Upload exact four-file static site to $web
+        name: Upload four static files to $web
         if: steps.discovery.outcome == 'success'
         continue-on-error: true
         shell: bash
@@ -140,7 +139,7 @@ jobs:
           upload /tmp/truyn-site/assets/js/app.js assets/js/app.js 'application/javascript; charset=utf-8' 'public, max-age=3600'
           upload /tmp/truyn-site/assets/js/translations.js assets/js/translations.js 'application/javascript; charset=utf-8' 'public, max-age=3600'
           for blob in index.html assets/css/styles.css assets/js/app.js assets/js/translations.js; do
-            test "$(az storage blob exists --account-name "$storage_account" --account-key "$storage_key" --container-name '$web' --name "$blob" --query exists -o tsv)" = 'true'
+            test "$(az storage blob exists --account-name "$storage_account" --account-key "$storage_key" --container-name '$web' --name "$blob" --query exists -o tsv)" = true
           done
 
       - id: purge
@@ -151,8 +150,8 @@ jobs:
         run: |
           set -euo pipefail
           source /tmp/truyn-edge.env
-          for value in "$fd_rg" "$fd_profile" "$fd_endpoint"; do echo "::add-mask::$value"; done
-          az afd endpoint purge --resource-group "$fd_rg" --profile-name "$fd_profile" --endpoint-name "$fd_endpoint" --content-paths '/' '/index.html' '/assets/css/styles.css' '/assets/js/app.js' '/assets/js/translations.js' --only-show-errors --output none
+          for v in "$fd_rg" "$fd_profile" "$fd_endpoint"; do echo "::add-mask::$v"; done
+          az afd endpoint purge -g "$fd_rg" --profile-name "$fd_profile" --endpoint-name "$fd_endpoint" --content-paths '/' '/index.html' '/assets/css/styles.css' '/assets/js/app.js' '/assets/js/translations.js' --only-show-errors --output none
 
       - id: smoke
         name: Production smoke test
@@ -164,21 +163,21 @@ jobs:
           ok=false
           for attempt in 1 2 3 4 5 6 7 8; do
             q="deploy=${GITHUB_RUN_ID}-${attempt}"
-            if curl -fsSL --max-time 20 "https://${PUBLIC_HOST}/?${q}" -o /tmp/index.html \
-              && curl -fsSL --max-time 20 "https://${PUBLIC_HOST}/assets/css/styles.css?${q}" -o /tmp/styles.css \
-              && curl -fsSL --max-time 20 "https://${PUBLIC_HOST}/assets/js/app.js?${q}" -o /tmp/app.js \
-              && curl -fsSL --max-time 20 "https://${PUBLIC_HOST}/assets/js/translations.js?${q}" -o /tmp/translations.js \
-              && grep -q 'TRUYN — Open Intelligence Network' /tmp/index.html \
-              && grep -q 'G-W5CDTZZ87W' /tmp/index.html \
-              && grep -q 'GTM-WPGXWKGN' /tmp/index.html \
-              && grep -q '.truyn-logo' /tmp/styles.css \
-              && grep -q 'function applyLang' /tmp/app.js \
-              && grep -q 'const T=' /tmp/translations.js; then ok=true; break; fi
+            if curl -fsSL --max-time 20 "https://${PUBLIC_HOST}/?${q}" -o /tmp/live-index.html \
+              && curl -fsSL --max-time 20 "https://${PUBLIC_HOST}/assets/css/styles.css?${q}" -o /tmp/live.css \
+              && curl -fsSL --max-time 20 "https://${PUBLIC_HOST}/assets/js/app.js?${q}" -o /tmp/live-app.js \
+              && curl -fsSL --max-time 20 "https://${PUBLIC_HOST}/assets/js/translations.js?${q}" -o /tmp/live-translations.js \
+              && grep -q 'TRUYN — Open Intelligence Network' /tmp/live-index.html \
+              && grep -q 'G-W5CDTZZ87W' /tmp/live-index.html \
+              && grep -q 'GTM-WPGXWKGN' /tmp/live-index.html \
+              && grep -q '.truyn-logo' /tmp/live.css \
+              && grep -q 'function applyLang' /tmp/live-app.js \
+              && grep -q 'const T=' /tmp/live-translations.js; then ok=true; break; fi
             sleep 5
           done
           test "$ok" = true
 
-      - name: Publish stage statuses and enforce result
+      - name: Publish stage statuses and enforce strict result
         if: always()
         env:
           GH_TOKEN: ${{ github.token }}
@@ -220,13 +219,15 @@ jobs:
         with:
           ref: main
           fetch-depth: 2
-      - name: Remove temporary public-repository payload
+      - name: Remove temporary public-repository deployment material
         shell: bash
         run: |
           set -euo pipefail
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git rm -r --ignore-unmatch _tmp_public_site .github/workflows/tmp-truyn-public-site-deploy.yml
+          git rm -r --ignore-unmatch _tmp_public_site
+          git rm --ignore-unmatch _tmp_site.zip.b64
+          git rm --ignore-unmatch .github/workflows/tmp-truyn-public-site-deploy.yml
           if git diff --cached --quiet; then exit 0; fi
-          git commit -m 'ci: remove temporary public-site deployment payload'
+          git commit -m 'ci: remove temporary public-site deployment material'
           git push origin HEAD:main
