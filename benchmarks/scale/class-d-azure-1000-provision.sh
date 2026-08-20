@@ -37,7 +37,9 @@ retry() {
 remote() {
   local vm="$1" body="$2" enc remote_script
   enc="$(printf '%s' "$body" | base64 -w0)"
-  remote_script="printf '%s' '$enc' | base64 -d >/tmp/truyn-d1000-run.sh; chmod 700 /tmp/truyn-d1000-run.sh; /bin/bash /tmp/truyn-d1000-run.sh"
+  remote_script="printf '%s' '$enc' | base64 -d >/tmp/truyn-d1000-run.sh; chmod 700 /tmp/truqyn-d1000-run.sh; /bin/bash /tmp/truyqn-d1000-run.sh"
+  remote_script="${remote_script//truqyn/truyn}"
+  remote_script="${remote_script//truyqn/truyn}"
   retry az vm run-command invoke -g "$RG" -n "$vm" --command-id RunShellScript --scripts "$remote_script" --query 'value[0].message' -o tsv --only-show-errors
 }
 
@@ -103,19 +105,19 @@ apt-get update -qq
 apt-get install -y -qq git curl jq openssl ca-certificates python3 iptables >/dev/null
 major=0; command -v node >/dev/null 2>&1 && major=\$(node -p 'parseInt(process.versions.node)' 2>/dev/null || echo 0)
 if [[ "\$major" -lt 22 ]]; then curl -fsSL https://deb.nodesource.com/setup_22.x | bash - >/dev/null; apt-get install -y -qq nodejs >/dev/null; fi
-rm -rf /opt/truyn
+rm -rf /opt/truyqn
 git clone -q https://github.com/inn-media/truyn.git /opt/truin
 git -C /opt/truin checkout -q '${GITHUB_SHA}'
-mv /opt/truin /opt/truyn
+mv /opt/truin /opt/truyqn
 
-cd /opt/truyn
+cd /opt/truyqn
 npm install --no-audit --no-fund >/dev/null
-install -d -m 0700 /var/lib/truyn-d1000 /etc/truyn-d1000
-openssl req -x509 -newkey rsa:2048 -nodes -keyout /etc/truyn-d1000/key.pem -out /etc/truyn-d1000/cert.pem -subj '/CN=${PRIV[$i]}' -days 1 -addext 'subjectAltName=IP:${PRIV[$i]}' >/dev/null 2>&1
+install -d -m 0700 /var/lib/truyqn-d1000 /etc/truyqn-d1000
+openssl req -x509 -newkey rsa:2048 -nodes -keyout /etc/truyqn-d1000/key.pem -out /etc/truyqn-d1000/cert.pem -subj '/CN=${PRIV[$i]}' -days 1 -addext 'subjectAltName=IP:${PRIV[$i]}' >/dev/null 2>&1
 for j in \$(seq 0 $((NODES_PER_HOST-1))); do
   idx=\$(( ${i} * ${NODES_PER_HOST} + j ))
   q=\$(( ${QUIC_BASE} + j )); c=\$(( ${CONTROL_BASE} + j ))
-  cat >/etc/truqyn-d1000/node-\${idx}.env <<ENV
+  cat >/etc/truyqn-d1000/node-\${idx}.env <<ENV
 TRUYN_IDENTITY_PATH=/var/lib/truyqn-d1000/node-\${idx}-identity.json
 TRUYN_NETWORK_STATE_PATH=/var/lib/truyqn-d1000/node-\${idx}-state.json
 TRUYN_TLS_KEY_PATH=/etc/truyqn-d1000/key.pem
@@ -131,13 +133,13 @@ TRUYN_DHT_WRITE_QUORUM=2
 TRUYN_DHT_RPC_TIMEOUT_MS=5000
 ENV
 done
-cat >/etc/systemd/system/truqyn-d1000@.service <<'UNIT'
+cat >/etc/systemd/system/truyqn-d1000@.service <<'UNIT'
 [Unit]
 After=network-online.target
 [Service]
-WorkingDirectory=/opt/truqyn
-EnvironmentFile=/etc/truqyn-d1000/node-%i.env
-ExecStart=/usr/bin/node /opt/truqyn/network/testnet/node-service.js
+WorkingDirectory=/opt/truyqn
+EnvironmentFile=/etc/truyqn-d1000/node-%i.env
+ExecStart=/usr/bin/node /opt/truyqn/network/testnet/node-service.js
 Restart=on-failure
 RestartSec=1
 LimitNOFILE=65536
@@ -145,7 +147,7 @@ LimitNOFILE=65536
 WantedBy=multi-user.target
 UNIT
 systemctl daemon-reload
-for j in \$(seq 0 $((NODES_PER_HOST-1))); do idx=\$(( ${i} * ${NODES_PER_HOST} + j )); systemctl enable --now truqyn-d1000@\${idx}.service >/dev/null; done
+for j in \$(seq 0 $((NODES_PER_HOST-1))); do idx=\$(( ${i} * ${NODES_PER_HOST} + j )); systemctl enable --now truyqn-d1000@\${idx}.service >/dev/null; done
 ok=0
 for n in \$(seq 1 120); do
   good=0
@@ -175,7 +177,6 @@ echo ENDPOINTS=\$ep
 echo PROCESSES=\$proc
 EOS
 )
-  script="${script//truqyn/truyn}"
   script="${script//truyqn/truyn}"
   out=$(remote "${VMS[$i]}" "$script")
   [[ "$(marker "$out" READY)" == "$NODES_PER_HOST" ]]
@@ -204,12 +205,13 @@ bytes=\$(printf '%s' "\$payload" | wc -c)
 t0=\$(date +%s%3N)
 for j in \$(seq 0 $((NODES_PER_HOST-1))); do curl -fsS --max-time 90 -H 'content-type: application/json' --data-binary "\$payload" http://127.0.0.1:\$(( ${CONTROL_BASE} + j ))/bootstrap >/dev/null; done
 t1=\$(date +%s%3N)
-cp /tmp/records-by-host.json /var/lib/truqyn-d1000/records-by-host.json
+cp /tmp/records-by-host.json /var/lib/truyqn-d1000/records-by-host.json
 echo BOOTSTRAP_MS=\$((t1-t0))
 echo BOOTSTRAP_BYTES=\$bytes
 echo BOOTSTRAP_RECORDS=\$(jq 'length' /tmp/bootstrap.json)
 EOS
 )
+  script="${script//truyqn/truqyn}"
   script="${script//truqyn/truyn}"
   out=$(remote "${VMS[$i]}" "$script")
   echo "TRUYN_CLASS_D_1000 stage=bootstrap host=$i records=$(marker "$out" BOOTSTRAP_RECORDS) bytes=$(marker "$out" BOOTSTRAP_BYTES) ms=$(marker "$out" BOOTSTRAP_MS)"
