@@ -5,7 +5,7 @@ on:
     branches: [main]
     paths:
       - '.github/workflows/tmp-truyn-public-site-deploy.yml'
-      - '_tmp_site.zip.b64'
+      - '_tmp_parts/**'
 
 concurrency:
   group: tmp-truyn-public-site-deploy
@@ -37,7 +37,7 @@ jobs:
         run: |
           set -euo pipefail
           rm -rf /tmp/site /tmp/site.zip
-          tr -d '[:space:]' < _tmp_site.zip.b64 | base64 --decode > /tmp/site.zip
+          cat _tmp_parts/p00 _tmp_parts/p01 _tmp_parts/p02 _tmp_parts/p03 _tmp_parts/p04 _tmp_parts/p05 _tmp_parts/p06 _tmp_parts/p07 | tr -d '[:space:]' | base64 --decode > /tmp/site.zip
           test "$(sha256sum /tmp/site.zip | awk '{print $1}')" = "$RELEASE_SHA256"
           unzip -tq /tmp/site.zip >/dev/null
           mkdir -p /tmp/site
@@ -226,6 +226,7 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git rm -r --ignore-unmatch _tmp_public_site
+          git rm -r --ignore-unmatch _tmp_parts
           git rm --ignore-unmatch _tmp_site.zip.b64
           git rm --ignore-unmatch .github/workflows/tmp-truyn-public-site-deploy.yml
           if git diff --cached --quiet; then exit 0; fi
