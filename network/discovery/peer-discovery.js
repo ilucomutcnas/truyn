@@ -97,7 +97,30 @@ export class PeerDiscovery {
 
   restore(records = [], options = {}) {
     let accepted = 0;
-    for (const record of records) if (this.ingest(record, { ...options, notify: false }).accepted) accepted += 1;
+    for (const record of records) {
+      if (this.ingest(record, { ...options, notify: false }).accepted) {
+        accepted += 1;
+        continue;
+      }
+
+      // Durable peer state can legitimately outlive the signed lease while a node is
+      // offline. Preserve a previously valid signed record only as a non-authoritative
+      // routing hint: get()/snapshot() still reject it as expired, but iterative lookup
+      // may contact its old endpoint and accept only fresh signed records returned by a
+      // live peer. Tampered/unsigned records never become hints because signature,
+      // identity, endpoint and record-id validation still run with allowExpired=true.
+      const stale = verifyPeerRecord(record, { allowExpired: true });
+      if (!stale.ok || stale.reason) continue;
+      const current = verifyPeerRecord(record);
+      if (current.ok) continue;
+      if (current.reason !== 'peer_record_expired') continue;
+      this.routing.upsert({
+        nodeId: record.nodeId,
+        endpoints: record.endpoints,
+        publicKey: record.publicKey,
+        lastSeenAt: record.issuedAt || new Date(0).toISOString()
+      });
+    }
     return accepted;
   }
 
