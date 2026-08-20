@@ -100,35 +100,61 @@ test('100-node gate refuses synthetic counts, missing host diversity, weak routi
   assert.ok(result.failed.includes('cleanup'));
 });
 
-test('1,000-node scale gate is separate from the 100-node resilience claim', () => {
-  const result = evaluateClassD1000({
+function passing1000Evidence() {
+  return {
     topology: {
       realNodeCount: 1000,
       distinctIdentityCount: 1000,
       distinctQuicSocketCount: 1000,
+      syntheticNodeCount: 0,
       hostCount: 20
     },
-    routing: { baselineSuccessRatio: 0.995 },
+    routing: {
+      baselineSuccessRatio: 0.995,
+      healedSuccessRatio: 0.994
+    },
     convergence: { latencyMs: { p95: 90_000 } },
     recovery: { latencyMs: { p95: 100_000 } },
-    safety: { acknowledgedWriteLossCount: 0 },
-    cleanup: { complete: true }
-  });
+    safety: {
+      acknowledgedWriteLossCount: 0,
+      invalidSignedStateAcceptedCount: 0,
+      staleRevokedReceiptAcceptedCount: 0,
+      unauthorizedProviderExecutionCount: 0
+    },
+    cleanup: { complete: true, remainingResources: 0 }
+  };
+}
+
+test('1,000-node scale gate is separate from the 100-node resilience claim', () => {
+  const result = evaluateClassD1000(passing1000Evidence());
   assert.equal(result.passed, true);
 
-  const onlyHundred = evaluateClassD1000({
-    topology: {
-      realNodeCount: 100,
-      distinctIdentityCount: 100,
-      distinctQuicSocketCount: 100,
-      hostCount: 10
-    },
-    routing: { baselineSuccessRatio: 1 },
-    convergence: { latencyMs: { p95: 1 } },
-    recovery: { latencyMs: { p95: 1 } },
-    safety: { acknowledgedWriteLossCount: 0 },
-    cleanup: { complete: true }
-  });
-  assert.equal(onlyHundred.passed, false);
-  assert.ok(onlyHundred.failed.includes('realNodes'));
+  const onlyHundred = passing1000Evidence();
+  onlyHundred.topology.realNodeCount = 100;
+  onlyHundred.topology.distinctIdentityCount = 100;
+  onlyHundred.topology.distinctQuicSocketCount = 100;
+  const failed = evaluateClassD1000(onlyHundred);
+  assert.equal(failed.passed, false);
+  assert.ok(failed.failed.includes('realNodes'));
+  assert.ok(failed.failed.includes('distinctIdentities'));
+  assert.ok(failed.failed.includes('distinctQuicSockets'));
+});
+
+test('1,000-node scale gate fails closed on weak failure-domain diversity, healed routing, safety or cleanup', () => {
+  const evidence = passing1000Evidence();
+  evidence.topology.hostCount = 19;
+  evidence.topology.syntheticNodeCount = 1;
+  evidence.routing.healedSuccessRatio = 0.98;
+  evidence.safety.invalidSignedStateAcceptedCount = 1;
+  evidence.safety.unauthorizedProviderExecutionCount = 1;
+  evidence.cleanup.remainingResources = 1;
+
+  const result = evaluateClassD1000(evidence);
+  assert.equal(result.passed, false);
+  assert.ok(result.failed.includes('hostFailureDomains'));
+  assert.ok(result.failed.includes('noSyntheticNodes'));
+  assert.ok(result.failed.includes('healedRouting'));
+  assert.ok(result.failed.includes('noInvalidSignedStateAccepted'));
+  assert.ok(result.failed.includes('noUnauthorizedProviderExecution'));
+  assert.ok(result.failed.includes('noRemainingResources'));
 });
