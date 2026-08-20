@@ -9,6 +9,7 @@ const scripts = [
   'benchmarks/scale/class-d-azure-1000-provision.sh',
   'benchmarks/scale/class-d-azure-1000-campaign.sh',
   'scripts/class-d-1000-final-acceptance.sh',
+  'scripts/class-d-1000-strict-acceptance.sh',
   'scripts/class-c-final-acceptance.sh'
 ];
 
@@ -61,6 +62,36 @@ test('final launchers patch known native/runtime hazards before cloud execution'
   const d1000 = await readFile('scripts/class-d-1000-final-acceptance.sh', 'utf8');
   assert.match(d1000, /14400000/);
   assert.match(d1000, /truin-d1000@.*truyn-d1000@/s);
+});
+
+test('D-1000 campaign derives every strict safety counter from an executed probe', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const campaign = await readFile('benchmarks/scale/class-d-azure-1000-campaign.sh', 'utf8');
+
+  assert.match(campaign, /TRUYN_TESTNET_FAULT_CONTROL=1/);
+  assert.match(campaign, /\/faults\/store/);
+  assert.match(campaign, /class-d-1000-safety-probes\.js/);
+  assert.match(campaign, /invalid_signed_state_accepted=\$\(marker/);
+  assert.match(campaign, /stale_receipt_accepted=\$\(marker/);
+  assert.match(campaign, /unauthorized_provider_execution=\$\(marker/);
+  assert.match(campaign, /"invalidSignedStateAcceptedCount":\$\{invalid_signed_state_accepted\}/);
+  assert.match(campaign, /"staleRevokedReceiptAcceptedCount":\$\{stale_receipt_accepted\}/);
+  assert.match(campaign, /"unauthorizedProviderExecutionCount":\$\{unauthorized_provider_execution\}/);
+  assert.doesNotMatch(campaign, /"invalidSignedStateAcceptedCount":0/);
+  assert.doesNotMatch(campaign, /"staleRevokedReceiptAcceptedCount":0/);
+  assert.doesNotMatch(campaign, /"unauthorizedProviderExecutionCount":0/);
+});
+
+test('D-1000 campaign proves packet-path failure and a full post-heal routing gate', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const campaign = await readFile('benchmarks/scale/class-d-azure-1000-campaign.sh', 'utf8');
+  assert.match(campaign, /truyn-d1000-partition/);
+  assert.match(campaign, /PARTITION_SUCCESSES/);
+  assert.match(campaign, /STAGE=healed-routing/);
+  assert.match(campaign, /healed_rate=\$\(python3/);
+  assert.match(campaign, /assert float\('\$healed_rate'\) >= \.99/);
+  assert.match(campaign, /"healedSuccessRatio":\$\{healed_rate\}/);
+  assert.match(campaign, /"realPacketPath":true/);
 });
 
 test('D-100 prepared harness removes invalid bootstrap and guest paths without cloud access', () => {
