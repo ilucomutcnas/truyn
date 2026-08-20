@@ -235,9 +235,17 @@ export class TruynNetworkNode {
     if (!this.started) throw new Error('network node is not started');
     const verification = verifyPeerRecord(record);
     if (!verification.ok || record.nodeId !== this.identity.nodeId) throw new Error(`invalid_local_peer_record:${verification.reason || 'identity_mismatch'}`);
-    const candidates = (Array.isArray(peers) ? peers : this.discovery.snapshot())
+
+    // Kademlia peer records are located by nodeId, so renewal must be placed near
+    // that key instead of repeatedly publishing every node into the same
+    // lexicographically-first fanout set. The default path intentionally uses the
+    // routing table (including cryptographically verified durable recovery hints)
+    // so a restarted node can repair placement before every cached lease is live.
+    const source = Array.isArray(peers)
+      ? peers.filter((peer) => peer?.nodeId && peer.nodeId !== this.identity.nodeId).sort((a, b) => a.nodeId.localeCompare(b.nodeId))
+      : this.discovery.closest(record.nodeId, fanout);
+    const candidates = source
       .filter((peer) => peer?.nodeId && peer.nodeId !== this.identity.nodeId)
-      .sort((a, b) => a.nodeId.localeCompare(b.nodeId))
       .slice(0, fanout);
     const settled = await Promise.allSettled(candidates.map((peer) => this.rpc.announce(peer, record)));
     const failedNodeIds = [];
