@@ -1,5 +1,7 @@
 # TRUYN Architecture Contract
 
+**Status synchronization:** 2026-08-20.
+
 This document prevents architectural ideas and factual implementation status from being lost or silently diverging between the whitepaper, public README, protocol specification, implementation tree, operations and benchmark evidence.
 
 ## Document authority
@@ -10,10 +12,12 @@ This document prevents architectural ideas and factual implementation status fro
 | Normative protocol behavior | `spec/protocol/<generation>/` |
 | Wire representation | `proto/<generation>/` |
 | Repository ownership | `STRUCTURE.md` and subsystem READMEs |
-| Implementation sequence | `ROADMAP.md` |
+| Maturity roadmap | `ROADMAP.md` |
+| Current productionization execution order | `docs/operations/PRODUCTIONIZATION_EXECUTION_PLAN.md` |
 | Factual implementation maturity | `docs/architecture/IMPLEMENTATION_STATUS.md` |
 | Public explanation | `README.md` |
 | Network underlay | `docs/architecture/NETWORK_UNDERLAY_V01.md` |
+| Network productionization gates | `docs/architecture/NETWORK_PRODUCTIONIZATION_GATE.md` |
 | Provider ownership | `docs/architecture/PROVIDER_OWNERSHIP.md` |
 | Provider authorization | `docs/architecture/AUTHORIZATION_MODEL.md` and `spec/protocol/v1/provider-policy.md` |
 | Relay/control-plane boundary | `docs/architecture/RELAY_SECURITY.md` |
@@ -42,11 +46,12 @@ TRUYN documentation distinguishes:
 - **Implemented** — executable reference behavior exists;
 - **CI-proven** — bounded automated tests prove the contract;
 - **Bounded real-testnet proven** — a real network/process topology proves a bounded gate;
+- **Accepted productionization gate** — a declared canonical evaluator/terminal contract passed and durable evidence exists;
 - **Productionized** — intended deployment lifecycle/recovery/security/observability gates are satisfied;
 - **Internet-scale proven** — large real-node/WAN/adversarial evidence exists;
 - **Stable** — compatibility guarantees are declared.
 
-The repository is intentionally mixed maturity. The v0.1 QUIC/Kademlia underlay is implemented and CI-proven; the trust lifecycle has bounded real four-node QUIC/Kademlia evidence; semantic retrieval and provider security have substantial implementation/evidence; large real-node WAN scale, rich commercial/account control planes and stable mainnet remain open.
+The repository is intentionally mixed maturity. The v0.1 QUIC/Kademlia underlay is implemented/CI-proven; Class B real multi-host and Class C heterogeneous WAN/reachability are accepted bounded productionization evidence; semantic retrieval and provider security have substantial implementation/evidence; **Class D-100 is active but not yet accepted at the 2026-08-20 snapshot**; D-1000, randomized large real-network adversarial operation, operational closure and stable mainnet remain open.
 
 An approved architecture document is not an implementation-complete security claim. Conversely, once a slice is implemented and evidenced, documentation must not continue describing it as purely planned.
 
@@ -203,6 +208,30 @@ Execution-capable HTTP, WebSocket, MCP, SDK and legacy paths MUST preserve equiv
 The reference provider security path is defense in depth: relay filtering plus provider-host access/billing checks.
 
 Provider runtimes may use an authenticated machine-to-machine backchannel. Edge/WAF/cloud controls are additive and do not replace TRUYN authorization.
+
+## Network productionization contract
+
+Network maturity is evidence-classed rather than inferred from code presence:
+
+```text
+v0.1 Connect reference gate
+        ↓
+Class B real multi-host — accepted
+        ↓
+Class C heterogeneous WAN/NAT/relay — accepted
+        ↓
+Class D-100 real scale/adversarial — active
+        ↓
+Class D-1000
+        ↓
+randomized heterogeneous adversarial campaigns
+        ↓
+operational/stability closure
+```
+
+The current canonical D-100 contract requires 100 real nodes/identities/QUIC sockets, at least four hosts, ≥99% baseline/healed routing, recovery/convergence p95 ≤120 seconds, required churn/partition/Byzantine/Sybil/eclipse/collusion exercise, zero listed safety violations and cleanup. A harness or partial workflow is not accepted evidence.
+
+See `NETWORK_PRODUCTIONIZATION_GATE.md` and `../operations/PRODUCTIONIZATION_EXECUTION_PLAN.md`.
 
 ## Reference edge/origin security
 

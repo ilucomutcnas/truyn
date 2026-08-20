@@ -8,7 +8,7 @@ TRUYN is an open-source project for **agent-to-agent communication, decentralize
 
 No new cables. No new hardware Internet. A new network contract.
 
-[Manifesto](MANIFESTO.md) · [Whitepaper](WHITEPAPER.md) · [Architecture](STRUCTURE.md) · [Security](SECURITY.md) · [Provider ownership](docs/architecture/PROVIDER_OWNERSHIP.md) · [BYOK](docs/getting-started/BYOK.md) · [Protocol](spec/protocol/v1/README.md) · [Roadmap](ROADMAP.md) · [0BSD License](LICENSE)
+[Manifesto](MANIFESTO.md) · [Whitepaper](WHITEPAPER.md) · [Architecture](STRUCTURE.md) · [Implementation status](docs/architecture/IMPLEMENTATION_STATUS.md) · [Roadmap](ROADMAP.md) · [Productionization plan](docs/operations/PRODUCTIONIZATION_EXECUTION_PLAN.md) · [Security](SECURITY.md) · [BYOK](docs/getting-started/BYOK.md) · [Protocol](spec/protocol/v1/README.md) · [Evidence](docs/benchmarks/README.md) · [0BSD License](LICENSE)
 
 ---
 
@@ -40,17 +40,17 @@ TRUYN is open, but openness of the protocol is not permission to consume another
 >
 > **TRUYN is open. Intelligence is BYOK by default.**
 
-The reference implementation now enforces a first fail-closed provider boundary: provider ownership is bound to the cryptographic sender of a signed `OFFER`, private-provider discovery and dispatch are authorization-aware, provider-signed requester allowlists support private BYOK providers, and provider-host access plus billing checks run before adapter/upstream execution.
+The reference implementation enforces a fail-closed provider boundary: provider ownership is bound to the cryptographic sender of a signed `OFFER`, private-provider discovery and dispatch are authorization-aware, provider-signed requester allowlists support private BYOK providers, and provider-host access plus billing checks run before adapter/upstream execution.
 
-A public relay may be reachable by anyone while private providers remain unusable by foreign requesters. Knowing a provider ID, using a custom client, forging an `ownerId` field or calling a legacy/fast/WebSocket path does not grant access to an unauthorized private provider.
+A public relay may be reachable by anyone while private providers remain unusable by foreign requesters. Knowing a provider ID, using a custom client, forging an `ownerId` field or calling a legacy/fast/WebSocket/MCP path does not grant access to an unauthorized private provider.
 
 The safety invariant is:
 
 ```text
 foreign requester
-+ public relay
++ public relay / reachable peer
 + known private provider ID
-+ custom/malicious client
++ custom or malicious client
 = zero unauthorized provider execution
 ```
 
@@ -58,11 +58,11 @@ Normal users are expected to **Bring Your Own Intelligence / Bring Your Own Prov
 
 The architecture also supports future explicitly shared, prepaid, subscription or sponsored providers, but no such mode creates an implicit entitlement. Sponsored/free owner-funded access defaults to disabled/zero; prepaid/subscription remain fail-closed until an entitlement resolver exists.
 
-The production-style public-network plane is also closed by default. Public registration and public dispatch require an explicit public-network master opt-in plus their own separate opt-ins. Implementing BYOK does not itself open a relay.
+The production-style public-network plane is also closed by default. Public registration and public dispatch require explicit public-network opt-in; public provider execution is separately controlled. Implementing BYOK does not itself open a relay or provider.
 
 ### BYOK quickstart
 
-The official CLI now implements a first provider setup flow for OpenAI, OpenAI-compatible, Anthropic, Azure OpenAI and Vertex Gemini profiles.
+The official CLI implements provider setup flows for supported OpenAI, OpenAI-compatible/local, Anthropic, Azure OpenAI, Vertex Gemini and generic provider profiles.
 
 ```bash
 truyn init
@@ -73,9 +73,9 @@ truyn setup --provider openai --model <your-model> --test
 truyn setup-status
 ```
 
-The persisted profile stores the credential **environment-variable name**, not the credential value. `--test` makes a minimal call to the user's configured provider and only then marks the profile verified. Requester and provider use separate TRUYN identities; the remote provider is published private (`owner-only`) for that requester and runs with billing mode `byok`.
+The persisted profile stores the credential **environment-variable name**, not the credential value. `--test` makes a minimal call to the user's configured provider and only then marks the profile verified. Requester and provider use separate TRUYN identities; a configured remote BYOK provider is private (`owner-only`) for the authorized requester and runs with billing mode `byok`.
 
-For a non-loopback relay, official CLI AI-workload entry points require a verified private BYOK profile. This is defense in depth: relay/provider authorization remains authoritative even against a modified client.
+For a non-loopback relay, official CLI AI-workload entry points require a verified private BYOK profile as defense in depth. Relay/provider authorization remains authoritative even against a modified client.
 
 See [Bring Your Own Intelligence](docs/getting-started/BYOK.md) for provider-specific constraints and the exact implemented boundary.
 
@@ -127,6 +127,8 @@ The target is not minimum tokens at any cost. It is:
 > **minimum sufficient information for the required result and trust level.**
 
 Fewer tokens are useful only when required information is preserved or replaced by stronger machine-readable state, provenance, evidence and verification.
+
+Measured TRUYN results live in the append-only [benchmark evidence ledger](docs/benchmarks/README.md), not in illustrative examples.
 
 ---
 
@@ -224,7 +226,18 @@ routing · execution · provenance · trust
    existing Internet
 ```
 
-The installed program is the **TRUYN Node** (planned daemon name: `truynd`). AI agents connect to that node; they are not replaced by it.
+The installed program is the **TRUYN Node** (intended daemon name: `truynd`). AI agents connect to that node; they are not replaced by it.
+
+### Current real-network evidence
+
+The lower network is no longer only a relay-based MVP:
+
+- v0.1 Connect implemented/CI-proven real QUIC/UDP + authenticated Kademlia path;
+- **Class B accepted** on a bounded four-host real multi-host topology;
+- **Class C accepted** across heterogeneous Azure/GCP runtimes with direct cross-cloud QUIC, real packet-path partition/heal, real Azure NAT, double-NAT/CGNAT-like outbound behavior and authenticated relay outage/fallback/recovery;
+- **Class D-100 is the active scale gate and is not yet accepted at the 2026-08-20 snapshot**.
+
+Class C explicitly does not claim carrier-operated field CGNAT. Class B/Class C also do not substitute for the remaining 100/1,000-real-node and long-duration adversarial gates.
 
 ---
 
@@ -233,12 +246,12 @@ The installed program is the **TRUYN Node** (planned daemon name: `truynd`). AI 
 TRUYN uses one vocabulary everywhere:
 
 - `local` — isolated development/testing on one machine or LAN;
-- `testnet` — public experimental network for protocol changes, adversarial testing and interoperability work;
+- `testnet` — public/controlled experimental network for protocol changes, adversarial testing and interoperability work;
 - `mainnet` — future stable public network with stricter compatibility and upgrade requirements.
 
 Configuration lives under `config/local`, `config/testnet`, and `config/mainnet`.
 
-Public reachability in `testnet` or `mainnet` does not grant access to private providers.
+Public reachability in `testnet` or future `mainnet` does not grant access to private providers.
 
 ---
 
@@ -264,7 +277,7 @@ Target ecosystems include, but are not limited to:
 | **Agent frameworks** | LangGraph/LangChain, AutoGen, CrewAI, Semantic Kernel |
 | **Custom systems** | Enterprise agents, robots, sensors, edge devices and future agents |
 
-The names above describe intended interoperability, not endorsement, partnership or a claim that every adapter is already implemented.
+The names above describe intended interoperability surfaces. They are not endorsements/partnership claims and do not imply that every named ecosystem has a stable/certified adapter today.
 
 > **MCP can connect an agent to TRUYN. TRUYN connects intelligence to intelligence.**
 
@@ -280,13 +293,13 @@ The public provider layer contains adapters for equivalent capabilities across i
 | Image generation | Google image-generation track | Azure OpenAI `gpt-image`; Azure FLUX adapter |
 | Video generation | Veo | Sora adapter |
 
-Concrete model versions, regions, quotas, deployment IDs, cloud identities and private topology are operational concerns and are not part of the public protocol contract. Provider availability is also distinct from adapter implementation: a cloud deployment may remain unavailable because of provider entitlement/quota even when the TRUYN adapter path exists.
+Concrete model versions, regions, quotas, deployment IDs, cloud identities and private topology are operational concerns and are not part of the public protocol contract. Provider availability is distinct from adapter implementation: a cloud deployment may remain unavailable because of provider entitlement/quota even when the TRUYN adapter path exists.
 
 Reference/test providers funded by a TRUYN operator remain owner-private unless explicitly shared. The existence of a provider adapter or private reference deployment does not give public users access to its quota.
 
-Media results travel through the normalized artifact path as verifiable references with provenance, size, media type and digest instead of requiring large image/video binaries inside TRUYN RESULT envelopes.
+Media results travel through the normalized artifact path as verifiable references with provenance, size, media type and digest instead of requiring large image/video binaries inside TRUYN `RESULT` envelopes.
 
-See [Multi-Cloud Provider Architecture](docs/architecture/MULTI_CLOUD_PROVIDER_ARCHITECTURE.md) and [Multimodal Provider Parity Benchmark](docs/benchmarks/MULTIMODAL_PROVIDER_PARITY.md).
+See [Multi-Cloud Provider Architecture](docs/architecture/MULTI_CLOUD_PROVIDER_ARCHITECTURE.md) and [Multimodal Provider Parity](docs/benchmarks/MULTIMODAL_PROVIDER_PARITY.md).
 
 ---
 
@@ -294,21 +307,69 @@ See [Multi-Cloud Provider Architecture](docs/architecture/MULTI_CLOUD_PROVIDER_A
 
 TRUYN's routing model can support a future open market of machine capabilities: inference, verification, translation, storage, data access, code review, sensing and other services. Providers can advertise cost and conditions; requesters can choose according to trust, quality, latency, location, privacy, availability and price.
 
-`TRUYN/1` defines the information needed for cost-aware routing but **does not require a blockchain, payment rail or global settlement system**. Settlement is deliberately modular.
+`TRUYN/1` defines information useful for cost-aware routing but **does not require a blockchain, payment rail or global settlement system**. Settlement is deliberately modular.
 
 A future capability market is an explicit entitlement system. It does not weaken provider ownership: cross-owner execution must have an explicit grant/contract and attributable billing responsibility.
 
 ---
 
-## Current status
+## Current status — 2026-08-20
 
-TRUYN is an **experimental architecture and implementation project**. The repository contains a working MVP relay/node/adapter path, protocol drafts, provider integrations, security gates, local demos and reproducible tests.
+TRUYN is an **advanced experimental/reference intelligence-network implementation with strong bounded evidence**. It is **not yet a production mainnet and is not yet Internet-scale proven**.
 
-The current reference implementation demonstrates signed identity, capability discovery, authorization-aware routing, signed results, private provider requester allowlists, provider-host access control, fail-closed billing modes, explicit public-network configuration gates, and a first official verified BYOK CLI flow.
+### Implemented / proven reference layers
 
-This does **not** mean the entire future security/control plane is finished. Rich account/tenant ownership, durable distributed quota/accounting, prepaid/subscription entitlement resolution, OS credential-store integration, production origin/perimeter hardening and the future stable mainnet remain additional work.
+- cryptographic node identity and signed TRUYN envelopes;
+- real QUIC/UDP authenticated peer transport;
+- Kademlia discovery/state RPC;
+- direct-first P2P with explicit relay fallback;
+- STUN/same-port hole-punch reference path;
+- signed peer-record renewal/persistence/dissemination/repair and stale-client invalidation;
+- durable routing/DHT state, replication/quorum/repair reference slices;
+- bounded admission/backpressure and process-restart accepted-work recovery slice;
+- **Class B real multi-host acceptance**;
+- **Class C heterogeneous Azure/GCP WAN/NAT/relay acceptance**;
+- authorization-aware provider ownership/default-private execution;
+- provider-host second authorization and billing gate;
+- BYOK CLI/runtime reference flow;
+- MCP/HTTP/provider adapters and multi-cloud text/image/video paths;
+- semantic retrieval/index/distributed retrieval with extensive benchmark evidence;
+- claim-centric/active Trustability, provenance, receipts and bounded decentralized trust-network evidence;
+- append-only benchmark/security evidence discipline.
+
+### Active gate
+
+**Class D-100 real-node scale/adversarial acceptance.**
+
+Pinned V14 run `32367799512` tests immutable commit `b835c8fa0283a004d616ce8d25d7aa78cee1a1c0`. At this documentation snapshot immutable preflight and Azure login passed while the real 4-host/100-node campaign remained in progress. Canonical post-cleanup evaluation, strict terminal verification and a durable accepted report are still required.
+
+The D-100 evaluator requires exactly 100 real running nodes, identities and QUIC sockets, at least four hosts, ≥99% baseline and healed routing, recovery/convergence p95 ≤120 seconds, required churn/partition/Byzantine/Sybil/eclipse/collusion phases, zero listed safety violations and complete cleanup.
+
+### What remains before production/stable mainnet
+
+```text
+accepted D-100
+        ↓
+security-green evidence commit + Class C regression pin
+        ↓
+accepted D-1000 real nodes
+        ↓
+repeated randomized heterogeneous adversarial campaigns
+        ↓
+host/volume durability + SRE/observability/soak closure
+        ↓
+verified installers + signed updater/migrations/rollback
+        ↓
+production entitlement/account/tenant controls for intended commercial modes
+        ↓
+stable TRUYN/1 compatibility + public mainnet bootstrap
+```
+
+Additional open boundaries include carrier-field CGNAT validation where needed, replicated accepted-work survival after underlying host/volume loss, general `COMPUTE` sandbox productionization, stable public SDK certification, and production commercial accounting/entitlement issuance for non-BYOK modes.
 
 No document or public endpoint should be interpreted as permission to consume TRUYN-operated provider accounts.
+
+For canonical status and sequencing, see [Implementation Status](docs/architecture/IMPLEMENTATION_STATUS.md), [Network Productionization Gate](docs/architecture/NETWORK_PRODUCTIONIZATION_GATE.md), [Productionization Execution Plan](docs/operations/PRODUCTIONIZATION_EXECUTION_PLAN.md), and [Roadmap](ROADMAP.md).
 
 ---
 
@@ -326,7 +387,11 @@ TRUYN uses the **Zero-Clause BSD (0BSD)** license to minimize friction for resea
 
 - [Manifesto](MANIFESTO.md) — why TRUYN should exist.
 - [Whitepaper](WHITEPAPER.md) — academic rationale, formulas, threat model and research basis.
+- [Implementation Status](docs/architecture/IMPLEMENTATION_STATUS.md) — canonical factual maturity matrix.
 - [Architecture Contract](docs/architecture/ARCHITECTURE_CONTRACT.md) — canonical mapping of concepts to implementation owners.
+- [Network Productionization Gate](docs/architecture/NETWORK_PRODUCTIONIZATION_GATE.md) — accepted B/C boundaries and active D scale contracts.
+- [Productionization Execution Plan](docs/operations/PRODUCTIONIZATION_EXECUTION_PLAN.md) — current hard-gated engineering order.
+- [Benchmark Evidence](docs/benchmarks/README.md) — durable measured claims and negative evidence.
 - [Provider Ownership](docs/architecture/PROVIDER_OWNERSHIP.md) — who owns provider capacity and who may use it.
 - [Authorization Model](docs/architecture/AUTHORIZATION_MODEL.md) — fail-closed server-side provider authorization.
 - [Relay Security](docs/architecture/RELAY_SECURITY.md) — public relay vs private provider/control-plane boundaries.
@@ -337,7 +402,7 @@ TRUYN uses the **Zero-Clause BSD (0BSD)** license to minimize friction for resea
 - [Multi-Cloud Provider Architecture](docs/architecture/MULTI_CLOUD_PROVIDER_ARCHITECTURE.md) — public capability architecture without private deployment identifiers.
 - [TRUYN/1 Protocol](spec/protocol/v1/README.md) — normative protocol semantics.
 - [Repository Structure](STRUCTURE.md) — where each subsystem belongs.
-- [Roadmap](ROADMAP.md) — staged implementation plan.
+- [Roadmap](ROADMAP.md) — staged maturity plan.
 
 ---
 

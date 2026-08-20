@@ -1,12 +1,13 @@
 # TRUYN MVP — AI Interoperability
 
-**Implementation status:** working MVP/interoperability code; provider-ownership security hardening remains an approved target, not a completed production claim.
+**Implementation status:** working interoperability/provider layer with implemented provider-ownership/default-deny security baseline and a real decentralized QUIC/Kademlia network underlay.  
+**Snapshot:** 2026-08-20.
 
-This document describes executable code in the repository. It does not claim that the provisional relay, Trustability Lite formula, provider adapters, cloud PoC paths or MCP compatibility layer are the final TRUYN architecture.
+This document describes executable reference code. Provider adapters, cloud test deployments and compatibility bridges are not themselves a claim that every vendor is certified or that TRUYN mainnet is productionized.
 
-## What this MVP proves
+## What the interoperability layer proves
 
-The implemented conceptual path is:
+TRUYN supports the conceptual path:
 
 ```text
 agent / MCP client / HTTP client
@@ -15,7 +16,9 @@ agent / MCP client / HTTP client
             ↓
  signed OFFER / NEED / RESULT
             ↓
-        MVP relay
+authorized discovery / routing
+            ↓
+ direct QUIC or explicit relay fallback
             ↓
         TRUYN Node
             ↓
@@ -24,36 +27,79 @@ agent / MCP client / HTTP client
         AI provider
 ```
 
-A requester does not need the provider's native API contract. TRUYN can match a capability and route signed request/result envelopes.
+A requester does not need the native API contract of every provider. TRUYN can expose a capability-oriented contract while adapters translate to provider-specific execution.
 
-**What this path does not prove by itself:** that every requester is authorized to use every discovered provider. Provider ownership and billing authorization are separate from capability interoperability.
+Interoperability and entitlement remain separate questions:
+
+```text
+Can this provider perform the capability?
+Can this requester use this provider?
+```
+
+Authorization is evaluated before chargeable/private execution.
+
+## Implemented provider-security boundary
+
+The previously planned hardening target is now implemented as a reference baseline:
+
+- provider ownership is bound to signed/authenticated provider identity rather than requester-controlled metadata;
+- low-level provider access defaults to `owner-only`;
+- private-provider discovery and dispatch are authorization-aware;
+- provider-signed requester allowlists support private/BYOK relationships;
+- provider-host execution performs a second authorization/billing decision before `adapter.execute()`;
+- owner-funded public execution is denied without explicit policy;
+- public network registration/dispatch and public provider execution require separate explicit opt-ins;
+- legacy/compact/WebSocket/MCP execution surfaces must preserve equivalent central authorization;
+- prepaid/subscription modes fail closed without entitlement resolution;
+- sponsored mode cannot activate without actor-bound signed entitlement verification and durable atomic usage accounting.
+
+Negative security evidence is designed around the invariant:
+
+```text
+foreign requester
++ known private provider ID
++ custom client
+= zero unauthorized adapter/upstream execution
+```
+
+This does not yet mean rich commercial account/org tenancy, every production perimeter deployment, or durable commercial entitlement issuance is complete.
 
 ## BYOK rule
 
-Normal user operation is BYOK — Bring Your Own Intelligence / Bring Your Own Provider.
+Normal user operation is **BYOK — Bring Your Own Intelligence / Bring Your Own Provider**.
 
-Provider credentials used by an adapter belong to the user/provider runtime and should remain local or in an appropriate secure runtime secret store. They are not TRUYN protocol payloads and must not be distributed through relay discovery, `OFFER`, `NEED` or `RESULT` messages.
+Provider credentials remain in the user's local/provider runtime or appropriate cloud/OS secret store. Credentials are not TRUYN `OFFER`, `NEED` or `RESULT` payloads and do not travel through discovery.
 
-Current live demos may use local environment variables for credentials. This is a development/interoperability mechanism, not the final onboarding/credential-storage UX.
+The official CLI contains reference setup flows for supported provider profiles, including OpenAI, OpenAI-compatible/local, Anthropic, Azure OpenAI, Vertex Gemini, generic custom HTTP and stateless MCP HTTP tool providers.
 
-See `BYOK.md`.
+Typical setup:
+
+```bash
+truyn init
+export OPENAI_API_KEY='...'
+truyn setup --provider openai --model <your-model>
+truyn setup --provider openai --model <your-model> --test
+truyn setup-status
+```
+
+Persisted profiles retain non-secret settings and credential environment-variable names where required; resolved secret values are not written to normal profile/status output.
+
+Requester and remote BYOK provider use separate TRUYN identities. The provider is published private/owner-only for the configured requester and uses billing mode `byok`.
+
+See [BYOK](BYOK.md).
 
 ## Verify without paid AI APIs
-
-Requirements: Node.js 20 or newer.
 
 ```bash
 npm test
 npm run demo:ai
 ```
 
-Where benchmark scripts are present, their methodology/result documents define whether token counts are provider-reported measurements, estimates or serialized-byte proxies. Do not interpret estimated tokens as provider billing counters.
-
-Deterministic/local adapters should remain the default path for reproducible no-credential tests.
+Deterministic/local adapters should remain the default path for reproducible no-credential tests. Benchmark reports explicitly distinguish provider-reported usage, estimates and serialized-byte proxies.
 
 ## MCP adapter
 
-TRUYN exposes tools for identity, discovery, offers, needs, polling and results through its MCP compatibility surface.
+TRUYN exposes identity/discovery/offers/needs/polling/results through its MCP compatibility surface.
 
 Typical local start:
 
@@ -62,69 +108,93 @@ truyn init
 truyn mcp --relay http://127.0.0.1:8787
 ```
 
-HTTP MCP/local bridge surfaces should bind locally by default unless a production authentication/authorization layer is deliberately configured.
+MCP is a connection surface, **not** an authorization bypass. Provider execution reached through MCP must pass the same central provider policy as HTTP/WebSocket/SDK/native paths.
 
-**MCP authorization rule:** MCP is a connection surface, not a provider-policy bypass. Provider execution reached through MCP must ultimately pass the same central provider authorization as HTTP/WebSocket/SDK paths.
+## Universal/custom HTTP adapter
 
-## Universal HTTP adapter
+The HTTP bridge allows software that does not speak MCP/native TRUYN to participate. Generic custom HTTP JSON and compatible provider paths exist as reference adapters.
 
-The local HTTP bridge exposes identity/discovery/request/result operations for software that does not speak MCP.
+A compatibility bridge is not a separate security domain. Execution-capable requests still require valid provider authorization and billing responsibility.
 
-It is a compatibility bridge, not a separate security domain. Execution-capable routes must converge on the same provider ownership/authorization decision as every other transport.
+## Multi-cloud reference providers
 
-## Live provider adapters
+The public provider layer contains reference adapters across independent clouds and modalities.
 
-The repository contains executable provider-adapter work for multiple provider/cloud paths. Live calls require credentials/identity and provider access controlled by the person or runtime making the call.
+| Capability | Google Cloud / Vertex AI | Microsoft Azure / Foundry |
+|---|---|---|
+| reasoning / text | Gemini | GPT, Grok, DeepSeek, Llama, Mistral, Kimi |
+| image generation | Google image-generation track | Azure OpenAI `gpt-image`, FLUX adapter |
+| video generation | Veo | Sora adapter |
 
-A live adapter demonstration proves technical interoperability with that provider API. It does **not** publish the upstream account as a public TRUYN capability.
+Concrete model/deployment availability varies with provider entitlement, region and quota. Adapter implementation is not the same as a guaranteed live deployment.
 
-When running a provider locally, use a separate TRUYN identity/home for independently attributable provider nodes and only credentials you control.
+Media outputs use normalized artifact references/provenance rather than requiring large image/video binaries inside TRUYN result envelopes.
 
-## Public relay warning
+See `../architecture/MULTI_CLOUD_PROVIDER_ARCHITECTURE.md`.
 
-The approved architecture allows a public relay and private providers to coexist, but that safety requires the provider-security gate to be implemented:
+## Decentralized network status
+
+The interoperability layer is no longer limited to the original HTTP relay MVP. The repository contains:
+
+- real QUIC/UDP;
+- signed authenticated peer sessions;
+- Kademlia discovery/state RPC;
+- direct-first P2P signed-envelope routing;
+- explicit relay fallback;
+- STUN/same-port hole-punch reference path;
+- peer-record lifecycle and DHT durability/repair slices.
+
+Real-network evidence has progressed through:
+
+- v0.1 Connect — closed;
+- Class B real multi-host — accepted;
+- Class C heterogeneous Azure/GCP WAN/NAT/relay — accepted;
+- Class D-100 real-node scale — active, not yet accepted at the 2026-08-20 snapshot.
+
+## Public relay / private provider rule
+
+A public TRUYN relay can coexist with private providers because network reachability and provider entitlement are separate.
 
 ```text
-authenticate requester
-      ↓
-resolve requester tenant
-      ↓
-authorize provider owner/visibility
-      ↓
-resolve billing / quota
-      ↓
-dispatch
+public network reachability
+        ≠
+permission to consume provider quota
 ```
 
-Until the central ownership/default-deny/security-test gate is implemented, do not treat the current MVP/PoC relay as a general public paid-provider service.
-
-A public TRUYN endpoint never means "use the operator's AI account".
-
-## Security acceptance target
-
-The interoperability layer is ready for public paid-provider coexistence only when tests prove:
-
-- foreign requester → owner-private provider = denied before upstream call;
-- known private provider ID = still denied;
-- forged owner/tenant field = ignored/denied;
-- legacy HTTP/WebSocket/MCP paths = same authorization decision;
-- user → own BYOK provider = allowed when valid;
-- explicitly shared provider = allowed only within explicit policy/quota.
-
-See `../architecture/THREAT_MODEL.md`.
+Knowing a private provider ID, discovering the host, traversing NAT, connecting over QUIC or implementing a custom client does not authorize execution.
 
 ## Current completion boundary
 
-Implemented/experimented paths in the repository demonstrate signed identities, capability discovery/routing, adapters, MCP/HTTP interoperability, provider execution and benchmark work.
+Implemented/evidenced reference functionality includes:
 
-Not claimed as complete by this documentation update:
+- signed identities and capability exchange;
+- MCP/HTTP/provider interoperability;
+- multi-cloud provider adapters;
+- BYOK setup/reference credential locality;
+- owner-only/default-deny provider policy;
+- authorization-aware discovery/dispatch;
+- provider-host second check and billing gate;
+- real QUIC/Kademlia underlay;
+- Class B and Class C real-network acceptance;
+- semantic retrieval/distributed retrieval;
+- Trustability/claim/provenance reference slices.
 
-- production provider ownership/tenant ACL;
-- authorization-aware private discovery;
-- BYOK setup UX and final secure credential storage;
-- billing/quota enforcement;
-- private provider backchannel/control-plane separation;
-- complete legacy-route convergence on central authorization;
-- safe public coexistence with owner-funded providers;
-- decentralized discovery / DHT / QUIC / NAT traversal;
-- full Trustability / provenance graph / Sybil defense.
+Still not claimed complete:
+
+- accepted 100- and 1,000-real-node productionization gates;
+- repeated large randomized open-network adversarial resilience;
+- carrier-field CGNAT universality;
+- production commercial account/org/tenant control plane;
+- durable sponsored/prepaid/subscription accounting deployment;
+- general compute sandbox/compute-near-data productionization;
+- stable SDK/ecosystem certification;
+- installer/updater/rollback operational closure;
+- stable `TRUYN/1` and production mainnet.
+
+Read the current truth in:
+
+- [Implementation Status](../architecture/IMPLEMENTATION_STATUS.md)
+- [Network Productionization Gate](../architecture/NETWORK_PRODUCTIONIZATION_GATE.md)
+- [Productionization Execution Plan](../operations/PRODUCTIONIZATION_EXECUTION_PLAN.md)
+- [Benchmark Evidence](../benchmarks/README.md)
+- [Roadmap](../../ROADMAP.md).

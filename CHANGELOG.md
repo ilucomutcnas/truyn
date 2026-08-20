@@ -4,6 +4,20 @@ All notable factual repository changes should be recorded here without publishin
 
 ## Unreleased
 
+### Documentation / productionization synchronization — 2026-08-20
+
+- Synchronized all status-bearing documentation with the actual network implementation/evidence boundary instead of the stale 2026-08-17 snapshot.
+- Promoted Class C heterogeneous WAN/reachability to its factual **ACCEPTED / PASS** state using the durable 2026-08-18 evidence report; the accepted boundary includes cross-cloud direct QUIC, real packet-path partition/heal, real cloud NAT, double-NAT/CGNAT-like outbound behavior, authenticated relay fallback/outage/recovery and cleanup.
+- Kept the Class C limitation explicit: the accepted result does not claim carrier-operated field CGNAT.
+- Recorded Class D-100 as the active acceptance gate, **not** a completed claim. At this snapshot pinned V14 run `32367799512` tests immutable commit `b835c8fa0283a004d616ce8d25d7aa78cee1a1c0`; immutable preflight and Azure login passed while the real 4-host/100-node campaign remained active.
+- Documented the canonical D-100 thresholds from `benchmarks/scale/class-d.js`: 100 real nodes/identities/QUIC sockets, ≥4 hosts, ≥99% baseline/healed routing, recovery/convergence p95 ≤120s, required churn/partition/Byzantine/Sybil/eclipse/collusion exercise, zero listed safety violations and complete cleanup.
+- Documented D-1000 implementation readiness separately from evidence maturity: scaffolding exists, but no accepted 1,000-real-node result exists; evaluator defaults require 1,000 real nodes/identities/sockets, ≥10 hosts, ≥99% routing, recovery/convergence p95 ≤180s, zero acknowledged write loss and cleanup.
+- Added `docs/operations/PRODUCTIONIZATION_EXECUTION_PLAN.md` as the canonical current engineering sequence: D-100 → security-green evidence commit → Class C regression pin → D-1000 → randomized heterogeneous adversarial campaign → operational/durability/SRE/distribution closure → stable TRUYN/1/mainnet.
+- Updated `ROADMAP.md`, `IMPLEMENTATION_STATUS.md`, `NETWORK_PRODUCTIONIZATION_GATE.md`, `NETWORK_UNDERLAY_V01.md`, network/testnet operations, security status and documentation indexes to use one consistent maturity vocabulary and gate order.
+- Updated `MVP_QUICKSTART.md` and `MVP_AI_INTEROP.md` so they no longer describe decentralized QUIC/Kademlia, provider ownership/default-deny authorization, BYOK and private-provider security as future work. The original relay MVP remains documented as the fastest local proof, not as the ceiling of the current implementation.
+- Updated the benchmark ledger without rewriting historical reports: Class B/Class C remain durable accepted evidence; the first D-100 attempt remains preserved negative evidence; a future D-100 PASS must be a new report.
+- Reaffirmed that temporary privileged benchmark workflows are execution mechanisms, not durable public operations/evidence, and that scale work must not weaken provider authorization/billing boundaries.
+
 ### Roadmap / status / documentation synchronization — 2026-08-17
 
 - Added `docs/architecture/IMPLEMENTATION_STATUS.md` as the canonical factual maturity matrix separating Defined, Implemented, CI-proven, bounded real-testnet, Productionized, Internet-scale and Stable states.
@@ -22,7 +36,8 @@ All notable factual repository changes should be recorded here without publishin
 - Closed the signed peer-record lifecycle prerequisite at CI evidence level: automatic renewal before expiry, renewed sequence durability before dissemination, authenticated `peer.announce`, later-contact PING repair and stale P2P/DHT-RPC client invalidation.
 - Prevented re-entrant stale-client teardown when a newer signed peer record arrives inside an active PING control response by deferring ingestion until the native QUIC response stack has unwound.
 - Class B real multi-host proof remains historical evidence; the later peer-lifecycle CI slice does not relabel that run as renewal/WAN/NAT evidence.
-- Class C heterogeneous packet-path WAN, NAT/CGNAT and relay-failure evidence remains open.
+- At the 2026-08-17 snapshot Class C remained open; it was subsequently accepted on 2026-08-18 and is now indexed as durable Class C evidence.
+- Added durable verified expired peer-record recovery hints while keeping live peer lookup/snapshot behavior fail-closed; this correction supports the active D-100 V14 recovery path.
 
 ### Security hardening — 2026-08-17
 
@@ -35,7 +50,7 @@ All notable factual repository changes should be recorded here without publishin
 ### Security sanitization
 
 - Removed public privileged cloud provisioning/bootstrap/smoke/deployment workflows where they exposed unnecessary operational execution details and kept safe public CI/read-only boundaries.
-- Removed temporary Class C cloud IAM/runner workflows after their operational use; public CI now again contains only allowlisted non-privileged workflow surface.
+- Removed temporary Class C and later scale acceptance cloud runner workflows after bounded operational use; public `main` returns to the normal allowlisted non-privileged workflow surface after pinned runs are started.
 - Removed obsolete experimental privileged provider/bootstrap paths from the public repository.
 - Made production-style relay node registration explicit-enrollment only by default.
 - Made provider dispatch trusted/authorized requester only by default while preserving separately explicit public-network/provider opt-ins.

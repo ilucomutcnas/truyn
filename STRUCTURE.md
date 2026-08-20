@@ -2,6 +2,8 @@
 
 TRUYN is a **single evolving codebase**. Software releases are tracked with Git tags/releases, while compatibility-sensitive network contracts coexist in versioned directories.
 
+**Status snapshot:** 2026-08-20 — current software `0.1.0-dev`; `TRUYN/1` remains draft; Class B and Class C productionization evidence are accepted; Class D-100 real-node acceptance is active and not yet terminally accepted.
+
 The repository deliberately separates four kinds of versioning:
 
 ```text
@@ -15,9 +17,9 @@ A newer node may support multiple protocol generations simultaneously. We do **n
 
 ## Root documents
 
-- `README.md` — public project entry point and practical value.
+- `README.md` — public project entry point, value and current status summary.
 - `MANIFESTO.md` — values and direction.
-- `WHITEPAPER.md` — academic and engineering rationale.
+- `WHITEPAPER.md` — academic/engineering rationale and research basis.
 - `STRUCTURE.md` — repository ownership and versioning model.
 - `ROADMAP.md` — staged implementation/maturity sequence.
 - `LICENSE` — 0BSD.
@@ -34,11 +36,12 @@ Different documents have different jobs:
 2. `proto/<generation>/` — **machine-readable wire schema** implementing normative semantics.
 3. `docs/architecture/ARCHITECTURE_CONTRACT.md` — subsystem ownership and cross-document mapping.
 4. `docs/architecture/IMPLEMENTATION_STATUS.md` — canonical factual maturity/status.
-5. subsystem architecture documents — current implementation contracts + target boundaries.
+5. subsystem architecture documents — implementation contracts + target boundaries.
 6. `docs/benchmarks/` — durable measured evidence.
-7. `WHITEPAPER.md` — scientific rationale/models/research basis.
-8. `README.md` — human-facing summary; must not redefine protocol behavior.
-9. `ROADMAP.md` — sequencing/maturity; must not silently redefine protocol semantics.
+7. `docs/operations/PRODUCTIONIZATION_EXECUTION_PLAN.md` — current hard-gated productionization execution order.
+8. `WHITEPAPER.md` — scientific rationale/models/research basis.
+9. `README.md` — human-facing summary; must not redefine protocol behavior.
+10. `ROADMAP.md` — maturity sequencing; must not silently redefine protocol semantics or measured evidence.
 
 If these disagree, the inconsistency must be corrected rather than treated as a feature.
 
@@ -48,8 +51,8 @@ If these disagree, the inconsistency must be corrected rather than treated as a 
 - `spec/` — normative protocol specifications, versioned by protocol generation.
 - `proto/` — machine-readable wire schemas.
 - `core/` — protocol-independent domain logic: identity, capability, intent, claims, content-addressed objects, provenance, trust, state, routing policy and crypto.
-- `core/security/` — **implemented reference owner** for provider access policy, relay provider policy, provider billing safety, protected-node/backchannel helpers and sponsored entitlement verification. Rich account/tenant membership, commercial entitlement administration and distributed accounting remain broader future control-plane work.
-- `network/` — real QUIC transport, authenticated sessions, Kademlia discovery/DHT RPC/state, P2P routing, relay, NAT traversal and testnet mechanics.
+- `core/security/` — implemented reference owner for provider access policy, relay provider policy, provider billing safety, protected-node/backchannel helpers and sponsored entitlement verification. Rich account/tenant membership, commercial entitlement administration and distributed accounting remain broader control-plane work.
+- `network/` — real QUIC transport, authenticated sessions, Kademlia discovery/DHT RPC/state, P2P routing, relay, NAT traversal, reachability, durability/repair and testnet mechanics.
 - `node/` — long-running TRUYN Node/daemon composition, service lifecycle, config/storage/health/telemetry ownership as it matures.
 - `runtime/` — executable relay/provider runtime composition and security configuration.
 - `cli/` — user-facing `truyn` commands, including implemented reference BYOK onboarding. CLI gates are UX/defense-in-depth, not authoritative provider security.
@@ -66,12 +69,12 @@ If these disagree, the inconsistency must be corrected rather than treated as a 
 - `config/` — defaults plus `local`, `testnet`, `mainnet` profiles. Public network mode never overrides provider visibility.
 - `bootstrap/` — bootstrap/discovery configuration/contracts for testnet/mainnet.
 - `tests/` — unit, integration, interoperability, network, trust, compute, security and adversarial tests.
-- `benchmarks/` — benchmark code/workloads for latency, tokens, bandwidth, inference cost, trust and scale. Durable reports live in `docs/benchmarks/`.
-- `simulations/` — controlled multi-node, network-failure, trust and adversarial simulations.
+- `benchmarks/` — benchmark code/workloads/harnesses for latency, tokens, bandwidth, inference cost, trust and real-network scale. Durable reports live in `docs/benchmarks/`.
+- `simulations/` — controlled multi-node, network-failure, trust and adversarial simulations. Simulated node scale does not substitute for Class D real-node evidence.
 - `examples/` — runnable interoperability/use-case examples; no live private secrets/topology.
-- `scripts/` — development/testing/benchmark/release helpers.
+- `scripts/` — development/testing/benchmark/release helpers, including bounded productionization acceptance orchestration.
 - `migrations/` — explicit config/storage/protocol migration tooling target.
-- `.github/` — CI and temporary bounded operational workflows; permanent public workflows must respect the repository security boundary.
+- `.github/` — permanent public CI plus temporary bounded operational workflows. Privileged benchmark runners are removed from permanent `main` after pinned start; durable sanitized reports are the evidence record.
 
 ## Documentation tree
 
@@ -82,15 +85,15 @@ docs/
 ├── compatibility/    software/protocol/node/adapter compatibility
 ├── concepts/         explanatory concepts
 ├── decisions/        ADR-style decisions
-├── getting-started/  user setup/BYOK/MVP guidance
-├── operations/       node/testnet/billing operational contracts
+├── getting-started/  current setup/BYOK/MVP guidance
+├── operations/       node/testnet/billing + productionization execution plan
 ├── security/         security architecture status + operational security
 └── trustability/     claim/trust lifecycle architecture
 ```
 
-`operations`, `security` and `compatibility` are no longer placeholders; they contain explicit current baselines.
+`operations`, `security` and `compatibility` are active documentation layers, not placeholders.
 
-## Public architecture documents
+## Public architecture / status documents
 
 Canonical provider/network/security/status documents include:
 
@@ -99,6 +102,7 @@ docs/architecture/
 ├── ARCHITECTURE_CONTRACT.md
 ├── IMPLEMENTATION_STATUS.md
 ├── NETWORK_UNDERLAY_V01.md
+├── NETWORK_PRODUCTIONIZATION_GATE.md
 ├── PROVIDER_OWNERSHIP.md
 ├── AUTHORIZATION_MODEL.md
 ├── RELAY_SECURITY.md
@@ -115,10 +119,18 @@ docs/architecture/
 └── KADEMLIA_QUIC_TRUST_TESTNET.md
 ```
 
-User-facing BYOK setup contract:
+Canonical current productionization sequence:
+
+```text
+docs/operations/PRODUCTIONIZATION_EXECUTION_PLAN.md
+```
+
+User-facing setup:
 
 ```text
 docs/getting-started/BYOK.md
+docs/getting-started/MVP_QUICKSTART.md
+docs/getting-started/MVP_AI_INTEROP.md
 ```
 
 Detailed operations/security/compatibility:
@@ -222,7 +234,7 @@ start authenticated networking
 TRUYN Node online
 ```
 
-Parts of this lifecycle (identity, config, BYOK, networking/testnet runtime) exist in reference form. Verified cross-platform installers, stable service registration and signed updater/rollback remain v0.8/v1.0 work.
+Identity/config/BYOK/networking/testnet runtime exist in reference form. Verified cross-platform installers, stable service registration and signed updater/rollback remain v0.8/v1.0 work.
 
 ## Intended local runtime data
 
@@ -241,7 +253,7 @@ Parts of this lifecycle (identity, config, BYOK, networking/testnet runtime) exi
 └── db/
 ```
 
-This is a logical ownership model, not a requirement to store secrets as plaintext. Private keys/provider credential material SHOULD use operating-system/cloud secure storage where possible.
+This is a logical ownership model, not a requirement to store secrets as plaintext. Private keys/provider credentials SHOULD use operating-system/cloud secure storage where possible.
 
 ## Network modes
 
@@ -255,4 +267,17 @@ Network mode affects reachability/compatibility; it never grants access to a pri
 
 ## Current maturity
 
-Current software is `0.1.0-dev`; `TRUYN/1` remains draft. The v0.1 underlay is implemented/CI-proven and bounded real QUIC/Kademlia trust-network evidence exists. Stable mainnet, production commercial tenancy/accounting, large real-node WAN scale and stable updater/compatibility contracts remain future gates.
+Current software is `0.1.0-dev`; `TRUYN/1` remains draft.
+
+Current real-network progression:
+
+```text
+v0.1 Connect — implemented / CI-proven
+Class B — accepted / PASS
+Class C — accepted / PASS
+Class D-100 — active / terminal acceptance pending
+Class D-1000 — harness exists, accepted evidence absent
+mainnet — not productionized / not stable
+```
+
+Strong semantic/trust/provider evidence exists in parallel, but semantic block scale and adapter breadth do not substitute for the remaining real-node/adversarial/operational gates.

@@ -1,8 +1,12 @@
 # TRUYN Roadmap
 
-This roadmap describes intended engineering milestones and factual maturity. Protocol semantics live in `spec/`; measured claims live in `docs/benchmarks/`.
+This roadmap describes intended engineering milestones and **factual maturity**, not marketing sequencing. Normative protocol semantics live in `spec/`; canonical implementation status lives in `docs/architecture/IMPLEMENTATION_STATUS.md`; measured claims live in `docs/benchmarks/`; the current engineering execution order lives in `docs/operations/PRODUCTIONIZATION_EXECUTION_PLAN.md`.
 
-The implementation has not evolved strictly in version order: semantic, provider, Trustability and benchmark layers advanced faster than the physical peer-network underlay. As of 2026-08-17, v0.1 Connect is implemented as a real QUIC/Kademlia/P2P/NAT reference underlay, while several later roadmap slices already have bounded implementations/evidence. The immediate engineering priority is network failure/churn durability and real multi-host scale rather than additional semantic sophistication.
+**Snapshot:** 2026-08-20  
+**Software:** `0.1.0-dev`  
+**Protocol generation:** `TRUYN/1` draft
+
+The implementation has not evolved strictly in version order. Semantic retrieval, provider interoperability/security, Trustability and benchmark layers advanced faster than the physical peer-network underlay. The lower network has now caught up substantially: v0.1 Connect is implemented, Class B is accepted, and Class C heterogeneous WAN/reachability is accepted. The active productionization gate is **Class D-100 real-node scale**.
 
 ## Maturity scale
 
@@ -16,228 +20,332 @@ Every substantial subsystem should be described with an explicit maturity state:
 6. **Internet-scale proven** — large real-node/WAN/adversarial evidence exists.
 7. **Stable** — compatibility and upgrade guarantees are declared.
 
-A design document does not promote implementation maturity. Conversely, once implementation/evidence exists, the roadmap must stop describing that slice as purely future work.
+A design document does not promote implementation maturity. A temporary workflow does not promote a gate. Once implementation/evidence exists, roadmap wording must stop describing that slice as future-only work.
 
-Canonical status matrix: `docs/architecture/IMPLEMENTATION_STATUS.md`.
+## Current productionization position
 
-## Current snapshot — 2026-08-17
+```text
+v0.1 Connect reference underlay — CLOSED
+        ↓
+Class B real multi-host — ACCEPTED / PASS
+        ↓
+Class C heterogeneous WAN / NAT / relay — ACCEPTED / PASS
+        ↓
+Class D-100 real nodes — ACTIVE ACCEPTANCE GATE
+        ↓
+Class D-1000 real nodes — OPEN
+        ↓
+randomized heterogeneous adversarial campaign — OPEN
+        ↓
+operational / durability / SRE / distribution closure — OPEN
+        ↓
+stable TRUYN/1 + production mainnet — NOT REACHED
+```
 
-| Area | Current maturity |
+### Current D-100 acceptance state
+
+The pinned V14 acceptance workflow started as GitHub Actions run `32367799512`, testing immutable commit `b835c8fa0283a004d616ce8d25d7aa78cee1a1c0`. At this documentation snapshot, immutable security/acceptance preflight and Azure login had passed and the real four-host / 100-node campaign was still running.
+
+This status is intentionally written as **active / not yet accepted**. D-100 is promoted only after campaign success, canonical evaluator rc=0, terminal verifier rc=0, cleanup proof and durable sanitized evidence under `docs/benchmarks/`.
+
+## Current subsystem snapshot
+
+| Area | Current maturity / factual boundary |
 |---|---|
-| TRUYN/1 logical protocol | Defined / partial implementation; still draft |
+| TRUYN/1 logical protocol | Defined + substantial implementation; still draft |
 | v0.1 Connect underlay | Implemented + CI-proven |
-| Signed peer-record lifecycle | Implemented + CI-proven; durable renewal/dissemination/PING repair and stale-client invalidation |
-| Real QUIC/Kademlia trust-network slice | Bounded real-testnet proven (four-node bounded topology) |
+| Signed peer-record lifecycle | Implemented + CI-proven, including durable renewal/dissemination/repair and expired durable recovery hints |
+| Kademlia/DHT durability and repair | Implemented reference slices + CI/real-testnet evidence |
+| Class B real multi-host | **ACCEPTED / PASS** |
+| Class C heterogeneous WAN/reachability | **ACCEPTED / PASS** |
+| Class D-100 real-node scale | Harness/evaluator implemented; **acceptance run active, no durable PASS yet** |
+| Class D-1000 real-node scale | Provisioning/campaign/evaluator scaffolding exists; no accepted evidence |
 | Semantic retrieval/index/distributed retrieval | Implemented + extensive CI/benchmark evidence |
-| Provider ownership/authorization/BYOK | Implemented reference baseline |
-| Billing safety | BYOK/owner-funded implemented; sponsored guard implemented but requires external durable store/issuer; prepaid/subscription fail closed |
-| Trustability v1/v2 | Implemented + CI/benchmark proven; bounded real-network trust slice proven |
-| Multi-cloud text/image/video providers | Implemented reference adapter paths; individual deployment availability varies |
-| Network productionization | **In progress — Class B closed; Class C heterogeneous WAN/reachability remains next** |
-| Operations / compatibility / separate security docs | Documentation baseline implemented in current synchronization |
+| Provider ownership/authorization/BYOK | Implemented reference baseline + negative tests |
+| Billing safety | BYOK/owner-funded implemented; sponsored activation requires signed entitlement + durable atomic usage store; prepaid/subscription fail closed |
+| Trustability v1/v2 | Implemented + CI/benchmark evidence; bounded real-network trust slice proven |
+| Multi-cloud text/image/video providers | Implemented reference adapter paths; individual cloud entitlement/quota may block deployments |
+| Operations / compatibility / separate security docs | Baseline implemented; production lifecycle still incomplete |
 | Mainnet | Not productionized / not stable |
 
-## Immediate security baseline — before wider paid-provider coexistence
+## Accepted Class C boundary
 
-The repository already contains an executable MVP/reference implementation and cloud/testnet work. The following boundaries are implemented and must remain invariant:
+Permanent evidence: `docs/benchmarks/CLASS_C_HETEROGENEOUS_WAN_2026-08-18.md`.
 
-1. provider ownership bound to authenticated/signed provider identity rather than requester-controlled metadata;
-2. server-side authorization before dispatch and again at provider-host execution;
-3. default-deny/fail-closed provider behavior;
-4. authorization-aware discovery hiding unauthorized private providers;
-5. BYOK-by-default onboarding and credential locality;
-6. billing responsibility checks before chargeable calls;
-7. authenticated protected-provider backchannel option and public/control-plane separation;
-8. legacy/fast/WebSocket execution paths preserving equivalent authorization semantics;
-9. owner-funded/public-provider misconfiguration denied;
-10. negative tests proving foreign users cause zero provider execution;
-11. low-level provider policy as well as runtime provider defaults to `owner-only`;
-12. local-development mode cannot coexist with public/production relay markers;
-13. oversized HTTP body closes the connection after 413;
-14. origin proof is expiry-bound and rotation-capable;
-15. sponsored mode cannot activate without actor-bound signed entitlement verification and an atomic durable usage store.
+Class C now proves, within the accepted bounded topology:
 
-This baseline is not a claim that rich account/organization tenancy, commercial entitlement issuance, deployed durable accounting, full cloud perimeter proof or mainnet security operations are complete.
+- two cloud providers and two regions;
+- direct GCP → Azure QUIC with zero relay calls on the direct path;
+- real packet-path UDP partition and heal;
+- real Azure NAT gateway with a private node carrying no public IP and observed NAT source;
+- two-layer double-NAT / CGNAT-like outbound path;
+- authenticated relay fallback for a NAT-hidden target;
+- relay outage fail-closed;
+- relay recovery;
+- successful ephemeral cleanup.
 
-See:
+It does **not** claim carrier-operated field CGNAT, 100/1,000 real-node scale, randomized long-duration adversarial resilience, Internet-scale throughput or production SLO closure.
 
-- `docs/architecture/PROVIDER_OWNERSHIP.md`
-- `docs/architecture/AUTHORIZATION_MODEL.md`
-- `docs/architecture/RELAY_SECURITY.md`
-- `docs/architecture/BILLING_BOUNDARY.md`
-- `docs/architecture/BYOK_ARCHITECTURE.md`
-- `docs/architecture/THREAT_MODEL.md`
-- `docs/security/`
+## Immediate critical path
 
-## v0.1 — Connect — **IMPLEMENTED / CI-PROVEN REFERENCE UNDERLAY**
+The current critical path is intentionally narrow:
 
-Closed: **2026-08-17**
+1. **finish and terminally evaluate Class D-100 V14**;
+2. if PASS, preserve immutable/sanitized D-100 evidence and return the resulting source/evidence tree to normal security-green CI;
+3. regression-pin the accepted Class C contract against the then-current network implementation after D-100 fixes;
+4. run accepted Class D-1000 with real processes/identities/QUIC sockets and post-cleanup evidence;
+5. run repeated randomized adversarial campaigns across heterogeneous failure domains;
+6. close durability/operations/SRE/install/update/compatibility gaps;
+7. stabilize TRUYN/1 and public mainnet semantics.
 
-- [x] Cryptographic node identity independent of IP address
-- [x] Real QUIC/UDP underlay session
-- [x] Signed HELLO/ACCEPT authenticated peer sessions with replay/freshness checks
-- [x] Signed peer/bootstrap records
-- [x] Kademlia 256-bit XOR routing table
-- [x] Iterative peer discovery over authenticated QUIC
-- [x] Networked `PING`, `FIND_NODE`, `STORE`, `FIND_VALUE`
-- [x] Direct peer-to-peer signed TRUYN envelope communication
-- [x] Direct-first routing with explicit relay fallback
-- [x] STUN binding discovery
-- [x] Same-QUIC-socket UDP hole-punch path
-- [x] Explicit bounded backpressure instead of silent direct-path loss
-- [x] `OFFER`, `NEED`, `RESULT`
-- [x] Minimal `REVOKE` path for offers/keys/results
-- [x] `local` and initial `testnet` network profiles
-- [x] Provider-policy semantics compatible with owner/tenant/default-private authorization
-- [x] Composed `TruynNetworkNode` lifecycle
-- [x] Full repository regression/security gate green on the v0.1 evidence commit
+Do not substitute more semantic benchmark scale for real network scale.
 
-Evidence:
+## Network Productionization Gate — PRIMARY
 
-- `docs/architecture/NETWORK_UNDERLAY_V01.md`
-- `docs/benchmarks/V01_CONNECT_GATE_2026-08-17.md`
+### Closed prerequisites
 
-Closing v0.1 is **not** a claim that Internet-scale churn, universal NAT traversal, DHT durability or mainnet SLOs are already proved.
-
-## Network Productionization Gate — **PRIMARY NEXT**
-
-Do this before treating TRUYN as a production decentralized network.
-
-Closed/CI-proven prerequisites now include:
-
-- [x] repeatable real multi-host public/private testnet — Class B four-host proof;
+- [x] cryptographic node identity independent of IP address;
+- [x] real QUIC/UDP underlay;
+- [x] authenticated signed peer sessions;
+- [x] Kademlia discovery/state RPC;
+- [x] direct-first signed TRUYN envelope path with explicit relay fallback;
+- [x] STUN and same-port hole-punch reference path;
+- [x] repeatable real multi-host testnet — Class B;
 - [x] crash/restart identity and durable routing/DHT state reference slice;
 - [x] DHT replication, quorum and repair reference slice;
 - [x] automatic signed peer-record renewal before expiry;
-- [x] renewed peer-record sequence persisted before dissemination;
+- [x] renewed sequence persisted before dissemination;
 - [x] authenticated peer-record announcement and later-contact PING repair;
 - [x] stale P2P/DHT-RPC client invalidation on newer signed peer state;
-- [x] durable bounded admission/backpressure process-restart reference slice.
+- [x] durable bounded admission/backpressure process-restart reference slice;
+- [x] heterogeneous Azure/GCP failure domains — Class C;
+- [x] packet-path WAN partition/heal — Class C;
+- [x] real cloud NAT observation — Class C;
+- [x] double-NAT / CGNAT-like emulation — Class C;
+- [x] authenticated relay outage/fallback/recovery — Class C.
 
-Still open and required:
+### Open productionization gates
 
-- packet-path WAN partition and healing behavior;
-- heterogeneous multi-region / multi-provider failure domains;
-- NAT/reachability matrix across real network environments, including NAT/CGNAT;
-- relay degradation, outage and fallback recovery with production SLO evidence;
-- replicated accepted-work survival after underlying host/volume loss;
-- 100 simultaneously running real network nodes;
-- 1,000 simultaneously running real network nodes;
-- Byzantine provider/log behavior, stale-record floods, Sybil pressure, eclipse attempts and collusion exercises on the real underlay;
-- measured convergence, packet/byte overhead, p50/p95/p99 and failure recovery across the heterogeneous WAN gate.
+- [ ] accepted 100 simultaneously running real network nodes;
+- [ ] accepted 1,000 simultaneously running real network nodes;
+- [ ] randomized long-running churn/partition/Byzantine/Sybil/eclipse/collusion campaigns;
+- [ ] carrier-field NAT/CGNAT validation where practical/required;
+- [ ] replicated accepted-work survival after underlying host/volume loss;
+- [ ] production SLO/observability/incident closure;
+- [ ] production distribution/update/rollback lifecycle;
+- [ ] stable mainnet compatibility and bootstrap policy.
 
-Class B is durable evidence. The signed peer-record lifecycle is a later CI-proven productionization prerequisite. Neither fact closes Class C heterogeneous WAN/reachability or Class D scale/adversarial gates.
+### Class D-100 canonical contract
 
-This gate is deliberately prioritized ahead of further semantic-router feature expansion.
+Current evaluator requires:
 
-## v0.2 — Verify — **SUBSTANTIALLY IMPLEMENTED / SCALE GATE OPEN**
+- exactly 100 real nodes;
+- exactly 100 distinct identities;
+- exactly 100 distinct QUIC sockets;
+- at least 4 host failure domains;
+- baseline routing ≥99%;
+- healed routing ≥99%;
+- recovery p95 ≤120 seconds;
+- convergence p95 ≤120 seconds;
+- zero acknowledged write loss;
+- zero invalid signed state accepted;
+- zero stale revoked receipt accepted;
+- churn, packet partition, Byzantine, Sybil, eclipse and collusion phases exercised;
+- cleanup complete.
 
-Original milestone scope:
+No lowered-threshold PASS is acceptable.
 
-- `CLAIM`, `ATTEST`
-- Active verification behaviors: `CHALLENGE`, `VERIFY`, `DISPUTE`
-- Domain-scoped claim-centric Trustability
-- Signed provenance
-- Trust evidence aggregation and `TRUST_RECEIPT`
+### Class D-1000 canonical default contract
 
-Current factual state: claim-centric Trustability, provenance/independence, active lifecycle and receipts have executable implementations and CI/benchmark evidence. A real four-node libp2p QUIC/Kademlia trust-lifecycle slice also proves decentralized verifier discovery, replicated signed transparency/revocation state and churn in a bounded topology.
+The implemented evaluator defaults require:
 
-Remaining: larger real-node adversarial scale, stronger operational authority/revocation lifecycle and stable protocol guarantees.
+- exactly 1,000 real nodes / distinct identities / distinct QUIC sockets;
+- at least 10 host failure domains;
+- routing ≥99%;
+- recovery p95 ≤180 seconds;
+- convergence p95 ≤180 seconds;
+- zero acknowledged write loss;
+- cleanup complete.
+
+The existence of D-1000 scripts does not mean the gate is closed.
+
+## Provider/security baseline — MUST REMAIN INVARIANT
+
+The current reference implementation already enforces the following core boundary and network-scale work must not weaken it:
+
+1. provider ownership bound to signed/authenticated provider identity, not requester-controlled metadata;
+2. low-level provider policy defaults to `owner-only`;
+3. authorization-aware provider discovery and dispatch;
+4. provider-host second authorization before adapter execution;
+5. BYOK/private provider credentials remain local/provider-runtime concerns;
+6. billing responsibility/entitlement checked before chargeable execution;
+7. owner-funded public execution denied without explicit policy;
+8. public network registration/dispatch require explicit master opt-in;
+9. legacy/fast/WebSocket/MCP paths do not bypass the central policy;
+10. sponsored mode cannot activate without actor-bound signed entitlement verification and durable atomic usage accounting;
+11. local-development mode cannot coexist with public/production relay markers;
+12. oversized HTTP body closes the connection after 413;
+13. origin proof is expiry-bound/rotation-capable;
+14. benchmark evidence is redact-not-delete.
+
+These controls are reference/CI security boundaries, not a claim that rich commercial account/organization tenancy or production cloud perimeter operations are complete.
+
+## v0.1 — Connect — **IMPLEMENTED / CI-PROVEN REFERENCE UNDERLAY**
+
+Closed: **2026-08-17**.
+
+- [x] cryptographic node identity;
+- [x] real QUIC/UDP;
+- [x] authenticated peer sessions;
+- [x] signed bootstrap/peer records;
+- [x] Kademlia routing and iterative discovery;
+- [x] networked `PING`, `FIND_NODE`, `STORE`, `FIND_VALUE`;
+- [x] direct signed envelope communication;
+- [x] direct-first routing + relay fallback;
+- [x] STUN and same-port hole-punch path;
+- [x] bounded backpressure;
+- [x] `OFFER`, `NEED`, `RESULT`, minimal `REVOKE`;
+- [x] composed `TruynNetworkNode` lifecycle.
+
+Later productionization work has strengthened persistence/renewal/repair but does not change the historical v0.1 acceptance meaning.
+
+## v0.2 — Verify — **SUBSTANTIALLY IMPLEMENTED / LARGE REAL-NETWORK GATE OPEN**
+
+Implemented/evidenced slices include:
+
+- `CLAIM`, `ATTEST` reference semantics;
+- challenge/verify/dispute behaviors;
+- domain/claim-scoped Trustability;
+- signed provenance/source-lineage independence;
+- trust evidence aggregation and `TRUST_RECEIPT`;
+- bounded decentralized verifier discovery and replicated trust lifecycle state.
+
+Still open: larger real-node adversarial scale, stronger production authority/revocation operations and stable protocol guarantees.
 
 ## v0.3 — Synchronize — **PARTIAL / MIXED**
 
-Original milestone scope:
+Implemented/evidenced:
 
-- Content-addressed `OBJECT`
-- `STATE`, `DELTA`, `SUBSCRIBE`
-- Cache, freshness, object reuse and invalidation semantics
+- content-addressed context techniques;
+- persistent semantic index lifecycle;
+- immutable-vector reuse;
+- incremental roots/invalidation;
+- distributed immutable-root retrieval.
 
-Current factual state: content-addressed context techniques, persistent semantic index lifecycle, immutable-vector reuse, invalidation and distributed retrieval are implemented and benchmarked. Full generic `STATE`/`DELTA`/`SUBSCRIBE` runtime behavior across the decentralized network remains broader than the currently productionized slices.
+Still broader than implemented:
+
+- generic network-wide `STATE`/`DELTA`/`SUBSCRIBE` runtime semantics and stable lifecycle guarantees.
 
 ## v0.4 — Execute & Route — **PARTIAL / MIXED**
 
-Original milestone scope:
+Implemented/evidenced reference slices:
 
-- `COMPUTE` and compute-near-data execution
-- Execution policy and sandbox boundary
-- Multiple-provider capability routing
-- Authorization-before-ranking for private/shared/network providers
-- Trust/latency/freshness/cost/privacy selection within the authorized provider set
-- Explicit deadline, urgency, priority and decision-value inputs
-- Verification effort proportional to decision risk/value
-- Billing/usage attribution for chargeable capability execution
+- multiple-provider capability routing;
+- authorization-before-ranking/dispatch;
+- provider-host security/billing gates;
+- semantic routing;
+- provider usage/latency metadata;
+- cost/trust/privacy policy inputs in architecture.
 
-Current factual state: multiple-provider routing paths, authorization-before-dispatch, provider-host security/billing gates, semantic routing and provider usage/latency metadata are implemented reference slices. General `COMPUTE` sandboxing, resource isolation, complete compute-near-data execution and durable commercial attribution remain incomplete.
+Open:
+
+- general `COMPUTE` sandbox/resource isolation;
+- complete compute-near-data execution;
+- production durable commercial attribution/control plane.
 
 ## v0.5 — Interoperate — **PARTIAL / ACTIVE**
 
-Original milestone scope:
+Implemented reference surfaces include:
 
-- MCP adapter
-- Initial OpenAI/Codex, Claude, Gemini, Grok, Perplexity and local-model adapters
-- Provider adapter contract for Copilot, Amazon Q, Cursor, Windsurf, Mistral, DeepSeek, Qwen, Cohere, NVIDIA and future systems
-- Public SDK surface
-- User-facing BYOK setup for common providers
-- Secure local/provider-runtime credential storage contract
+- MCP;
+- HTTP/custom-provider paths;
+- OpenAI/OpenAI-compatible;
+- Anthropic;
+- Azure OpenAI/Foundry model families;
+- Vertex Gemini/image/Veo reference paths;
+- BYOK CLI profiles for supported providers;
+- multi-cloud text/image/video adapters;
+- public adapter/SDK building blocks.
 
-Current factual state: MCP, OpenAI/OpenAI-compatible, Anthropic, Azure OpenAI, Vertex Gemini, custom HTTP and additional project reference provider paths exist; BYOK CLI setup exists for supported profiles; multi-cloud text/image/video reference adapters are present. Broad ecosystem certification and stable public SDK compatibility remain open.
+Open: broad ecosystem certification and stable public SDK compatibility promises.
 
 ## v0.6 — Resist & Scale Trust — **IMPLEMENTED SLICES / LARGE REAL-NETWORK GATE OPEN**
 
-Original milestone scope:
+Implemented/evidenced slices include provenance/independence, active trust lifecycle, receipts, decentralized placement/read quorum, signed transparency/revocation state and bounded Byzantine/equivocation handling.
 
-- Provenance graph
-- Independence/lineage estimation
-- Sybil/collusion defenses
-- Domain history
-- Scalable attestation aggregation, receipts, pruning and revocation propagation
-- Provider/resource abuse and anomaly controls
-
-Current factual state: provenance/independence, active trust lifecycle, receipts, decentralized placement/read-quorum work, signed transparency/revocation state, fork/equivocation detection semantics and bounded adversarial evidence exist. Large real-network Sybil/eclipse/collusion pressure remains unproven.
+Open: large real-network Sybil/eclipse/collusion resistance under declared attacker budgets and long-duration operation.
 
 ## v0.7 — Measure — **ACTIVE / STRONG EVIDENCE LEDGER**
 
-- [x] Token, latency, request-body, semantic, trust and infrastructure-scale benchmark work exists
-- [x] Reproducible public reports are preserved under `docs/benchmarks/`
-- [x] Provider-security negative evidence is published without exposing private topology where safe
-- [ ] 100/1,000 simultaneously running **real** network-node evidence
-- [ ] large real-WAN adversarial distributions
+- [x] token/latency/request-body/context-efficiency benchmarks;
+- [x] semantic accuracy/stability/scale/load evidence;
+- [x] distributed retrieval and Trustability evidence;
+- [x] provider-security negative evidence;
+- [x] v0.1 underlay evidence;
+- [x] Class B multi-host evidence;
+- [x] Class C heterogeneous WAN/NAT/relay evidence;
+- [ ] accepted Class D-100 real-node evidence;
+- [ ] accepted Class D-1000 real-node evidence;
+- [ ] repeated large real-WAN adversarial distributions.
 
-100/1,000-node simulations or 100k semantic blocks must not be described as 100/1,000 simultaneously running real network nodes.
+Infrastructure-scale semantic blocks and simulated nodes must never be described as simultaneously running real network nodes.
 
-## v0.8 — Operate — **PARTIAL / DOCUMENTATION BASELINE NOW ESTABLISHED**
+## v0.8 — Operate — **PARTIAL**
 
-Original milestone scope:
+Implemented/reference:
 
-- Verified installers for Windows/macOS/Linux
-- Service registration for `truynd`
-- First-run identity/config/bootstrap lifecycle
-- Signed updater channels
-- Compatibility preflight, migrations and rollback
-- Recovery and uninstall paths
-- Operational separation of public data plane, owner control plane and provider backchannels
+- executable node/relay/provider/testnet paths;
+- persistent identity/network state slices;
+- operations/security/compatibility documentation baseline;
+- cloud testnet orchestration/evidence tooling;
+- cleanup discipline for ephemeral gates.
 
-Current factual state: executable node/relay/provider/testnet paths and cloud test exercises exist; `docs/operations/`, `docs/security/` and `docs/compatibility/` now document the current boundary. Production installers, signed updater/rollback and stable mainnet operations remain open.
+Open:
+
+- verified installers for Windows/macOS/Linux;
+- stable `truynd` service lifecycle;
+- signed updater channels;
+- compatibility preflight/migrations/rollback;
+- production SLO/monitoring/on-call/runbook closure;
+- stable public mainnet operations.
 
 ## v1.0 — Stabilize — **NOT REACHED**
 
-- Stable `TRUYN/1`
-- Stable node identity, provider policy, object/state, execution and Trustability contracts
-- Stable `local` / `testnet` / `mainnet` semantics
-- Production-grade authorization/tenant/BYOK boundary
-- Production-grade upgrade/rollback contract
-- Public mainnet bootstrap
-- Documented SDKs and compatibility policy
+Required before v1.0/stable TRUYN/1:
+
+- productionized network scale/recovery/security/operations gates;
+- stable TRUYN/1 protocol contract;
+- stable node identity/provider policy/object/state/execution/Trustability contracts;
+- stable `local` / `testnet` / `mainnet` semantics;
+- production-grade authorization/tenant/BYOK boundary for intended commercial modes;
+- production-grade upgrade/rollback contract;
+- public mainnet bootstrap;
+- documented stable SDK/compatibility policy.
 
 ## Post-v1 research track — Capability Economy
 
-- Capability price discovery
-- Provider quality/price/trust competition
-- Optional settlement adapters
-- Resource accounting and receipts
-- Explicit provider-owner entitlements for cross-owner execution
-- No mandatory blockchain or single payment rail
+- capability price discovery;
+- provider quality/price/trust competition;
+- optional settlement adapters;
+- resource accounting/receipts;
+- explicit provider-owner entitlements for cross-owner execution;
+- no mandatory blockchain or single payment rail.
+
+## Evidence discipline
+
+`docs/benchmarks/` is the durable public evidence ledger. A gate is not promoted because a workflow exists or because an Actions artifact temporarily exists. A durable report should preserve, when safe:
+
+- tested commit SHA;
+- run/workflow identity;
+- artifact identity/digest;
+- topology/workload;
+- fixed acceptance thresholds;
+- measured results;
+- limitations/corrections;
+- cleanup result.
+
+Security cleanup redacts sensitive values; it does not delete measured reports.
 
 ## Versioning rule
 
-Software releases (`v0.1.0`, `v1.0.0`) and network protocol generations (`TRUYN/1`, `TRUYN/2`) are deliberately separate. A newer node may support multiple protocol generations simultaneously. Current software remains `0.1.0-dev`; `TRUYN/1` remains draft until explicitly stabilized.
+Software releases (`v0.1.0`, `v1.0.0`) and network protocol generations (`TRUYN/1`, `TRUYN/2`) remain separate. A newer node may support multiple protocol generations simultaneously. Current software remains `0.1.0-dev`; `TRUYN/1` remains draft until explicitly stabilized.
