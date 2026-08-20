@@ -23,3 +23,45 @@ jobs:
         env:
           TRUYN_LOCAL_DEVELOPMENT: '1'
       - run: git diff --check
+
+  d1000-preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install --ignore-scripts --no-audit --no-fund
+      - name: Prepare exact D-1000 harness without cloud access
+        shell: bash
+        run: |
+          set -o pipefail
+          set +e
+          TRUYN_CLASS_D1000_PREPARE_ONLY=1 bash scripts/class-d-1000-final-acceptance.sh 2>&1 | tee d1000-preflight.log
+          rc=${PIPESTATUS[0]}
+          set -e
+          status=FAIL
+          if [[ "$rc" -eq 0 ]]; then status=PASS; fi
+          printf '{"status":"%s","exitCode":%s,"commit":"%s","runId":"%s","safetyContract":"v2","remoteDht":"target-side-quic"}\n' "$status" "$rc" "$GITHUB_SHA" "$GITHUB_RUN_ID" > d1000-preflight.json
+          exit "$rc"
+      - name: Execute exact-commit local safety probes
+        run: node benchmarks/scale/class-d-1000-safety-probes.js | tee d1000-local-safety-probes.json
+      - name: Run D-1000 contract tests
+        run: node --test tests/class-d-1000-safety-probes.test.js tests/class-d-1000-evidence.test.js tests/class-d-1000-terminal-verifier.test.js tests/class-d-shell-harness.test.js | tee d1000-contract-tests.log
+      - name: Verify clean diff
+        run: git diff --check
+      - name: Save D-1000 preflight evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: d1000-preflight-${{ github.sha }}
+          if-no-files-found: warn
+          retention-days: 30
+          path: |
+            d1000-preflight.log
+            d1000-preflight.json
+            d1000-local-safety-probes.json
+            d1000-contract-tests.log
