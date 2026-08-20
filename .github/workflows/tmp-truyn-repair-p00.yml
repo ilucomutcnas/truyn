@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: write
+  statuses: write
 
 jobs:
   repair:
@@ -16,15 +17,36 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: main
-      - name: Assemble, verify and replace p00
-        env:
-          GH_TOKEN: ${{ github.token }}
+          fetch-depth: 2
+      - id: assemble
+        name: Assemble verified p00
         shell: bash
         run: |
           set -euo pipefail
-          # All four source subparts are pre-verified by commit statuses.
-          cat _tmp_parts/p00a _tmp_parts/p00b _tmp_parts/p00c _tmp_parts/p00d > /tmp/p00
-          test "$(sha256sum /tmp/p00 | awk '{print $1}')" = 'a900539e13ce8e2511c52059e426594b1eb4c009bd51486250996062b015c1de'
-          sha="$(gh api "repos/${GITHUB_REPOSITORY}/contents/_tmp_parts/p00?ref=main" --jq .sha)"
-          content="$(base64 -w0 /tmp/p00)"
-          gh api --method PUT -H 'Accept: application/vnd.github+json' "repos/${GITHUB_REPOSITORY}/contents/_tmp_parts/p00" -f message='ci: repair static release part 00' -f content="$content" -f sha="$sha" -f branch=main >/dev/null
+          cat _tmp_parts/p00a _tmp_parts/p00b _tmp_parts/p00c _tmp_parts/p00d > _tmp_parts/p00
+          test "$(sha256sum _tmp_parts/p00 | awk '{print $1}')" = 'a900539e13ce8e2511c52059e426594b1eb4c009bd51486250996062b015c1de'
+      - id: write
+        name: Commit repaired p00
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -- _tmp_parts/p00
+          git diff --cached --quiet && exit 0
+          git commit -m 'ci: repair static release part 00'
+          git push origin HEAD:main
+      - name: Publish repair status
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ASSEMBLE: ${{ steps.assemble.outcome }}
+          WRITE: ${{ steps.write.outcome }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for pair in "assemble:$ASSEMBLE" "write:$WRITE"; do
+            context="${pair%%:*}"; outcome="${pair#*:}"
+            if [[ "$outcome" == success ]]; then state=success; else state=failure; fi
+            gh api --method POST -H 'Accept: application/vnd.github+json' "repos/${GITHUB_REPOSITORY}/statuses/${GITHUB_SHA}" -f state="$state" -f context="truyn-repair/${context}" >/dev/null
+          done
