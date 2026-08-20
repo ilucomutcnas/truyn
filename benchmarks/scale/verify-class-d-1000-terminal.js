@@ -14,7 +14,6 @@ try {
 
 const evaluation = evaluateAzureClassD1000Evidence(raw);
 const n = evaluation.normalized || {};
-const d = evaluation.derivation || {};
 const checks = {
   canonicalEvaluator: evaluation.passed === true && evaluation.failed.length === 0,
   realNodes: n.topology?.realNodeCount === 1000,
@@ -22,18 +21,18 @@ const checks = {
   distinctQuicSockets: n.topology?.distinctQuicSocketCount === 1000,
   noSyntheticNodes: n.topology?.syntheticNodeCount === 0,
   hostFailureDomains: Number(n.topology?.hostCount) >= 20,
-  packetPartitionProbe: d.packetPartitionProbe === true,
   baselineRouting: Number(n.routing?.baselineSuccessRatio) >= 0.99,
   healedRouting: Number(n.routing?.healedSuccessRatio) >= 0.99,
   convergenceP95: Number(n.convergence?.latencyMs?.p95) <= 180000,
   recoveryP95: Number(n.recovery?.latencyMs?.p95) <= 180000,
-  invalidSignedStateProbe: d.invalidSignedStateProbe === true,
-  staleReceiptProbe: d.staleReceiptProbe === true,
-  providerAuthorizationProbe: d.providerAuthorizationProbe === true,
   noAcknowledgedWriteLoss: n.safety?.acknowledgedWriteLossCount === 0,
   noInvalidSignedStateAccepted: n.safety?.invalidSignedStateAcceptedCount === 0,
   noStaleRevokedReceiptAccepted: n.safety?.staleRevokedReceiptAcceptedCount === 0,
   noUnauthorizedProviderExecution: n.safety?.unauthorizedProviderExecutionCount === 0,
+  remoteInvalidSignatureProbe: evaluation.derivation?.invalidSignedStateProbe === true,
+  staleReceiptProbe: evaluation.derivation?.staleReceiptProbe === true,
+  providerAuthorizationProbe: evaluation.derivation?.providerAuthorizationProbe === true,
+  realPacketPartitionProbe: evaluation.derivation?.packetPartitionProbe === true,
   cleanupConfirmed: n.cleanup?.complete === true,
   zeroRemainingResources: n.cleanup?.remainingResources === 0 && raw?.cleanup?.remainingResources === 0
 };
@@ -45,7 +44,7 @@ const result = {
   checks,
   testedCommit: raw?.testedCommit || null,
   workflowRunId: raw?.workflowRunId || null,
-  derivation: d,
+  derivation: evaluation.derivation,
   normalized: n
 };
 process.stdout.write(`${JSON.stringify(result)}\n`);
