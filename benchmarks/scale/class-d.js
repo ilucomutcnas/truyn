@@ -181,24 +181,42 @@ export function evaluateClassD100(observations, thresholds = CLASS_D_100_THRESHO
   return { class: 'D-100', passed: failed.length === 0, checks, failed, thresholds };
 }
 
-export function evaluateClassD1000(observations, {
-  nodeCount = 1000,
-  minimumHostCount = 10,
-  routingSuccess = 0.99,
-  convergenceP95Ms = 180_000,
-  recoveryP95Ms = 180_000
-} = {}) {
+export const CLASS_D_1000_THRESHOLDS = Object.freeze({
+  nodeCount: 1000,
+  minimumHostCount: 20,
+  baselineRoutingSuccess: 0.99,
+  healedRoutingSuccess: 0.99,
+  convergenceP95Ms: 180_000,
+  recoveryP95Ms: 180_000,
+  acknowledgedWriteLossMax: 0,
+  invalidSignedStateAcceptedMax: 0,
+  staleRevokedReceiptAcceptedMax: 0,
+  unauthorizedProviderExecutionMax: 0,
+  remainingResourcesMax: 0
+});
+
+export function evaluateClassD1000(observations, thresholds = CLASS_D_1000_THRESHOLDS) {
+  const routingBaseline = metric(observations, 'routing.baselineSuccessRatio');
+  const routingHealed = metric(observations, 'routing.healedSuccessRatio');
+  const convergenceP95 = metric(observations, 'convergence.latencyMs.p95');
+  const recoveryP95 = metric(observations, 'recovery.latencyMs.p95');
   const checks = {
-    realNodes: metric(observations, 'topology.realNodeCount') === nodeCount,
-    distinctIdentities: metric(observations, 'topology.distinctIdentityCount') === nodeCount,
-    distinctQuicSockets: metric(observations, 'topology.distinctQuicSocketCount') === nodeCount,
-    hostFailureDomains: metric(observations, 'topology.hostCount', 0) >= minimumHostCount,
-    routing: metric(observations, 'routing.baselineSuccessRatio', 0) >= routingSuccess,
-    convergenceP95: metric(observations, 'convergence.latencyMs.p95', Infinity) <= convergenceP95Ms,
-    recoveryP95: metric(observations, 'recovery.latencyMs.p95', Infinity) <= recoveryP95Ms,
-    noAcknowledgedWriteLoss: metric(observations, 'safety.acknowledgedWriteLossCount', Infinity) === 0,
-    cleanup: metric(observations, 'cleanup.complete') === true
+    realNodes: metric(observations, 'topology.realNodeCount') === thresholds.nodeCount,
+    distinctIdentities: metric(observations, 'topology.distinctIdentityCount') === thresholds.nodeCount,
+    distinctQuicSockets: metric(observations, 'topology.distinctQuicSocketCount') === thresholds.nodeCount,
+    noSyntheticNodes: metric(observations, 'topology.syntheticNodeCount', Infinity) === 0,
+    hostFailureDomains: metric(observations, 'topology.hostCount', 0) >= thresholds.minimumHostCount,
+    baselineRouting: Number.isFinite(routingBaseline) && routingBaseline >= thresholds.baselineRoutingSuccess,
+    healedRouting: Number.isFinite(routingHealed) && routingHealed >= thresholds.healedRoutingSuccess,
+    convergenceP95: Number.isFinite(convergenceP95) && convergenceP95 <= thresholds.convergenceP95Ms,
+    recoveryP95: Number.isFinite(recoveryP95) && recoveryP95 <= thresholds.recoveryP95Ms,
+    noAcknowledgedWriteLoss: metric(observations, 'safety.acknowledgedWriteLossCount', Infinity) <= thresholds.acknowledgedWriteLossMax,
+    noInvalidSignedStateAccepted: metric(observations, 'safety.invalidSignedStateAcceptedCount', Infinity) <= thresholds.invalidSignedStateAcceptedMax,
+    noStaleRevokedReceiptAccepted: metric(observations, 'safety.staleRevokedReceiptAcceptedCount', Infinity) <= thresholds.staleRevokedReceiptAcceptedMax,
+    noUnauthorizedProviderExecution: metric(observations, 'safety.unauthorizedProviderExecutionCount', Infinity) <= thresholds.unauthorizedProviderExecutionMax,
+    cleanup: metric(observations, 'cleanup.complete') === true,
+    noRemainingResources: metric(observations, 'cleanup.remainingResources', Infinity) <= thresholds.remainingResourcesMax
   };
   const failed = Object.entries(checks).filter(([, passed]) => !passed).map(([name]) => name);
-  return { class: 'D-1000', passed: failed.length === 0, checks, failed };
+  return { class: 'D-1000', passed: failed.length === 0, checks, failed, thresholds };
 }
