@@ -95,6 +95,16 @@ export class PeerDiscovery {
     return [...this.records.values()].filter((record) => verifyPeerRecord(record, { now }).ok).map((record) => structuredClone(record));
   }
 
+  durableSnapshot() {
+    // Persistence needs enough cryptographically authenticated endpoint history to
+    // recover after a lease expires while this node is offline. Expired records are
+    // retained only in durable state; live get()/snapshot() remain fail-closed and
+    // iterative recovery must obtain a fresh signed record before authority returns.
+    return [...this.records.values()]
+      .filter((record) => verifyPeerRecord(record, { allowExpired: true }).ok)
+      .map((record) => structuredClone(record));
+  }
+
   restore(records = [], options = {}) {
     let accepted = 0;
     for (const record of records) {
@@ -114,6 +124,7 @@ export class PeerDiscovery {
       const current = verifyPeerRecord(record);
       if (current.ok) continue;
       if (current.reason !== 'peer_record_expired') continue;
+      this.records.set(record.nodeId, structuredClone(record));
       this.routing.upsert({
         nodeId: record.nodeId,
         endpoints: record.endpoints,
