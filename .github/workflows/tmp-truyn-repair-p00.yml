@@ -1,0 +1,29 @@
+name: tmp-truyn-repair-p00
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/tmp-truyn-repair-p00.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - name: Assemble, verify and replace p00
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat _tmp_parts/p00a _tmp_parts/p00b _tmp_parts/p00c _tmp_parts/p00d > /tmp/p00
+          test "$(sha256sum /tmp/p00 | awk '{print $1}')" = 'a900539e13ce8e2511c52059e426594b1eb4c009bd51486250996062b015c1de'
+          sha="$(gh api "repos/${GITHUB_REPOSITORY}/contents/_tmp_parts/p00?ref=main" --jq .sha)"
+          content="$(base64 -w0 /tmp/p00)"
+          gh api --method PUT -H 'Accept: application/vnd.github+json' "repos/${GITHUB_REPOSITORY}/contents/_tmp_parts/p00" -f message='ci: repair static release part 00' -f content="$content" -f sha="$sha" -f branch=main >/dev/null
