@@ -61,20 +61,26 @@ test('final launchers patch known native/runtime hazards before cloud execution'
 
   const d1000 = await readFile('scripts/class-d-1000-final-acceptance.sh', 'utf8');
   assert.match(d1000, /14400000/);
-  assert.match(d1000, /truin-d1000@.*truyn-d1000@/s);
+  assert.match(d1000, /\('truy n', 'truyn'\)/);
+  assert.match(d1000, /\('truin-d1000', 'truyn-d1000'\)/);
+  assert.match(d1000, /noncanonical D-1000 prepared token survived/);
   assert.match(d1000, /TRUYN_CLASS_D1000_PREPARE_ONLY/);
   assert.match(d1000, /TRUYN_CLASS_D1000_PREPARED_HARNESS=PASS/);
-  assert.match(d1000, /STAGE=invalid-signed-state/);
-  assert.match(d1000, /STAGE=packet-partition/);
-  assert.match(d1000, /STAGE=healed-routing/);
+  assert.match(d1000, /class-d-1000-remote-dht-probe\.js/);
+  assert.match(d1000, /remoteDht=target-side-quic/);
+  assert.match(d1000, /paths=canonical/);
 });
 
 test('D-1000 campaign derives every strict safety counter from an executed probe', async () => {
   const { readFile } = await import('node:fs/promises');
   const campaign = await readFile('benchmarks/scale/class-d-azure-1000-campaign.sh', 'utf8');
 
-  assert.match(campaign, /TRUYN_TESTNET_FAULT_CONTROL=1/);
-  assert.match(campaign, /\/faults\/store/);
+  assert.match(campaign, /class-d-1000-remote-dht-probe\.js/);
+  assert.match(campaign, /target_endpoint=/);
+  assert.match(campaign, /REMOTE_QUIC/);
+  assert.match(campaign, /TARGET_REJECTED/);
+  assert.match(campaign, /invalid_dht_record:dht_record_signature/);
+  assert.doesNotMatch(campaign, /\/faults\/store/);
   assert.match(campaign, /class-d-1000-safety-probes\.js/);
   assert.match(campaign, /invalid_signed_state_accepted=\$\(marker/);
   assert.match(campaign, /stale_receipt_accepted=\$\(marker/);
@@ -82,9 +88,22 @@ test('D-1000 campaign derives every strict safety counter from an executed probe
   assert.match(campaign, /"invalidSignedStateAcceptedCount":\$\{invalid_signed_state_accepted\}/);
   assert.match(campaign, /"staleRevokedReceiptAcceptedCount":\$\{stale_receipt_accepted\}/);
   assert.match(campaign, /"unauthorizedProviderExecutionCount":\$\{unauthorized_provider_execution\}/);
+  assert.match(campaign, /"remoteQuicControl":true/);
+  assert.match(campaign, /"targetRejected":true/);
   assert.doesNotMatch(campaign, /"invalidSignedStateAcceptedCount":0/);
   assert.doesNotMatch(campaign, /"staleRevokedReceiptAcceptedCount":0/);
   assert.doesNotMatch(campaign, /"unauthorizedProviderExecutionCount":0/);
+});
+
+test('D-1000 campaign source uses canonical runtime paths for remote payloads', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const campaign = await readFile('benchmarks/scale/class-d-azure-1000-campaign.sh', 'utf8');
+  assert.doesNotMatch(campaign, /truy n/);
+  assert.doesNotMatch(campaign, /truin-d1000/);
+  assert.doesNotMatch(campaign, /truqyn/);
+  assert.match(campaign, /\/var\/lib\/truyn-d1000\/records-by-host\.json/);
+  assert.match(campaign, /systemctl stop truyn-d1000@/);
+  assert.match(campaign, /cd \/opt\/truyn/);
 });
 
 test('D-1000 campaign proves packet-path failure and a full post-heal routing gate', async () => {
@@ -114,5 +133,5 @@ test('D-1000 prepared harness validates strict safety contract without cloud acc
     env: { ...process.env, TRUYN_CLASS_D1000_PREPARE_ONLY: '1' }
   });
   assert.equal(run.status, 0, run.stderr || run.stdout);
-  assert.match(run.stdout, /TRUYN_CLASS_D1000_PREPARED_HARNESS=PASS safetyContract=v2/);
+  assert.match(run.stdout, /TRUYN_CLASS_D1000_PREPARED_HARNESS=PASS safetyContract=v2 remoteDht=target-side-quic paths=canonical/);
 });
