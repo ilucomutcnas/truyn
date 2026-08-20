@@ -5,7 +5,6 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 TMP="$(mktemp -d)"
-trap 'rm -rf "$TMP"' RETURN
 cp benchmarks/scale/class-d-azure-1000-provision.sh "$TMP/provision.sh"
 cp benchmarks/scale/class-d-azure-1000-campaign.sh "$TMP/campaign.sh"
 
@@ -51,11 +50,9 @@ echo "TRUYN_CLASS_D1000_PREPARED_HARNESS=PASS safetyContract=v2"
 
 if [[ "${TRUYN_CLASS_D1000_PREPARE_ONLY:-0}" == 1 ]]; then
   rm -rf "$TMP"
-  trap - RETURN
   exit 0
 fi
 
 source "$TMP/provision.sh"
 source "$TMP/campaign.sh"
 rm -rf "$TMP"
-trap - RETURN
