@@ -4,7 +4,7 @@ import { evaluateAzureClassD1000Evidence } from '../benchmarks/scale/class-d-100
 
 function passing() {
   return {
-    scope: '1000-real-process-scale',
+    scope: '1000-real-process-scale+safety-contract-v2',
     testedCommit: 'abc123',
     workflowRunId: '42',
     topology: {
@@ -17,25 +17,55 @@ function passing() {
     },
     routing: {
       baselineSuccessRatio: 0.995,
-      postRestartSuccessRatio: 0.994
+      postRestartSuccessRatio: 0.994,
+      healedSuccessRatio: 0.993
     },
     convergence: { latencyMs: { p95: 120_000 } },
     recovery: { latencyMs: { p95: 130_000 } },
+    adversarial: {
+      packetPartition: {
+        exercised: true,
+        realPacketPath: true,
+        probeCount: 20,
+        blockedSuccesses: 0,
+        recoveryMs: 12_000
+      }
+    },
     safety: {
       acknowledgedWriteLossCount: 0,
       invalidSignedStateAcceptedCount: 0,
       staleRevokedReceiptAcceptedCount: 0,
-      unauthorizedProviderExecutionCount: 0
+      unauthorizedProviderExecutionCount: 0,
+      probes: {
+        invalidSignedState: {
+          realNetworkDht: true,
+          validRecordAcks: 3,
+          forgedStoreHttpCode: '500'
+        },
+        staleReceipt: {
+          exactCommitLocalVerifier: true,
+          reason: 'trust_receipt_v2_lifecycle_head_stale'
+        },
+        providerAuthorization: {
+          exactCommitAdapterHost: true,
+          accessDenied: true,
+          adapterExecutions: 0
+        }
+      }
     },
     cleanup: { confirmed: true, remainingResources: 0 }
   };
 }
 
-test('real D-1000 evidence passes only with exact process/identity/socket counts, safety and cleanup', () => {
+test('real D-1000 evidence passes only with exact topology, probe-backed safety and cleanup', () => {
   const result = evaluateAzureClassD1000Evidence(passing());
   assert.equal(result.passed, true);
   assert.deepEqual(result.failed, []);
-  assert.equal(result.derivation.healedRoutingMetric, 'routing.postRestartSuccessRatio');
+  assert.equal(result.derivation.healedRoutingMetric, 'routing.healedSuccessRatio after real packet partition');
+  assert.equal(result.derivation.invalidSignedStateProbe, true);
+  assert.equal(result.derivation.staleReceiptProbe, true);
+  assert.equal(result.derivation.providerAuthorizationProbe, true);
+  assert.equal(result.derivation.packetPartitionProbe, true);
 });
 
 test('logical count cannot substitute for 1000 real processes', () => {
@@ -62,9 +92,33 @@ test('D-1000 evidence fails closed on cleanup, write loss, synthetic nodes or in
   assert.ok(result.failed.includes('hostFailureDomains'));
 });
 
+test('zero safety counters without executable-probe provenance cannot pass', () => {
+  const raw = passing();
+  delete raw.safety.probes;
+  const result = evaluateAzureClassD1000Evidence(raw);
+  assert.equal(result.passed, false);
+  assert.ok(result.failed.includes('noInvalidSignedStateAccepted'));
+  assert.ok(result.failed.includes('noStaleRevokedReceiptAccepted'));
+  assert.ok(result.failed.includes('noUnauthorizedProviderExecution'));
+  assert.equal(result.derivation.invalidSignedStateProbe, false);
+  assert.equal(result.derivation.staleReceiptProbe, false);
+  assert.equal(result.derivation.providerAuthorizationProbe, false);
+});
+
+test('post-restart routing cannot substitute for real partition-heal routing', () => {
+  const raw = passing();
+  delete raw.adversarial.packetPartition;
+  raw.routing.postRestartSuccessRatio = 1;
+  raw.routing.healedSuccessRatio = 1;
+  const result = evaluateAzureClassD1000Evidence(raw);
+  assert.equal(result.passed, false);
+  assert.ok(result.failed.includes('healedRouting'));
+  assert.equal(result.derivation.packetPartitionProbe, false);
+});
+
 test('D-1000 evidence fails closed when healed routing or safety counters are absent', () => {
   const raw = passing();
-  delete raw.routing.postRestartSuccessRatio;
+  delete raw.routing.healedSuccessRatio;
   delete raw.safety.invalidSignedStateAcceptedCount;
   delete raw.safety.staleRevokedReceiptAcceptedCount;
   delete raw.safety.unauthorizedProviderExecutionCount;
