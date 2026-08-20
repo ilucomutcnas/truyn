@@ -17,7 +17,7 @@ anchor = """if 'TRUYN_CLASS_D_100_CLEANUP_RETRY' not in s or 'az resource delete
 if src.count(anchor) != 1:
     raise SystemExit(f'expected exactly one V11 hardening anchor, got {src.count(anchor)}')
 
-addition = r'''
+addition = r"""
 
 # V12: V11 reached the final healed-baseline after every adversarial phase, but
 # sampled immediately after recovery had only been proven from host0 into the
@@ -94,7 +94,7 @@ if 'assert elapsed <= 120000' not in campaign:
 if 'stage=healed-convergence status=PASS' not in campaign:
     raise SystemExit('V12 healed convergence diagnostic missing')
 campaign_path.write_text(campaign)
-'''
+"""
 
 src = src.replace(anchor, anchor + addition, 1)
 out.write_text(src)
