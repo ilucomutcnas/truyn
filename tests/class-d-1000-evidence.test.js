@@ -38,9 +38,10 @@ function passing() {
       unauthorizedProviderExecutionCount: 0,
       probes: {
         invalidSignedState: {
-          realNetworkDht: true,
+          remoteQuicControl: true,
+          targetRejected: true,
           validRecordAcks: 3,
-          forgedStoreHttpCode: '500'
+          rejectionReason: 'invalid_dht_record:dht_record_signature'
         },
         staleReceipt: {
           exactCommitLocalVerifier: true,
@@ -62,6 +63,7 @@ test('real D-1000 evidence passes only with exact topology, probe-backed safety 
   assert.equal(result.passed, true);
   assert.deepEqual(result.failed, []);
   assert.equal(result.derivation.healedRoutingMetric, 'routing.healedSuccessRatio after real packet partition');
+  assert.equal(result.derivation.invalidSignedStateMetric, 'target-side QUIC dht.store rejection of signature-tampered record');
   assert.equal(result.derivation.invalidSignedStateProbe, true);
   assert.equal(result.derivation.staleReceiptProbe, true);
   assert.equal(result.derivation.providerAuthorizationProbe, true);
@@ -103,6 +105,17 @@ test('zero safety counters without executable-probe provenance cannot pass', () 
   assert.equal(result.derivation.invalidSignedStateProbe, false);
   assert.equal(result.derivation.staleReceiptProbe, false);
   assert.equal(result.derivation.providerAuthorizationProbe, false);
+});
+
+test('sender-side or ambiguous DHT rejection cannot substitute for target-side QUIC rejection', () => {
+  const raw = passing();
+  raw.safety.probes.invalidSignedState.remoteQuicControl = false;
+  raw.safety.probes.invalidSignedState.targetRejected = false;
+  raw.safety.probes.invalidSignedState.rejectionReason = 'TRUYN_DHT_RPC_TIMEOUT';
+  const result = evaluateAzureClassD1000Evidence(raw);
+  assert.equal(result.passed, false);
+  assert.ok(result.failed.includes('noInvalidSignedStateAccepted'));
+  assert.equal(result.derivation.invalidSignedStateProbe, false);
 });
 
 test('post-restart routing cannot substitute for real partition-heal routing', () => {
