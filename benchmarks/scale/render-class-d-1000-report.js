@@ -15,7 +15,7 @@ const value = (v) => v == null || Number.isNaN(v) ? 'not-recorded' : String(v);
 const bool = (v) => v === true ? 'PASS' : 'FAIL';
 const failed = evaluation.failed.length ? evaluation.failed.join(', ') : 'none';
 
-const markdown = `# TRUYN Class D — 1,000 Real Nodes — 2026-08-18
+const markdown = `# TRUYN Class D — 1,000 Real Nodes
 
 **Result:** **${evaluation.passed ? 'PASS' : 'FAIL'}**
 
@@ -28,6 +28,7 @@ This report is generated from post-cleanup evidence through the canonical \`eval
 - raw evidence SHA-256: \`${digest}\`
 - evidence scope: \`${raw.scope || 'not-recorded'}\`
 - canonical evaluator: \`benchmarks/scale/class-d.js#evaluateClassD1000\`
+- healed-routing derivation: \`${evaluation.derivation?.healedRoutingMetric || 'not-recorded'}\`
 - failed canonical checks: ${failed}
 
 ## Canonical acceptance result
@@ -38,23 +39,27 @@ ${Object.entries(evaluation.checks).map(([name, passed]) => `| ${name} | ${bool(
 
 ## Real topology
 
-| Metric | Measured |
-|---|---:|
-| real node processes | ${value(n.topology.realNodeCount)} |
-| distinct cryptographic identities | ${value(n.topology.distinctIdentityCount)} |
-| distinct QUIC sockets/endpoints | ${value(n.topology.distinctQuicSocketCount)} |
-| host failure domains | ${value(n.topology.hostCount)} |
-| topology declared synthetic nodes | ${value(raw?.topology?.syntheticNodeCount)} |
-| bootstrap | ${value(raw?.topology?.bootstrap)} |
+| Metric | Measured | Gate |
+|---|---:|---:|
+| real node processes | ${value(n.topology.realNodeCount)} | exactly ${evaluation.thresholds.nodeCount} |
+| distinct cryptographic identities | ${value(n.topology.distinctIdentityCount)} | exactly ${evaluation.thresholds.nodeCount} |
+| distinct QUIC sockets/endpoints | ${value(n.topology.distinctQuicSocketCount)} | exactly ${evaluation.thresholds.nodeCount} |
+| synthetic nodes | ${value(n.topology.syntheticNodeCount)} | 0 |
+| host failure domains | ${value(n.topology.hostCount)} | ≥ ${evaluation.thresholds.minimumHostCount} |
+| bootstrap | ${value(raw?.topology?.bootstrap)} | measured |
 
 ## Scale measurements
 
 | Metric | Measured | Gate |
 |---|---:|---:|
-| baseline routing success | ${value(n.routing.baselineSuccessRatio)} | ≥ ${evaluation.thresholds.routingSuccess} |
+| baseline routing success | ${value(n.routing.baselineSuccessRatio)} | ≥ ${evaluation.thresholds.baselineRoutingSuccess} |
+| healed/post-restart routing success | ${value(n.routing.healedSuccessRatio)} | ≥ ${evaluation.thresholds.healedRoutingSuccess} |
 | convergence p95, ms | ${value(n.convergence.latencyMs.p95)} | ≤ ${evaluation.thresholds.convergenceP95Ms} |
 | recovery p95, ms | ${value(n.recovery.latencyMs.p95)} | ≤ ${evaluation.thresholds.recoveryP95Ms} |
-| acknowledged durable write loss | ${value(n.safety.acknowledgedWriteLossCount)} | 0 |
+| acknowledged durable write loss | ${value(n.safety.acknowledgedWriteLossCount)} | ${evaluation.thresholds.acknowledgedWriteLossMax} |
+| invalid signed state accepted | ${value(n.safety.invalidSignedStateAcceptedCount)} | ${evaluation.thresholds.invalidSignedStateAcceptedMax} |
+| stale revoked receipt accepted | ${value(n.safety.staleRevokedReceiptAcceptedCount)} | ${evaluation.thresholds.staleRevokedReceiptAcceptedMax} |
+| unauthorized provider execution | ${value(n.safety.unauthorizedProviderExecutionCount)} | ${evaluation.thresholds.unauthorizedProviderExecutionMax} |
 | aggregate node RSS, KB | ${value(raw?.resources?.aggregateNodeRssKb)} | measured |
 | measured QUIC/UDP bytes | ${value(raw?.resources?.measuredQuicUdpBytes)} | measured |
 | observed node processes at end | ${value(raw?.resources?.observedNodeProcesses)} | measured |
@@ -62,13 +67,13 @@ ${Object.entries(evaluation.checks).map(([name, passed]) => `| ${name} | ${bool(
 ## Cleanup
 
 - ephemeral infrastructure cleanup confirmed: **${n.cleanup.complete ? 'true' : 'false'}**
-- remaining resources recorded by harness: ${value(raw?.cleanup?.remainingResources)}
+- remaining resources: ${value(n.cleanup.remainingResources)} (gate ≤ ${evaluation.thresholds.remainingResourcesMax})
 
 ## Interpretation boundary
 
-A PASS proves the bounded **1,000 simultaneously running real-node scale gate** under the measured Azure topology: real process/identity/socket counts, at least ten host failure domains, routing success, convergence/recovery distribution bounds, zero acknowledged-write loss and verified cleanup.
+A PASS proves the bounded **1,000 simultaneously running real-node scale gate** under the declared topology: exact real process/identity/socket counts, the committed host-failure-domain minimum, baseline and healed routing, convergence/recovery bounds, zero listed safety violations and verified zero-resource cleanup.
 
-It does **not** by itself prove randomized multi-seed Byzantine/Sybil/eclipse/collusion resilience or stable/mainnet compatibility. Those are explicit later gates.
+It does **not** by itself prove randomized multi-seed Byzantine/Sybil/eclipse/collusion resilience, host+volume-loss durability, long-running SLOs or stable/mainnet compatibility. Those remain explicit later gates.
 `;
 
 await writeFile(outputPath, markdown, 'utf8');
