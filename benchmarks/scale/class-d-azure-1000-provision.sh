@@ -108,10 +108,10 @@ git clone -q https://github.com/inn-media/truyn.git /opt/truin
 git -C /opt/truin checkout -q '${GITHUB_SHA}'
 mv /opt/truin /opt/truyn
 
-cd /opt/truqyn
+cd /opt/truyn
 npm install --no-audit --no-fund >/dev/null
-install -d -m 0700 /var/lib/truyn-d1000 /etc/truqyn-d1000
-openssl req -x509 -newkey rsa:2048 -nodes -keyout /etc/truqyn-d1000/key.pem -out /etc/truqyn-d1000/cert.pem -subj '/CN=${PRIV[$i]}' -days 1 -addext 'subjectAltName=IP:${PRIV[$i]}' >/dev/null 2>&1
+install -d -m 0700 /var/lib/truyn-d1000 /etc/truyn-d1000
+openssl req -x509 -newkey rsa:2048 -nodes -keyout /etc/truyn-d1000/key.pem -out /etc/truyn-d1000/cert.pem -subj '/CN=${PRIV[$i]}' -days 1 -addext 'subjectAltName=IP:${PRIV[$i]}' >/dev/null 2>&1
 for j in \$(seq 0 $((NODES_PER_HOST-1))); do
   idx=\$(( ${i} * ${NODES_PER_HOST} + j ))
   q=\$(( ${QUIC_BASE} + j )); c=\$(( ${CONTROL_BASE} + j ))
