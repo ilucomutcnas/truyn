@@ -7,9 +7,10 @@ function finite(value, fallback = null) {
 
 function validInvalidSignedStateProbe(raw = {}) {
   const probe = raw?.safety?.probes?.invalidSignedState;
-  return probe?.realNetworkDht === true &&
+  return probe?.remoteQuicControl === true &&
+    probe?.targetRejected === true &&
     finite(probe?.validRecordAcks, 0) >= 2 &&
-    String(probe?.forgedStoreHttpCode || '') !== '200';
+    probe?.rejectionReason === 'invalid_dht_record:dht_record_signature';
 }
 
 function validStaleReceiptProbe(raw = {}) {
@@ -86,6 +87,7 @@ export function normalizeAzureClassD1000Evidence(raw = {}) {
       testedCommit: raw?.testedCommit || null,
       workflowRunId: raw?.workflowRunId || null,
       healedRoutingMetric: packetPartitionProbe ? 'routing.healedSuccessRatio after real packet partition' : 'missing/invalid packet-partition proof',
+      invalidSignedStateMetric: invalidSignedStateProbe ? 'target-side QUIC dht.store rejection of signature-tampered record' : 'missing/invalid remote QUIC rejection proof',
       invalidSignedStateProbe,
       staleReceiptProbe,
       providerAuthorizationProbe,
