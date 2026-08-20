@@ -5,7 +5,40 @@ function finite(value, fallback = null) {
   return Number.isFinite(number) ? number : fallback;
 }
 
+function validInvalidSignedStateProbe(raw = {}) {
+  const probe = raw?.safety?.probes?.invalidSignedState;
+  return probe?.realNetworkDht === true &&
+    finite(probe?.validRecordAcks, 0) >= 2 &&
+    String(probe?.forgedStoreHttpCode || '') !== '200';
+}
+
+function validStaleReceiptProbe(raw = {}) {
+  const probe = raw?.safety?.probes?.staleReceipt;
+  return probe?.exactCommitLocalVerifier === true &&
+    probe?.reason === 'trust_receipt_v2_lifecycle_head_stale';
+}
+
+function validProviderAuthorizationProbe(raw = {}) {
+  const probe = raw?.safety?.probes?.providerAuthorization;
+  return probe?.exactCommitAdapterHost === true &&
+    probe?.accessDenied === true &&
+    finite(probe?.adapterExecutions, Infinity) === 0;
+}
+
+function validPacketPartitionProbe(raw = {}) {
+  const probe = raw?.adversarial?.packetPartition;
+  return probe?.exercised === true &&
+    probe?.realPacketPath === true &&
+    finite(probe?.probeCount, 0) > 0 &&
+    finite(probe?.blockedSuccesses, Infinity) === 0;
+}
+
 export function normalizeAzureClassD1000Evidence(raw = {}) {
+  const invalidSignedStateProbe = validInvalidSignedStateProbe(raw);
+  const staleReceiptProbe = validStaleReceiptProbe(raw);
+  const providerAuthorizationProbe = validProviderAuthorizationProbe(raw);
+  const packetPartitionProbe = validPacketPartitionProbe(raw);
+
   const normalized = {
     topology: {
       realNodeCount: finite(raw?.topology?.realProcessCount ?? raw?.topology?.nodeCount, 0),
@@ -16,11 +49,12 @@ export function normalizeAzureClassD1000Evidence(raw = {}) {
     },
     routing: {
       baselineSuccessRatio: finite(raw?.routing?.baselineSuccessRatio, 0),
-      // The current pure scale harness performs deterministic node restarts and
-      // then measures post-restart routing. Treat that as the initial D-1000
-      // healed-routing signal; a future packet-partition scale campaign may
-      // replace this derivation with an independently named healed metric.
-      healedSuccessRatio: finite(raw?.routing?.healedSuccessRatio ?? raw?.routing?.postRestartSuccessRatio, 0)
+      // D-1000 healed routing is accepted only when it follows an evidenced
+      // real packet-path partition. Post-restart routing remains useful
+      // telemetry but no longer substitutes for the strict healed gate.
+      healedSuccessRatio: packetPartitionProbe
+        ? finite(raw?.routing?.healedSuccessRatio, 0)
+        : 0
     },
     convergence: {
       latencyMs: { p95: finite(raw?.convergence?.latencyMs?.p95, Infinity) }
@@ -30,9 +64,15 @@ export function normalizeAzureClassD1000Evidence(raw = {}) {
     },
     safety: {
       acknowledgedWriteLossCount: finite(raw?.safety?.acknowledgedWriteLossCount, Infinity),
-      invalidSignedStateAcceptedCount: finite(raw?.safety?.invalidSignedStateAcceptedCount, Infinity),
-      staleRevokedReceiptAcceptedCount: finite(raw?.safety?.staleRevokedReceiptAcceptedCount, Infinity),
-      unauthorizedProviderExecutionCount: finite(raw?.safety?.unauthorizedProviderExecutionCount, Infinity)
+      invalidSignedStateAcceptedCount: invalidSignedStateProbe
+        ? finite(raw?.safety?.invalidSignedStateAcceptedCount, Infinity)
+        : Infinity,
+      staleRevokedReceiptAcceptedCount: staleReceiptProbe
+        ? finite(raw?.safety?.staleRevokedReceiptAcceptedCount, Infinity)
+        : Infinity,
+      unauthorizedProviderExecutionCount: providerAuthorizationProbe
+        ? finite(raw?.safety?.unauthorizedProviderExecutionCount, Infinity)
+        : Infinity
     },
     cleanup: {
       complete: raw?.cleanup?.confirmed === true || raw?.cleanup?.complete === true,
@@ -45,9 +85,11 @@ export function normalizeAzureClassD1000Evidence(raw = {}) {
       source: raw?.scope || 'unknown',
       testedCommit: raw?.testedCommit || null,
       workflowRunId: raw?.workflowRunId || null,
-      healedRoutingMetric: raw?.routing?.healedSuccessRatio != null
-        ? 'routing.healedSuccessRatio'
-        : 'routing.postRestartSuccessRatio',
+      healedRoutingMetric: packetPartitionProbe ? 'routing.healedSuccessRatio after real packet partition' : 'missing/invalid packet-partition proof',
+      invalidSignedStateProbe,
+      staleReceiptProbe,
+      providerAuthorizationProbe,
+      packetPartitionProbe,
       convergenceMetric: 'convergence.latencyMs.p95',
       recoveryMetric: 'recovery.latencyMs.p95',
       cleanupMetric: 'cleanup.confirmed/complete + cleanup.remainingResources'
