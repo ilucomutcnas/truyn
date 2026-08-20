@@ -4,6 +4,8 @@ Status: **implemented and measured PASS through 100,000 immutable blocks**.
 
 Permanent measured evidence: [`../benchmarks/SEMANTIC_SCALE_GATE_V3_2026-08-16.md`](../benchmarks/SEMANTIC_SCALE_GATE_V3_2026-08-16.md).
 
+**Scale terminology clarification — 2026-08-20:** the 100/1,000-node exercises in this semantic benchmark are semantic-root/index/cache fanout exercises across independent cryptographic identities. They are **not** the Class D acceptance gates for 100/1,000 simultaneously running real network processes/QUIC sockets/hosts. Real-node scale is tracked separately in `NETWORK_PRODUCTIONIZATION_GATE.md`.
+
 Scale Gate v3 extends the Semantic Retrieval Gate without changing the requester contract:
 
 ```text
@@ -31,8 +33,6 @@ Scale does not permit weakening any of these gates.
 
 ## Corpus ladder
 
-The v3 benchmark ladder is:
-
 ```text
 600 blocks
    ↓
@@ -43,7 +43,7 @@ The v3 benchmark ladder is:
 
 The same question + root CID contract is used at every level.
 
-The measured run passed every fixed gate at every corpus size. At 100,000 blocks the measured workload produced 100% retrieval/provenance/no-block-ID/minimal-context and 99.997% normalized token/marginal-cost saving. Cold and warm latency plus the 100/1,000-node exercises are preserved in the permanent evidence report.
+The measured run passed every fixed gate at every corpus size. At 100,000 blocks the workload produced 100% retrieval/provenance/no-block-ID/minimal-context and 99.997% normalized token/marginal-cost saving. Cold/warm latency and the semantic 100/1,000-identity fanout exercises are preserved in the permanent evidence report.
 
 The scale harness uses deterministic heterogeneous synthetic records with three query classes retained from Semantic v2 methodology:
 
@@ -51,13 +51,13 @@ The scale harness uses deterministic heterogeneous synthetic records with three 
 - cross-language;
 - adversarial near-duplicate.
 
-The deterministic local semantic encoder is intentionally used for **infrastructure-scale measurement** so a 100,000-block test is not dominated by external embedding quota, provider variance or 100,000 remote API calls. It verifies lifecycle, retrieval search, persistence, provenance, privacy, minimal-context behavior, token economics and latency at scale.
+The deterministic local semantic encoder is intentionally used for **infrastructure-scale measurement** so a 100,000-block test is not dominated by external embedding quota/provider variance. It verifies lifecycle, search, persistence, provenance, privacy, minimal-context behavior, token economics and latency at scale.
 
-It does **not** replace the existing live-provider Semantic v2 quality/economic proof. Provider-model semantic quality remains a separate live gate.
+It does **not** replace live-provider Semantic v2 quality/economic proof and it does **not** replace Class D real network-node proof.
 
 ## Production persistence change required by 100k
 
-The earlier single-node durable reference store persisted one file per immutable block vector. That is correct at small scale but creates an avoidable filesystem/inode amplification at 100,000 blocks.
+The earlier durable reference store persisted one file per immutable block vector. At 100,000 blocks that creates avoidable filesystem/inode amplification.
 
 Scale Gate v3 therefore adds a sharded durable vector store:
 
@@ -71,11 +71,11 @@ Properties:
 - root snapshots remain immutable and keyed by root CID;
 - vectors remain content-addressed by immutable block CID;
 - unchanged blocks remain reusable across roots;
-- a bounded number of shard files replaces one-file-per-vector persistence;
+- bounded shard files replace one-file-per-vector persistence;
 - shard writes are serialized per shard inside one process;
-- cold startup can bulk-load shards rather than issuing one filesystem read per block.
+- cold startup can bulk-load shards.
 
-The sharded store is still a single-node durable reference implementation. Distributed exactly-once preparation requires a shared store with CAS/lease/idempotency semantics and is not claimed by this gate.
+The sharded store remains a single-node durable reference implementation. Distributed exactly-once preparation requires a shared store with CAS/lease/idempotency semantics and is not claimed here.
 
 ## Cold and warm definitions
 
@@ -83,28 +83,13 @@ The sharded store is still a single-node durable reference implementation. Distr
 
 A cold sample creates a new production semantic-index instance against an already prepared durable root, then performs one `question + root CID` retrieval.
 
-It includes:
-
-- durable root load;
-- durable vector-shard load;
-- query embedding/encoding;
-- dense retrieval;
-- provenance verification.
-
-It must create **zero document re-embeddings**.
+It includes durable root/vector-shard load, query encoding, dense retrieval and provenance verification. It must create **zero document re-embeddings**.
 
 ### Warm retrieval
 
-A warm run first calls `warmContext(rootCid)` to load the ready root and immutable vectors into process memory. It then executes unique questions so latency samples do not use the result cache.
+A warm run calls `warmContext(rootCid)` to load the ready root/vectors into process memory, then executes unique questions so latency samples do not use the result cache.
 
-Reported distributions include:
-
-- p50;
-- p95;
-- p99;
-- min/max/mean.
-
-`warmupLoadMs` is reported separately from warm query latency.
+Reported distributions include p50/p95/p99/min/max/mean. `warmupLoadMs` is reported separately.
 
 ## Economics definition
 
@@ -115,77 +100,74 @@ direct = question + full root content
 TRUYN  = question + one minimal selected block + bounded retrieval envelope
 ```
 
-For the same downstream model and the same input-token price, the percentage marginal input-cost reduction is identical to the measured input-token reduction.
+For the same downstream model/input-token price, percentage marginal input-cost reduction equals measured input-token reduction. One-time reusable index-construction work is reported separately.
 
-The one-time reusable index-construction work is reported separately and is not charged again on every query.
-
-This normalized scale-economics measurement is deliberately distinguished from live provider invoices/routing cost measured by Semantic v2.
+This normalized scale-economics measurement is distinct from live provider invoices/routing cost measured by Semantic v2.
 
 ## Provenance and privacy
 
-`SemanticTruynNode` verifies:
+`SemanticTruynNode` verifies root manifest CID, selected block CID, root CID match, query hash and selected rank/proof consistency.
 
-- root manifest CID;
-- selected immutable block CID;
-- root CID match;
-- query hash;
-- selected rank/proof consistency.
-
-The Scale Gate harness also asserts that the agent-facing input object contains exactly:
+The harness asserts the agent-facing input contains exactly:
 
 ```text
 question
 rootCid
 ```
 
-and rejects a benchmark case if its expected internal block ID appears in that input.
+and rejects a case if its expected internal block ID appears in that input.
 
 ## Minimal context
 
-All Scale Gate v3 retrieval cases use `topK = 1`.
+All Scale Gate v3 retrieval cases use `topK = 1`. A case passes minimal-context correctness only when exactly one verified immutable block is materialized for the agent/provider path.
 
-A case passes minimal-context correctness only when exactly one verified immutable block is materialized for the agent/provider path.
-
-## 100 / 1,000-node exercises
+## 100 / 1,000 semantic-identity fanout exercises
 
 The largest-root exercise creates independent `SemanticTruynNode` cryptographic identities at two fanout levels:
 
-- **100 nodes**;
-- **1,000 nodes**.
+- **100 semantic node identities**;
+- **1,000 semantic node identities**.
 
-The nodes reuse one already prepared root and semantic index. The representative query set is warm/cached before fanout so this exercise measures root/index/cache reuse across many independent node identities rather than intentionally repeating a 100,000-block corpus scan 1,000 times.
+They reuse one already prepared root and semantic index. Representative queries are warm/cached before fanout so this exercise measures root/index/cache reuse across identities rather than performing a 100,000-block scan per identity.
 
-Required node-exercise result:
+Required result:
 
 ```text
-completed == requested nodes
+completed == requested identities
 failures == 0
 provenance verified for every retrieval
 selected record correct for every retrieval
 ```
 
-The measured run completed both exercises with **zero failures**. Their elapsed time also exposed a next-stage optimization target: process-shared verification of an already verified immutable 100k root instead of repeating full manifest verification for every new node identity.
+The measured run completed both with zero failures.
 
-## Current 100k scale boundary
+### This is not Class D real-node evidence
 
-Scale Gate v3 passes its declared hard gates, but the evidence deliberately records two material engineering costs at 100k:
+These exercises do **not** require 100/1,000 independent long-running network processes, 100/1,000 distinct live QUIC sockets, multiple real host failure domains, WAN reachability, packet partitions, churn or adversarial network behavior.
 
-- warm retrieval p50 about **561 ms**, p99 about **798 ms**;
-- warm process heap used about **1.85 GB**.
+Therefore they MUST NOT be described as:
 
-These are not retroactively converted into hidden failure gates. They define the next optimization work: bounded top-K candidate selection, compact in-memory representation, process-shared immutable-root verification, and then a shared multi-replica index store.
+```text
+100 real TRUYN network nodes — PASS
+1,000 real TRUYN network nodes — PASS
+```
+
+The current Class D-100 gate separately requires exactly 100 real processes/identities/QUIC sockets across ≥4 hosts plus routing/recovery/adversarial/cleanup predicates. D-1000 similarly requires real network topology evidence.
+
+## Current 100k semantic-scale boundary
+
+Scale Gate v3 passes its declared semantic hard gates, but evidence records material 100k engineering costs including warm retrieval p50 around 561 ms, p99 around 798 ms and warm process heap around 1.85 GB.
+
+These are optimization inputs, not hidden failures. Candidate next semantic optimizations include bounded top-K candidate selection, compact in-memory representation, process-shared immutable-root verification and shared multi-replica index storage.
 
 ## Evidence policy
 
-Every successful or failed Scale Gate run is evidence. A permanent sanitized report belongs under `docs/benchmarks/` with:
+Every successful/failed Scale Gate run is evidence. Permanent sanitized reports should retain tested commit/run/artifact identity where safe, corpus/query counts, hard gates, p50/p95/p99, identity-fanout results, limitations and benchmark-definition notes.
 
-- tested commit SHA;
-- workflow/run ID;
-- artifact ID/name/digest when available;
-- corpus sizes and query counts;
-- hard gates;
-- p50/p95/p99 cold and warm measurements;
-- 100/1,000-node exercise results;
-- limitations and benchmark-definition notes.
+Security cleanup follows **redact, do not delete evidence**.
 
-Security cleanup follows the repository-wide **redact, do not delete evidence** policy.
+For real network scale, see:
+
+- `NETWORK_PRODUCTIONIZATION_GATE.md`
+- `IMPLEMENTATION_STATUS.md`
+- `../operations/PRODUCTIONIZATION_EXECUTION_PLAN.md`.
