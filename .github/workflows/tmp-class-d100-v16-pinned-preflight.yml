@@ -1,0 +1,78 @@
+name: tmp-class-d100-v16-pinned-preflight
+
+on:
+  push:
+    branches: ['fix/d100-v16-azure-429-pinned']
+    paths:
+      - '.github/workflows/tmp-class-d100-v16-pinned-preflight.yml'
+
+permissions:
+  contents: read
+  issues: write
+
+env:
+  TESTED_COMMIT: e59460c01e05ea1d670a793d5376504b1f0d53fc
+
+jobs:
+  immutable-preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Start marker
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api repos/${GITHUB_REPOSITORY}/issues -f title='TRUYN CLASS D-100 V16 PINNED PREFLIGHT STARTED' -f body="run=${GITHUB_RUN_ID} workflow_sha=${GITHUB_SHA} tested_sha=${TESTED_COMMIT}" >/dev/null
+
+      - uses: actions/checkout@v4
+        with:
+          ref: e59460c01e05ea1d670a793d5376504b1f0d53fc
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Verify immutable V16 source
+        id: verify
+        continue-on-error: true
+        env:
+          TRUYN_LOCAL_DEVELOPMENT: '1'
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = "$TESTED_COMMIT"
+          extras="$(find .github/workflows -maxdepth 1 -type f ! -name ci.yml ! -name .gitkeep -printf '%f\n' | sort)"
+          test -z "$extras"
+          npm install --ignore-scripts --no-audit --no-fund
+          npm test
+          git diff --check
+          bash -n scripts/class-d-100-final-acceptance.sh
+          bash -n scripts/class-d-100-v10-acceptance.sh
+          bash -n scripts/class-d-100-v11-acceptance.sh
+          bash -n scripts/class-d-100-v12-acceptance.sh
+          bash -n scripts/class-d-100-v13-acceptance.sh
+          bash -n scripts/class-d-100-v16-acceptance.sh
+          bash -n benchmarks/scale/class-d-azure-100-provision.sh
+          bash -n benchmarks/scale/class-d-azure-100-campaign.sh
+          TRUYN_CLASS_D100_PREPARE_ONLY=1 bash scripts/class-d-100-v16-acceptance.sh
+          node --check benchmarks/scale/evaluate-class-d-evidence.js
+          node --check benchmarks/scale/verify-class-d-terminal.js
+          node --test tests/class-d-v16-harness.test.js tests/class-d-v13-harness.test.js tests/class-d-run-command-regression.test.js tests/class-d-canonical-pin-regression.test.js
+          grep -q 'baselineRoutingSuccess: 0.99' benchmarks/scale/class-d.js
+          grep -q 'healedRoutingSuccess: 0.99' benchmarks/scale/class-d.js
+          grep -q 'recoveryP95Ms: 120_000' benchmarks/scale/class-d.js
+          grep -q 'convergenceP95Ms: 120_000' benchmarks/scale/class-d.js
+          grep -q 'acknowledgedWriteLossMax: 0' benchmarks/scale/class-d.js
+          grep -q 'invalidSignedStateAcceptedMax: 0' benchmarks/scale/class-d.js
+          grep -q 'staleRevokedReceiptAcceptedMax: 0' benchmarks/scale/class-d.js
+          echo "TRUYN_CLASS_D_100_V16_PINNED_PREFLIGHT=PASS testedCommit=${TESTED_COMMIT}"
+
+      - name: Terminal marker
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERIFY_OUTCOME: ${{ steps.verify.outcome }}
+        run: |
+          if [[ "$VERIFY_OUTCOME" == success ]]; then result=PASS; else result=FAIL; fi
+          gh api repos/${GITHUB_REPOSITORY}/issues -f title="TRUYN CLASS D-100 V16 PINNED PREFLIGHT ${result}" -f body="run=${GITHUB_RUN_ID} tested_sha=${TESTED_COMMIT} result=${result}" >/dev/null
+          test "$VERIFY_OUTCOME" = success
