@@ -124,6 +124,7 @@ export class PeerDiscovery {
       const current = verifyPeerRecord(record);
       if (current.ok) continue;
       if (current.reason !== 'peer_record_expired') continue;
+      this.records.set(record.nodeId, structuredClone(record));
       this.routing.upsert({
         nodeId: record.nodeId,
         endpoints: record.endpoints,
