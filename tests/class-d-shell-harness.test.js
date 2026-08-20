@@ -62,6 +62,11 @@ test('final launchers patch known native/runtime hazards before cloud execution'
   const d1000 = await readFile('scripts/class-d-1000-final-acceptance.sh', 'utf8');
   assert.match(d1000, /14400000/);
   assert.match(d1000, /truin-d1000@.*truyn-d1000@/s);
+  assert.match(d1000, /TRUYN_CLASS_D1000_PREPARE_ONLY/);
+  assert.match(d1000, /TRUYN_CLASS_D1000_PREPARED_HARNESS=PASS/);
+  assert.match(d1000, /STAGE=invalid-signed-state/);
+  assert.match(d1000, /STAGE=packet-partition/);
+  assert.match(d1000, /STAGE=healed-routing/);
 });
 
 test('D-1000 campaign derives every strict safety counter from an executed probe', async () => {
@@ -101,4 +106,13 @@ test('D-100 prepared harness removes invalid bootstrap and guest paths without c
   });
   assert.equal(run.status, 0, run.stderr || run.stdout);
   assert.match(run.stdout, /TRUYN_CLASS_D100_PREPARED_HARNESS=PASS/);
+});
+
+test('D-1000 prepared harness validates strict safety contract without cloud access', () => {
+  const run = spawnSync('bash', ['scripts/class-d-1000-final-acceptance.sh'], {
+    encoding: 'utf8',
+    env: { ...process.env, TRUYN_CLASS_D1000_PREPARE_ONLY: '1' }
+  });
+  assert.equal(run.status, 0, run.stderr || run.stdout);
+  assert.match(run.stdout, /TRUYN_CLASS_D1000_PREPARED_HARNESS=PASS safetyContract=v2/);
 });
