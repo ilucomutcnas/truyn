@@ -30,22 +30,31 @@ jobs:
           persist-credentials: false
 
       - id: validate
-        name: Validate static payload
+        name: Decode and validate static payload
         continue-on-error: true
         shell: bash
         run: |
           set -euo pipefail
-          test -f _tmp_public_site/index.html
-          test -f _tmp_public_site/assets/css/styles.css
-          test -f _tmp_public_site/assets/js/app.js
-          test -f _tmp_public_site/assets/js/translations.js
-          grep -q 'href="/assets/css/styles.css"' _tmp_public_site/index.html
-          grep -q 'src="/assets/js/translations.js"' _tmp_public_site/index.html
-          grep -q 'src="/assets/js/app.js"' _tmp_public_site/index.html
-          grep -q 'G-W5CDTZZ87W' _tmp_public_site/index.html
-          grep -q 'GTM-WPGXWKGN' _tmp_public_site/index.html
-          node --check _tmp_public_site/assets/js/translations.js
-          node --check _tmp_public_site/assets/js/app.js
+          rm -rf /tmp/truyn-site
+          mkdir -p /tmp/truyn-site/assets/css /tmp/truyn-site/assets/js
+          base64 --decode _tmp_public_site/index.html > /tmp/truyn-site/index.html
+          base64 --decode _tmp_public_site/assets/css/styles.css > /tmp/truyn-site/assets/css/styles.css
+          base64 --decode _tmp_public_site/assets/js/app.js > /tmp/truyn-site/assets/js/app.js
+          base64 --decode _tmp_public_site/assets/js/translations.js > /tmp/truyn-site/assets/js/translations.js
+
+          sed -i 's#href="/styles.css"#href="/assets/css/styles.css"#g' /tmp/truyn-site/index.html
+          sed -i 's#src="/translations.js"#src="/assets/js/translations.js"#g' /tmp/truyn-site/index.html
+          sed -i 's#src="/app.js"#src="/assets/js/app.js"#g' /tmp/truyn-site/index.html
+
+          grep -q 'href="/assets/css/styles.css"' /tmp/truyn-site/index.html
+          grep -q 'src="/assets/js/translations.js"' /tmp/truyn-site/index.html
+          grep -q 'src="/assets/js/app.js"' /tmp/truyn-site/index.html
+          grep -q 'G-W5CDTZZ87W' /tmp/truyn-site/index.html
+          grep -q 'GTM-WPGXWKGN' /tmp/truyn-site/index.html
+          grep -q 'href="/MANIFESTO"' /tmp/truyn-site/index.html
+          grep -q 'href="/AGENTS"' /tmp/truyn-site/index.html
+          node --check /tmp/truyn-site/assets/js/translations.js
+          node --check /tmp/truyn-site/assets/js/app.js
 
       - id: login
         name: Azure login
@@ -126,10 +135,10 @@ jobs:
           upload() {
             az storage blob upload --account-name "$storage_account" --account-key "$storage_key" --container-name '$web' --name "$2" --file "$1" --content-type "$3" --content-cache-control "$4" --overwrite true --only-show-errors --output none
           }
-          upload _tmp_public_site/index.html index.html 'text/html; charset=utf-8' 'no-cache, max-age=0, must-revalidate'
-          upload _tmp_public_site/assets/css/styles.css assets/css/styles.css 'text/css; charset=utf-8' 'public, max-age=3600'
-          upload _tmp_public_site/assets/js/app.js assets/js/app.js 'application/javascript; charset=utf-8' 'public, max-age=3600'
-          upload _tmp_public_site/assets/js/translations.js assets/js/translations.js 'application/javascript; charset=utf-8' 'public, max-age=3600'
+          upload /tmp/truyn-site/index.html index.html 'text/html; charset=utf-8' 'no-cache, max-age=0, must-revalidate'
+          upload /tmp/truyn-site/assets/css/styles.css assets/css/styles.css 'text/css; charset=utf-8' 'public, max-age=3600'
+          upload /tmp/truyn-site/assets/js/app.js assets/js/app.js 'application/javascript; charset=utf-8' 'public, max-age=3600'
+          upload /tmp/truyn-site/assets/js/translations.js assets/js/translations.js 'application/javascript; charset=utf-8' 'public, max-age=3600'
           for blob in index.html assets/css/styles.css assets/js/app.js assets/js/translations.js; do
             test "$(az storage blob exists --account-name "$storage_account" --account-key "$storage_key" --container-name '$web' --name "$blob" --query exists -o tsv)" = 'true'
           done
@@ -182,15 +191,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          failed=0
           publish() {
-            local context="$1" outcome="$2"
-            local state
-            case "$outcome" in
-              success) state=success ;;
-              failure) state=failure; failed=1 ;;
-              *) state=pending ;;
-            esac
+            local context="$1" outcome="$2" state
+            case "$outcome" in success) state=success ;; failure) state=failure ;; *) state=pending ;; esac
             gh api --method POST -H 'Accept: application/vnd.github+json' "repos/${GITHUB_REPOSITORY}/statuses/${GITHUB_SHA}" -f state="$state" -f context="truyn-deploy/${context}" >/dev/null
           }
           publish validate "$VALIDATE"
