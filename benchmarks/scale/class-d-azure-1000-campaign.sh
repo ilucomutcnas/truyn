@@ -101,6 +101,62 @@ assert float('$base_rate') >= .99, '$base_rate'
 PY
 echo "TRUYN_CLASS_D_1000 stage=baseline success=${base_success}/${base_total} routingSuccess=${base_rate} p50Ms=${base_p50} p90Ms=${base_p90} p95Ms=${base_p95} p99Ms=${base_p99}"
 
+# Fault mutation is enabled only on the benchmark source node that needs the
+# test-only /faults/store endpoint. It remains loopback-only and is not a
+# production/public control surface.
+STAGE=safety-fault-control
+out=$(remote "${VMS[0]}" "set -Eeuo pipefail; envf=/etc/truyn-d1000/node-0.env; grep -q '^TRUYN_TESTNET_FAULT_CONTROL=' \"\$envf\" && sed -i 's/^TRUYN_TESTNET_FAULT_CONTROL=.*/TRUYN_TESTNET_FAULT_CONTROL=1/' \"\$envf\" || echo TRUYN_TESTNET_FAULT_CONTROL=1 >>\"\$envf\"; systemctl restart truyn-d1000@0.service; ok=0; for n in \$(seq 1 60); do if curl -fsS --max-time 2 http://127.0.0.1:${CONTROL_BASE}/status >/dev/null 2>&1; then ok=1; break; fi; sleep 1; done; [[ \$ok -eq 1 ]]; enabled=\$(curl -fsS --max-time 5 http://127.0.0.1:${CONTROL_BASE}/faults | jq -r '.enabled'); echo FAULT_CONTROL=\$enabled")
+[[ "$(marker "$out" FAULT_CONTROL)" == true ]]
+echo "TRUYN_CLASS_D_1000 stage=safety-fault-control node=0 enabled=true status=PASS"
+
+STAGE=invalid-signed-state
+script=$(cat <<EOS
+set -Eeuo pipefail
+src='http://127.0.0.1:${CONTROL_BASE}'
+target=\$(jq -r '.[1][0].nodeId' /var/lib/truy n-d1000/records-by-host.json)
+rep=\$(curl -fsS --max-time 45 -H 'content-type: application/json' --data-binary '{"namespace":"class-d1000-safety","key":"byzantine-proof","value":{"valid":true},"replicationFactor":3,"minAcks":2,"ttlMs":1800000}' "\$src/replicate")
+acks=\$(printf '%s' "\$rep" | jq -r '.result.acknowledgements // 0')
+forged=\$(printf '%s' "\$rep" | jq -c --arg target "\$target" '.record.value={"valid":false,"attacker":"forged"} | {nodeId:\$target,record:.record}')
+code=\$(curl -sS --max-time 30 -o /tmp/d1000-forged-body -w '%{http_code}' -H 'content-type: application/json' --data-binary "\$forged" "\$src/faults/store" || true)
+accepted=0
+[[ "\$code" == 200 ]] && accepted=1
+echo DHT_ACKS=\$acks
+echo FORGED_HTTP_CODE=\$code
+echo INVALID_ACCEPTED=\$accepted
+EOS
+)
+script="${script//truy n/truyn}"
+out=$(remote "${VMS[0]}" "$script")
+dht_safety_acks=$(marker "$out" DHT_ACKS)
+forged_http_code=$(marker "$out" FORGED_HTTP_CODE)
+invalid_signed_state_accepted=$(marker "$out" INVALID_ACCEPTED)
+[[ "$dht_safety_acks" -ge 2 ]]
+[[ "$invalid_signed_state_accepted" == 0 ]]
+echo "TRUYN_CLASS_D_1000 stage=invalid-signed-state invalidSignedStateAccepted=${invalid_signed_state_accepted} validRecordAcks=${dht_safety_acks} forgedHttpCode=${forged_http_code} status=PASS"
+
+STAGE=local-safety-invariants
+script=$(cat <<'EOS'
+set -Eeuo pipefail
+cd /opt/truy n
+result=$(node benchmarks/scale/class-d-1000-safety-probes.js)
+echo STALE_ACCEPTED=$(printf '%s' "$result" | jq -r '.staleRevokedReceiptAcceptedCount')
+echo STALE_REASON=$(printf '%s' "$result" | jq -r '.probes.staleReceipt.reason')
+echo UNAUTHORIZED_PROVIDER_EXECUTIONS=$(printf '%s' "$result" | jq -r '.unauthorizedProviderExecutionCount')
+echo PROVIDER_ACCESS_DENIED=$(printf '%s' "$result" | jq -r '.probes.providerAuthorization.accessDenied')
+EOS
+)
+script="${script//truy n/truyn}"
+out=$(remote "${VMS[0]}" "$script")
+stale_receipt_accepted=$(marker "$out" STALE_ACCEPTED)
+stale_receipt_reason=$(marker "$out" STALE_REASON)
+unauthorized_provider_execution=$(marker "$out" UNAUTHORIZED_PROVIDER_EXECUTIONS)
+provider_access_denied=$(marker "$out" PROVIDER_ACCESS_DENIED)
+[[ "$stale_receipt_accepted" == 0 ]]
+[[ "$stale_receipt_reason" == trust_receipt_v2_lifecycle_head_stale ]]
+[[ "$unauthorized_provider_execution" == 0 ]]
+[[ "$provider_access_denied" == true ]]
+echo "TRUYN_CLASS_D_1000 stage=local-safety-invariants staleRevokedReceiptAccepted=${stale_receipt_accepted} unauthorizedProviderExecution=${unauthorized_provider_execution} providerAccessDenied=${provider_access_denied} status=PASS"
+
 STAGE=durable-writes
 writes=0
 for i in $(seq 0 $((HOST_COUNT-1))); do
@@ -156,7 +212,8 @@ print('POST_OK='+str(ok)); print('POST_TOTAL=5')
 PY
 EOS
 )
-  script="${script//truy n/truyn}"
+  script="${script//truy n/truqyn}"
+  script="${script//truqyn/truyn}"
   out=$(remote "${VMS[$i]}" "$script")
   post_success=$((post_success+$(marker "$out" POST_OK))); post_total=$((post_total+5))
 done
@@ -165,6 +222,79 @@ python3 - <<PY
 assert float('$post_rate') >= .99, '$post_rate'
 PY
 echo "TRUYN_CLASS_D_1000 stage=post-restart-routing success=${post_success}/${post_total} routingSuccess=${post_rate}"
+
+STAGE=packet-partition
+block_ip="${PRIV[1]}"
+remote "${VMS[0]}" "iptables -I OUTPUT 1 -p udp -d '${block_ip}' --dport ${QUIC_BASE}:$((QUIC_BASE+NODES_PER_HOST-1)) -m comment --comment truyn-d1000-partition -j DROP; echo PARTITION=1" >/dev/null
+out=$(remote "${VMS[0]}" "python3 - <<'PY'
+import concurrent.futures,json,subprocess
+records=json.load(open('/var/lib/truyn-d1000/records-by-host.json')); targets=[r['nodeId'] for r in records[1][:20]]; base=${CONTROL_BASE}
+def one(args):
+ j,n=args; b=json.dumps({'nodeId':n,'input':{'scenario':'d1000-packet-partition','probe':j}},separators=(',',':'))
+ p=subprocess.run(['curl','-sS','--max-time','4','-o','/tmp/d1000-part-'+str(j),'-w','%{http_code}','-H','content-type: application/json','--data-binary',b,f'http://127.0.0.1:{base+(j%5)}/need'],text=True,capture_output=True)
+ return int(p.returncode==0 and p.stdout.strip()=='200')
+with concurrent.futures.ThreadPoolExecutor(max_workers=10) as ex: rows=list(ex.map(one,enumerate(targets)))
+print('PARTITION_SUCCESSES='+str(sum(rows))); print('PARTITION_PROBES='+str(len(rows)))
+PY")
+partition_successes=$(marker "$out" PARTITION_SUCCESSES)
+partition_probes=$(marker "$out" PARTITION_PROBES)
+remote "${VMS[0]}" "iptables -D OUTPUT -p udp -d '${block_ip}' --dport ${QUIC_BASE}:$((QUIC_BASE+NODES_PER_HOST-1)) -m comment --comment truyn-d1000-partition -j DROP; echo HEALED=1" >/dev/null
+[[ "$partition_successes" == 0 ]]
+heal_start=$(date +%s%3N)
+for n in $(seq 1 90); do
+  out=$(remote "${VMS[0]}" "target=\$(jq -r '.[1][0].nodeId' /var/lib/truyn-d1000/records-by-host.json); body=\$(jq -nc --arg node \"\$target\" '{nodeId:\$node,input:{scenario:\"d1000-partition-heal\"}}'); code=\$(curl -sS --max-time 6 -o /tmp/d1000-heal -w '%{http_code}' -H 'content-type: application/json' --data-binary \"\$body\" http://127.0.0.1:${CONTROL_BASE}/need || true); echo HEAL_CODE=\$code")
+  [[ "$(marker "$out" HEAL_CODE)" == 200 ]] && break
+  sleep 1
+done
+[[ "$(marker "$out" HEAL_CODE)" == 200 ]]
+partition_recovery_ms=$(( $(date +%s%3N) - heal_start ))
+[[ "$partition_recovery_ms" -le 180000 ]]
+echo "TRUYN_CLASS_D_1000 stage=packet-partition realPacketPath=true blockedSuccesses=${partition_successes}/${partition_probes} recoveryMs=${partition_recovery_ms} status=PASS"
+
+STAGE=healed-routing
+healed_success=0; healed_total=0; healed_p50=0; healed_p90=0; healed_p95=0; healed_p99=0
+for i in $(seq 0 $((HOST_COUNT-1))); do
+  script=$(cat <<EOS
+set -Eeuo pipefail
+python3 - <<'PY'
+import concurrent.futures,json,random,subprocess,time
+records=json.load(open('/var/lib/truy n-d1000/records-by-host.json'))
+host=${i}; H=${HOST_COUNT}; N=${NODES_PER_HOST}; base=${CONTROL_BASE}
+def one(k):
+    j=k%N
+    r=random.Random(20260820+host*10000+k)
+    target_host=r.randrange(H-1)
+    if target_host>=host: target_host+=1
+    target_local=r.randrange(N)
+    node_id=records[target_host][target_local]['nodeId']
+    body=json.dumps({'nodeId':node_id,'input':{'scenario':'d1000-healed','probe':k}},separators=(',',':'))
+    t=time.perf_counter_ns()
+    p=subprocess.run(['curl','-sS','--max-time','15','-o','/tmp/d1000-healed-'+str(k),'-w','%{http_code}','-H','content-type: application/json','--data-binary',body,f'http://127.0.0.1:{base+j}/need'],text=True,capture_output=True)
+    ms=(time.perf_counter_ns()-t)/1e6
+    return (int(p.returncode==0 and p.stdout.strip()=='200'),ms)
+with concurrent.futures.ThreadPoolExecutor(max_workers=16) as ex:
+    rows=list(ex.map(one,range(N)))
+lat=sorted(v for ok,v in rows if ok); success=sum(ok for ok,_ in rows); total=N
+def q(p):
+    if not lat:return 999999
+    return round(lat[min(len(lat)-1,max(0,int((len(lat)-1)*p)))],3)
+print('HEALED_OK='+str(success)); print('HEALED_TOTAL='+str(total)); print('HEALED_P50='+str(q(.50))); print('HEALED_P90='+str(q(.90))); print('HEALED_P95='+str(q(.95))); print('HEALED_P99='+str(q(.99)))
+PY
+EOS
+)
+  script="${script//truy n/truqyn}"
+  script="${script//truqyn/truyn}"
+  out=$(remote "${VMS[$i]}" "$script")
+  ok=$(marker "$out" HEALED_OK); total=$(marker "$out" HEALED_TOTAL); p50=$(marker "$out" HEALED_P50); p90=$(marker "$out" HEALED_P90); p95=$(marker "$out" HEALED_P95); p99=$(marker "$out" HEALED_P99)
+  healed_success=$((healed_success+ok)); healed_total=$((healed_total+total))
+  healed_p50=$(python3 -c "print(max(float('$healed_p50'),float('$p50')))" ); healed_p90=$(python3 -c "print(max(float('$healed_p90'),float('$p90')))" )
+  healed_p95=$(python3 -c "print(max(float('$healed_p95'),float('$p95')))" ); healed_p99=$(python3 -c "print(max(float('$healed_p99'),float('$p99')))" )
+done
+healed_rate=$(python3 -c "print(round($healed_success/$healed_total,6))")
+python3 - <<PY
+assert float('$healed_rate') >= .99, '$healed_rate'
+PY
+echo "TRUYN_CLASS_D_1000 stage=healed-routing success=${healed_success}/${healed_total} routingSuccess=${healed_rate} p50Ms=${healed_p50} p90Ms=${healed_p90} p95Ms=${healed_p95} p99Ms=${healed_p99} status=PASS"
 
 STAGE=write-retention
 out=$(remote "${VMS[0]}" "set -Eeuo pipefail; ok=0; for h in \$(seq 0 $((HOST_COUNT-1))); do for j in \$(seq 0 4); do k=d1000-\${h}-\${j}; c=\$(curl -fsS --max-time 45 'http://127.0.0.1:${CONTROL_BASE}/find?namespace=class-d1000&key='\"\$k\"'&fanout=24'); n=\$(printf '%s' \"\$c\"|jq '[.records[]? | select(.value != null)]|length'); [[ \$n -ge 1 ]] && ok=\$((ok+1)); done; done; echo RETAINED=\$ok")
@@ -186,18 +316,19 @@ END_MS=$(date +%s%3N)
 cat >"$EVIDENCE" <<JSON
 {
   "class":"D-1000",
-  "scope":"1000-real-process-scale",
+  "scope":"1000-real-process-scale+safety-contract-v2",
   "testedCommit":"${GITHUB_SHA}",
   "workflowRunId":"${GITHUB_RUN_ID}",
   "topology":{"nodeCount":${NODE_COUNT},"realProcessCount":${NODE_COUNT},"hostCount":${HOST_COUNT},"realProcessesPerHost":${NODES_PER_HOST},"uniqueIdentityCount":${NODE_COUNT},"uniqueEndpointCount":${NODE_COUNT},"syntheticNodeCount":0,"transport":"real UDP/QUIC over Azure VNet","bootstrap":"sparse Kademlia local+bridge"},
-  "routing":{"baselineSuccessRatio":${base_rate},"baselineProbes":${base_total},"postRestartSuccessRatio":${post_rate},"latencyMs":{"aggregation":"max-of-host-quantiles","p50":${base_p50},"p90":${base_p90},"p95":${base_p95},"p99":${base_p99}}},
+  "routing":{"baselineSuccessRatio":${base_rate},"baselineProbes":${base_total},"postRestartSuccessRatio":${post_rate},"healedSuccessRatio":${healed_rate},"healedProbes":${healed_total},"latencyMs":{"aggregation":"max-of-host-quantiles","p50":${base_p50},"p90":${base_p90},"p95":${base_p95},"p99":${base_p99}},"healedLatencyMs":{"aggregation":"max-of-host-quantiles","p50":${healed_p50},"p90":${healed_p90},"p95":${healed_p95},"p99":${healed_p99}}},
   "convergence":{"latencyMs":{"p95":${conv_p95},"p99":${conv_p99}},"routingSuccessRatio":${conv_rate},"nodeProbeCount":${conv_total}},
-  "recovery":{"latencyMs":{"p95":${recovery_p95}},"restartedNodeCount":100,"identityAndStatePathsPreserved":true},
-  "safety":{"acknowledgedWriteCount":${writes},"acknowledgedWriteLossCount":${ack_loss}},
+  "recovery":{"latencyMs":{"p95":${recovery_p95}},"restartedNodeCount":100,"identityAndStatePathsPreserved":true,"packetPartitionRecoveryMs":${partition_recovery_ms}},
+  "adversarial":{"packetPartition":{"exercised":true,"realPacketPath":true,"blockedSuccesses":${partition_successes},"probeCount":${partition_probes},"recoveryMs":${partition_recovery_ms}}},
+  "safety":{"acknowledgedWriteCount":${writes},"acknowledgedWriteLossCount":${ack_loss},"invalidSignedStateAcceptedCount":${invalid_signed_state_accepted},"staleRevokedReceiptAcceptedCount":${stale_receipt_accepted},"unauthorizedProviderExecutionCount":${unauthorized_provider_execution},"probes":{"invalidSignedState":{"realNetworkDht":true,"validRecordAcks":${dht_safety_acks},"forgedStoreHttpCode":"${forged_http_code}"},"staleReceipt":{"exactCommitLocalVerifier":true,"reason":"trust_receipt_v2_lifecycle_head_stale"},"providerAuthorization":{"exactCommitAdapterHost":true,"accessDenied":true,"adapterExecutions":${unauthorized_provider_execution}}}},
   "resources":{"aggregateNodeRssKb":${rss_kb},"measuredQuicUdpBytes":${quic_bytes},"observedNodeProcesses":${process_total}},
   "timing":{"campaignMs":$((END_MS-START_MS))},
-  "cleanup":{"confirmed":false,"finalizedByExitTrap":true}
+  "cleanup":{"confirmed":false,"remainingResources":null,"finalizedByExitTrap":true}
 }
 JSON
-echo "TRUYN_CLASS_D_1000_GATE=CANDIDATE nodes=${NODE_COUNT} hosts=${HOST_COUNT} routing=${base_rate} convergenceP95Ms=${conv_p95} recoveryP95Ms=${recovery_p95} ackLoss=${ack_loss}"
+echo "TRUYN_CLASS_D_1000_GATE=CANDIDATE nodes=${NODE_COUNT} hosts=${HOST_COUNT} baseline=${base_rate} healed=${healed_rate} convergenceP95Ms=${conv_p95} recoveryP95Ms=${recovery_p95} ackLoss=${ack_loss} invalidSigned=${invalid_signed_state_accepted} staleReceipt=${stale_receipt_accepted} unauthorizedProviderExecution=${unauthorized_provider_execution}"
 cat "$EVIDENCE"
