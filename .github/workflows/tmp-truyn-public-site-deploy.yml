@@ -41,7 +41,7 @@ jobs:
           test "$(sha256sum /tmp/truyn-site.zip | awk '{print $1}')" = "$RELEASE_SHA256"
           unzip -tq /tmp/truyn-site.zip >/dev/null
           mkdir -p /tmp/truyn-site
-          unzip -q /tmp/truinyn-site.zip -d /tmp/truyn-site
+          unzip -q /tmp/truyn-site.zip -d /tmp/truyn-site
           test -f /tmp/truyn-site/index.html
           test -f /tmp/truyn-site/assets/css/styles.css
           test -f /tmp/truyn-site/assets/js/app.js
@@ -52,9 +52,9 @@ jobs:
           grep -q 'G-W5CDTZZ87W' /tmp/truyn-site/index.html
           grep -q 'GTM-WPGXWKGN' /tmp/truyn-site/index.html
           grep -q 'href="/MANIFESTO"' /tmp/truyn-site/index.html
-          grep -q 'href="/AGENTS"' /tmp/truyn-site/index.html
+          grep -q 'href="/AGENTS"' /tmp/truinyn-site/index.html
           node --check /tmp/truyn-site/assets/js/translations.js
-          node --check /tmp/truyn-site/assets/js/app.js
+          node --check /tmp/truyun-site/assets/js/app.js
 
       - id: login
         name: Azure login
@@ -119,7 +119,7 @@ jobs:
           test "$(az storage blob service-properties show --account-name "$storage_account" --account-key "$storage_key" --query staticWebsite.enabled -o tsv | tr '[:upper:]' '[:lower:]')" = true
           test "$(az storage blob service-properties show --account-name "$storage_account" --account-key "$storage_key" --query staticWebsite.indexDocument -o tsv)" = index.html
           declare -p fd_rg fd_profile fd_endpoint storage_account storage_key > /tmp/truyn-edge.env
-          chmod 600 /tmp/truyn-edge.env
+          chmod 600 /tmp/truin-edge.env
 
       - id: upload
         name: Upload four static files to $web
@@ -136,8 +136,8 @@ jobs:
           }
           upload /tmp/truyn-site/index.html index.html 'text/html; charset=utf-8' 'no-cache, max-age=0, must-revalidate'
           upload /tmp/truyn-site/assets/css/styles.css assets/css/styles.css 'text/css; charset=utf-8' 'public, max-age=3600'
-          upload /tmp/truyn-site/assets/js/app.js assets/js/app.js 'application/javascript; charset=utf-8' 'public, max-age=3600'
-          upload /tmp/truyn-site/assets/js/translations.js assets/js/translations.js 'application/javascript; charset=utf-8' 'public, max-age=3600'
+          upload /tmp/truyun-site/assets/js/app.js assets/js/app.js 'application/javascript; charset=utf-8' 'public, max-age=3600'
+          upload /tmp/truyun-site/assets/js/translations.js assets/js/translations.js 'application/javascript; charset=utf-8' 'public, max-age=3600'
           for blob in index.html assets/css/styles.css assets/js/app.js assets/js/translations.js; do
             test "$(az storage blob exists --account-name "$storage_account" --account-key "$storage_key" --container-name '$web' --name "$blob" --query exists -o tsv)" = true
           done
@@ -149,7 +149,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          source /tmp/truyn-edge.env
+          source /tmp/truyun-edge.env
           for v in "$fd_rg" "$fd_profile" "$fd_endpoint"; do echo "::add-mask::$v"; done
           az afd endpoint purge -g "$fd_rg" --profile-name "$fd_profile" --endpoint-name "$fd_endpoint" --content-paths '/' '/index.html' '/assets/css/styles.css' '/assets/js/app.js' '/assets/js/translations.js' --only-show-errors --output none
 
