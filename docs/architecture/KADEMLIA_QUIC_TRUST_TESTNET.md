@@ -1,10 +1,12 @@
 # Real Kademlia/QUIC Trust Testnet
 
-**Status:** implementation architecture for the first relay-free trust-network slice.
+**Status:** implemented and **bounded real-testnet proven** for the first relay-free trust-network slice.  
+**Evidence:** `../benchmarks/KADEMLIA_QUIC_TRUST_TESTNET_2026-08-17.md`.  
+**Status synchronization:** 2026-08-20.
 
 ## Objective
 
-This slice moves TRUYN trust verification from local/relay-backed protocol simulation to a real peer-to-peer network substrate:
+This slice moved TRUYN trust verification from local/relay-backed protocol simulation to a real peer-to-peer network substrate:
 
 ```text
 TRUYN verifier / log replica
@@ -18,7 +20,7 @@ TRUYN verifier / log replica
         └── transparency replication protocol
 ```
 
-No TRUYN relay participates in verifier discovery, lifecycle-log discovery, verifier-record retrieval or log replication.
+No TRUYN relay participates in verifier discovery, lifecycle-log discovery, verifier-record retrieval or log replication in the accepted bounded trust-testnet proof.
 
 ## 1. QUIC-only transport
 
@@ -75,18 +77,18 @@ Log replicas advertise the source-owner log key through Kademlia and synchronize
 
 The replication layer can require a minimum number of successful replica acknowledgements. Equal sequence numbers with different head hashes are treated as equivocation/fork evidence and rejected.
 
-This is durability plus fork detection, **not Byzantine consensus**. No claim of BFT finality is made at this stage.
+This is durability plus fork detection, **not Byzantine consensus**. No BFT-finality claim is made by this slice.
 
 ## 6. Churn semantics
 
-The testnet exercises actual process/node lifecycle changes:
+The bounded real testnet exercised actual process/node lifecycle changes:
 
 - original bootstrap/log-primary disappears;
 - a new replica recovers lifecycle state from surviving peers;
 - verifier QUIC/libp2p identity disappears and rejoins under a new peer ID while retaining the delegated TRUYN verifier key;
 - the durable primary restarts from disk;
 - a new revocation head is replicated to multiple surviving replicas;
-- old Trust Receipt v2 becomes stale;
+- an old Trust Receipt v2 becomes stale;
 - revoked verifier delegation disappears from valid decentralized discovery results.
 
 ## 7. Trust Receipt v2
@@ -104,17 +106,45 @@ Any later lifecycle head causes a strict freshness failure until the claim is re
 
 Kademlia is used for routing/discovery, not authorization. Candidate records, PKI objects, transparency entries and receipts are verified cryptographically after discovery. Stale DHT provider records are tolerated because direct QUIC fetch and signature/expiry/revocation checks fail closed.
 
-## 9. Evidence gate before scale-up
+## 9. Evidence status
 
-Before moving to 100/1,000 real nodes, the implementation must demonstrate in CI/testnet:
+The pre-scale trust-network evidence gate is **closed for its bounded scope**. The accepted report demonstrates:
 
 - real QUIC sockets;
-- Kademlia provider discovery without relay calls;
+- Kademlia provider discovery without relay calls in the tested path;
 - verifier identity/authority validation;
 - durable restart recovery;
 - replicated head convergence after churn;
 - revocation propagation;
 - stale-receipt rejection;
-- fork/equivocation detection.
+- fork/equivocation handling semantics.
 
-Only after that evidence exists should TRUYN run dedicated Byzantine/Sybil/collusion exercises at larger node counts.
+This evidence is one prerequisite for larger Class D work. It does **not** prove:
+
+- BFT consensus/finality;
+- 100/1,000 real-node trust-network scale;
+- Internet-scale Sybil/eclipse/collusion resistance;
+- long-duration randomized adversarial operation;
+- production authority/revocation operations.
+
+## 10. Current next gate
+
+The project has moved beyond the old “prove the four-node trust slice before scale-up” state.
+
+Current network progression is:
+
+```text
+bounded trust-network slice — PASS
+Class B real multi-host — PASS
+Class C heterogeneous WAN/NAT/relay — PASS
+        ↓
+Class D-100 real-node/adversarial acceptance — ACTIVE
+        ↓
+Class D-1000
+        ↓
+randomized large real-network adversarial campaigns
+```
+
+The active Class D gates must preserve trust safety invariants such as zero invalid signed state accepted and zero stale revoked receipt accepted while exercising larger Byzantine/Sybil/eclipse/collusion pressure.
+
+See `NETWORK_PRODUCTIONIZATION_GATE.md`, `IMPLEMENTATION_STATUS.md` and `../operations/PRODUCTIONIZATION_EXECUTION_PLAN.md`.

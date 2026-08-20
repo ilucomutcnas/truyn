@@ -1,12 +1,13 @@
 # TRUYN Multi-Cloud Provider Architecture
 
-Status: **public architecture target; implementation not started by this document**.
+**Status:** public architecture **implemented as reference adapter/runtime paths**; individual cloud deployments remain subject to provider entitlement, region and quota.  
+**Status synchronization:** 2026-08-20.
 
-This document defines the public provider architecture for the TRUYN reference testnet across Google Cloud and Microsoft Azure. It intentionally excludes operational identifiers, credentials, quota allocations, billing-account data, private resource names, service-account identities, production topology, provider node IDs, privileged allowlists and other deployment-sensitive information.
+This document defines the public provider architecture for the TRUYN reference network across Google Cloud and Microsoft Azure. It intentionally excludes operational identifiers, credentials, quota allocations, billing-account data, private resource names, service-account identities, production topology, provider node IDs, privileged allowlists and other deployment-sensitive information.
 
 ## Goal
 
-TRUYN should compare and route **capabilities**, not brands. The reference architecture therefore maintains cross-cloud parity for three primary modalities:
+TRUYN compares and routes **capabilities**, not brands. The reference architecture maintains cross-cloud parity for three primary modalities:
 
 ```text
 reasoning / text
@@ -14,7 +15,29 @@ image generation
 video generation
 ```
 
-The purpose is to support reproducible provider selection, failover and benchmarks where equivalent capabilities are compared against equivalent capabilities.
+The purpose is to support interoperable provider execution, future failover/selection and reproducible benchmarks where equivalent capabilities are compared against equivalent capabilities.
+
+## Factual implementation boundary
+
+The repository currently contains executable reference adapter paths for:
+
+### Google Cloud / Vertex AI
+
+- Gemini text/reasoning;
+- Google/Vertex image generation;
+- asynchronous Veo video generation.
+
+### Microsoft Azure / Foundry
+
+- Azure OpenAI text/reasoning;
+- shared Foundry text transport used by Grok, DeepSeek, Llama, Mistral and Kimi model families;
+- Azure OpenAI `gpt-image` image generation;
+- Azure-direct FLUX image adapter;
+- asynchronous Azure OpenAI/Sora video adapter.
+
+Shared Azure/GCP authentication helpers, telemetry, artifact normalization/storage and asynchronous job handling exist in the reference implementation.
+
+**Adapter implementation is not the same as live deployment availability.** A concrete provider path may be blocked by cloud entitlement/quota/region even when the adapter is implemented. Public documentation therefore distinguishes `implemented adapter path` from `live deployment available` and from `benchmark result`.
 
 ## Security premise
 
@@ -22,55 +45,63 @@ Reference cloud providers are not a public pool of free intelligence.
 
 > **A provider being connected to TRUYN does not make its upstream cloud account available to every TRUYN participant.**
 
-Every reference provider is subject to the provider ownership and authorization architecture:
+The provider ownership/security baseline is now implemented in reference form:
 
 ```text
-provider identity
-owner / tenant boundary
-visibility policy
-billing mode
-authorization / entitlement
+signed/authenticated provider identity
+        ↓
+owner / provider-policy boundary
+        ↓
+authorization-aware discovery / dispatch
+        ↓
+billing responsibility / entitlement
+        ↓
+provider-host authorization
+        ↓
+adapter / upstream call
 ```
 
 Project/operator-funded benchmark providers are owner-private by default. Their presence in discovery/benchmark documentation is not an entitlement to their quota.
 
 Normal external users are BYOK by default and connect provider capacity they control.
 
-See `PROVIDER_OWNERSHIP.md`, `AUTHORIZATION_MODEL.md`, `BILLING_BOUNDARY.md` and `BYOK_ARCHITECTURE.md`.
+See `PROVIDER_OWNERSHIP.md`, `AUTHORIZATION_MODEL.md`, `BILLING_BOUNDARY.md`, `BYOK_ARCHITECTURE.md` and `THREAT_MODEL.md`.
 
 ## Public reference matrix
 
 | Capability | Google Cloud / Vertex AI | Microsoft Azure / Foundry |
 |---|---|---|
 | `reasoning.general` | Gemini | GPT, Grok, DeepSeek, Llama, Mistral, Kimi |
-| `media.image.generate` | Google image-generation track (Imagen lineage / current supported Vertex image endpoint) | Azure OpenAI `gpt-image` family; Azure-direct FLUX may provide an additional independent image provider |
-| `media.image.edit` | Current supported Google image editing endpoint where available | `gpt-image` image editing where supported; FLUX contextual/image editing where supported |
-| `media.video.generate` | Veo | Sora 2 |
-| `media.video.transform` | Veo capabilities where supported | Sora 2 remix / image-to-video / generated-video workflows where supported |
+| `media.image.generate` | Google image-generation track | Azure OpenAI `gpt-image`; Azure-direct FLUX adapter |
+| `media.image.edit` | supported Google image editing where available | `gpt-image`/FLUX editing where supported |
+| `media.video.generate` | Veo | Sora family adapter |
+| `media.video.transform` | Veo capabilities where supported | Sora-family transform/remix paths where supported |
 
-Model versions, regional availability, preview/GA status, quotas and concrete deployment IDs are runtime concerns and MUST NOT become protocol semantics.
+Concrete model versions, regional availability, preview/GA status, quotas and deployment IDs are runtime concerns and MUST NOT become protocol semantics.
 
-## Current catalog notes
+## Model lifecycle
 
-### Google image lifecycle
+TRUYN keeps stable logical capability names while concrete cloud model IDs change.
 
-TRUYN treats `media.image.generate` as a stable capability even when Google changes the concrete model endpoint. Public architecture uses the logical **Google image-generation track** rather than binding TRUYN to one permanent model version string.
+Examples:
 
-### Google video lifecycle
+```text
+media.image.generate
+        ↓
+current authorized Google image endpoint
+```
 
-Veo is the Google video-generation track. Concrete versions are selected at deployment/preflight time and are not protocol semantics.
+and:
 
-### Azure image generation
+```text
+media.video.generate
+        ↓
+current authorized Veo / Sora deployment
+```
 
-Microsoft/Azure image-generation families can back `media.image.generate`. Multiple vendors can be tested independently without changing the TRUYN capability namespace.
+The protocol does not need a new capability whenever a vendor changes a model version string.
 
-### Azure video generation
-
-Azure-hosted video-generation families can back `media.video.generate`. Video generation is asynchronous and therefore maps naturally to TRUYN's long-running execution semantics while still returning a normal `RESULT` to the requester.
-
-### Grok media clarification
-
-A model family available for reasoning/multimodal understanding MUST NOT be advertised as an image/video generation provider unless that concrete deployed provider explicitly supports generation. Direct vendor adapters and cloud-marketplace adapters are separate provider/billing surfaces.
+A family available for reasoning/multimodal understanding MUST NOT be advertised as an image/video generation provider unless the concrete deployed provider explicitly supports generation. Direct-vendor and cloud-marketplace adapters remain separate provider/billing surfaces.
 
 ## Logical architecture
 
@@ -94,26 +125,26 @@ A model family available for reasoning/multimodal understanding MUST NOT be adve
                                          └── video provider family → artifacts
 ```
 
-The diagram describes capability/provider roles, not public access entitlement and not a promise that every provider is already deployed.
+This describes capability/provider roles, not public access entitlement and not a guarantee that every cloud deployment is currently permitted.
 
 ## Provider isolation
 
-The reference runtime follows this rule:
+Reference runtime rule:
 
-> **one provider family/capability runtime = one TRUYN identity = independently observable health, latency, cost and failure domain**
+> **one materially distinct provider family/capability runtime = one independently attributable TRUYN provider identity / telemetry stream**
 
-A common container/runtime implementation may be reused, but materially different provider families or modalities should not become one indistinguishable provider identity.
+A common container/transport implementation may be reused, but different provider families/modalities should remain independently observable for:
 
-This preserves:
+- health/failure;
+- latency;
+- capability-level routing/failover;
+- provider/model provenance;
+- trust history;
+- benchmark attribution;
+- quota/cost isolation;
+- rollback.
 
-- independent provider telemetry;
-- capability-level failover;
-- model-family provenance;
-- provider-specific trust history;
-- clear benchmark attribution;
-- clean rollback and quota isolation.
-
-Provider identity isolation is not the same as authorization. A distinct provider identity still needs an owner/tenant/visibility policy.
+Provider identity isolation is separate from authorization. A distinct provider identity still needs owner/visibility/billing policy.
 
 ## Capability semantics
 
@@ -141,9 +172,7 @@ A requester can remain vendor-neutral:
 NEED media.video.generate
 ```
 
-while a benchmark or policy can constrain the route by cloud/vendor/family.
-
-Authorization still runs before ranking/dispatch. A selector cannot force a requester onto a provider it is not allowed to use.
+while an authorized benchmark/policy can constrain cloud/vendor/family. A selector cannot force a requester onto an unauthorized provider.
 
 ## Result classes
 
@@ -173,33 +202,33 @@ Conceptual media result:
 }
 ```
 
-`ref` is a logical artifact reference. Public protocol documentation MUST NOT require a provider-specific private bucket URL, storage-account URL, credential-bearing URI or long-lived signed URL.
+`ref` is logical. Public protocol documentation MUST NOT require private bucket/storage URLs, credentials or long-lived secret-bearing signed URLs.
 
 ## Asynchronous video execution
 
-Video generation is not assumed to be synchronous.
+Video generation is not assumed synchronous:
 
 ```text
 NEED media.video.generate
           ↓
-authorization + quota
+authorization + billing/quota
           ↓
 provider job / operation
           ↓
-processing
+processing / polling
           ↓
 artifact persisted or referenced
           ↓
 RESULT { ArtifactRef }
 ```
 
-Provider-specific polling, job IDs and temporary download URLs remain adapter concerns.
+Provider job IDs/polling/temporary download URLs remain adapter concerns.
 
 ## Credentials and cloud identity
 
 Prefer cloud-native workload identity/managed identity where available. Raw API keys, service-account JSON, client secrets and private provider credentials are not protocol payloads.
 
-Public architecture may describe the generic identity flow:
+Generic public identity flow:
 
 ```text
 CI/deployer identity
@@ -211,11 +240,11 @@ runtime workload identity
 provider API
 ```
 
-but MUST NOT publish live privileged identity strings merely to document the architecture.
+Live privileged identity strings do not need to be published to explain this architecture.
 
 ## Cross-cloud comparison principle
 
-The reference benchmark MUST compare like with like:
+Compare like with like:
 
 ```text
 reasoning ↔ reasoning
@@ -225,11 +254,11 @@ video     ↔ video
 
 Only providers authorized for the benchmark owner/workload participate. Benchmark availability is not public network entitlement.
 
-See `docs/benchmarks/MULTIMODAL_PROVIDER_PARITY.md`.
+The benchmark methodology exists in `../benchmarks/MULTIMODAL_PROVIDER_PARITY.md`. The existence of individual smoke tests/reference adapters is **not** itself a completed cross-provider A/B/parity benchmark.
 
 ## Telemetry contract
 
-Equivalent providers should expose normalized telemetry where the source API makes it available:
+Equivalent providers should normalize telemetry where the source API makes it available:
 
 ```text
 cloud
@@ -247,40 +276,52 @@ status
 providerRequestId
 ```
 
-Provider-security/accounting telemetry should additionally support attribution such as requester/provider owner/billing mode without publishing private operational identities in aggregate public benchmark output.
+Security/accounting telemetry should support requester/provider owner/billing attribution without publishing private operational identities in public aggregate reports.
 
-Cost reporting should distinguish provider list-price equivalent from account-specific credits, discounts or sponsorship. Credit balances and private billing arrangements are operational data and do not belong in this public repository.
+Cost reporting should distinguish provider list-price equivalent from account-specific credits/discounts/sponsorship. Private credit balances and billing arrangements remain operational data.
 
 ## Public/private boundary
 
 Safe to publish:
 
-- logical provider families;
-- capability taxonomy;
+- logical provider families/capabilities;
 - generic cloud architecture;
-- provider ownership/authorization invariants;
-- generic adapter contracts;
+- implemented adapter paths;
+- ownership/authorization invariants;
 - artifact/result schemas;
 - benchmark methodology;
-- validated aggregate benchmark results;
-- generic placeholders and non-sensitive environment-variable examples.
+- validated aggregate results;
+- generic non-secret environment-variable examples.
 
 Do not intentionally publish:
 
-- credentials or private keys;
+- credentials/private keys;
 - unnecessary subscription/billing/internal tenant identifiers;
-- real privileged service-account/managed-identity identifiers;
-- private origins/backchannels or bucket/container names;
+- privileged service-account/managed-identity identifiers;
+- private origins/backchannels/bucket/container names;
 - production resource topology;
-- quota allocations and internal cost ceilings;
-- secret paths or privileged allowlists;
-- private provider node IDs/deployment names where they reveal operations;
-- sensitive prompts, outputs or customer data.
+- exact quotas/internal cost ceilings;
+- secret paths/privileged allowlists;
+- sensitive prompts/outputs/customer data.
 
 See `PUBLIC_PRIVATE_BOUNDARY.md`.
 
-## Implementation boundary
+## Current completion boundary
 
-This document changes **architecture and public planning only**. It does not declare any new adapter, model deployment, ownership ACL, quota system, cloud resource, BYOK onboarding flow or benchmark as implemented.
+Implemented reference architecture/code:
 
-Before public users can safely coexist with owner-funded reference providers, the provider-security gate in `THREAT_MODEL.md` and `ROADMAP.md` must be implemented and pass negative tests.
+- provider ownership/default-private authorization baseline;
+- BYOK provider setup/runtime patterns;
+- Google/Azure text/image/video adapter paths;
+- common auth/telemetry/artifact/async execution building blocks;
+- normalized media artifact results.
+
+Still separate/open:
+
+- cloud entitlement/quota for every model in every region;
+- a completed cross-provider multimodal A/B/parity benchmark;
+- stable broad provider certification;
+- production commercial account/tenant entitlement control plane;
+- production mainnet/Internet-scale network closure.
+
+The factual matrix lives in `IMPLEMENTATION_STATUS.md`; measured results live only in `../benchmarks/`.

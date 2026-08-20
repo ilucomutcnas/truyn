@@ -1,8 +1,11 @@
 # TRUYN Multimodal Provider Parity Benchmark
 
-Status: **planned methodology; no multimodal benchmark result is claimed by this document**.
+**Status:** benchmark methodology is defined; reference provider adapter paths now exist, but this document still claims **no completed cross-provider multimodal parity/A-B result**.  
+**Status synchronization:** 2026-08-20.
 
-This document defines how the TRUYN reference testnet should compare providers across Google Cloud and Microsoft Azure without mixing incompatible modalities, presenting catalog availability as implementation status, or implying public entitlement to project-funded provider accounts.
+This document defines how the TRUYN reference environment should compare providers across Google Cloud and Microsoft Azure without mixing incompatible modalities, presenting catalog availability as live deployment status, or implying public entitlement to project-funded provider accounts.
+
+Individual provider smoke/integration evidence is distinct from a parity benchmark. A parity claim requires a dedicated run under the controls below and a separate durable measured report.
 
 ## Principle
 
@@ -16,9 +19,11 @@ video generation ↔ video generation
 
 The benchmark is provider-neutral at the TRUYN protocol layer and provider-specific only in the constrained benchmark policy.
 
-All benchmark providers must also be **authorized for the benchmark owner/workload**. A provider selector can choose among authorized candidates; it cannot override provider ownership/visibility policy.
+All benchmark providers must be authorized for the benchmark owner/workload. A provider selector can choose among authorized candidates; it cannot override provider ownership/visibility policy.
 
-## Planned provider groups
+## Reference provider groups
+
+These groups have corresponding reference adapter paths in the repository; concrete cloud deployment availability still depends on entitlement/region/quota.
 
 ### Reasoning / text
 
@@ -36,11 +41,11 @@ Microsoft Azure:
 ### Image generation
 
 Google Cloud:
-- current supported Google image-generation endpoint in Vertex AI; the architecture preserves the Imagen/Google-image capability line while concrete model IDs follow the current Vertex lifecycle
+- current supported Google image-generation endpoint in Vertex AI
 
 Microsoft Azure:
-- Azure OpenAI `gpt-image` family as the primary cross-cloud image comparison
-- Azure-direct Black Forest Labs FLUX as an optional second Azure image provider and independent-vendor comparison
+- Azure OpenAI `gpt-image` family
+- Azure-direct Black Forest Labs FLUX adapter as an optional independent-vendor image path
 
 ### Video generation
 
@@ -48,19 +53,21 @@ Google Cloud:
 - Veo
 
 Microsoft Azure:
-- Sora 2
+- Sora-family adapter
 
 ## Provider ownership and billing scope
 
-Reference benchmark providers are owner-private unless deliberately shared under an explicit policy. Public benchmark publication does not make their quota available to public TRUYN users.
+Reference benchmark providers are owner-private unless deliberately shared under explicit policy. Public benchmark publication does not make their quota available to public TRUYN users.
 
-A benchmark run should record enough public model/version information to reproduce the comparison, while private cloud deployment resource names, service-account/managed-identity identifiers, private origins, quota allocations, credit balances and billing-account details remain operational/private.
+The provider-security prerequisite is no longer future-only architecture: the reference implementation now has owner-bound provider identity, default `owner-only` policy, authorization-aware discovery/dispatch and a provider-host second authorization/billing gate with negative tests. A parity run must preserve those controls.
+
+A benchmark report should record enough public model/version information to reproduce the comparison while private deployment resource names, cloud identities, private origins, quota allocations, credit balances and billing-account details remain operational/private.
 
 Public cost reporting uses disclosed list-price/equivalent assumptions where appropriate. Account-specific credits/discounts may be reported only in aggregate when useful and safe.
 
 ## Grok clarification
 
-The Azure Foundry Grok models documented for the reference architecture are treated as reasoning/multimodal-understanding providers unless the concrete deployed catalog explicitly exposes media generation. A future direct-xAI media benchmark would be a separate provider and billing surface.
+Azure Foundry Grok paths are treated according to the concrete capability exposed by the deployed model. A reasoning/multimodal-understanding deployment MUST NOT be counted as image/video generation unless the actual provider endpoint supports generation. A future direct-xAI media benchmark would be a separate provider/billing surface.
 
 ## Reasoning benchmark controls
 
@@ -93,16 +100,16 @@ Record:
 - requested aspect ratio;
 - requested resolution or closest supported equivalent;
 - output count;
-- reference images when the benchmark includes image-conditioned generation;
+- reference images when image-conditioned generation is included;
 - generation latency;
 - output artifact bytes;
 - provider list-price equivalent;
 - safety/filter outcome;
 - deterministic seed only where both compared providers support a meaningful equivalent.
 
-Quality evaluation should include a reproducible rubric such as prompt adherence, visual coherence, text rendering when requested, subject/reference consistency when applicable, artifact defects, and independent blinded human scoring and/or a disclosed multimodal evaluator.
+Quality evaluation should use a reproducible rubric such as prompt adherence, visual coherence, text rendering when requested, subject/reference consistency when applicable, artifact defects, and independent blinded human scoring and/or a disclosed multimodal evaluator.
 
-Do not report a single quality number without describing the evaluation method.
+Do not report a single quality number without the evaluation method.
 
 ## Video benchmark controls
 
@@ -113,7 +120,7 @@ Use equivalent constraints where supported:
 - closest common aspect ratio;
 - closest common duration;
 - closest common resolution;
-- audio generation either enabled for both or evaluated as a separate feature;
+- audio generation either enabled for both or evaluated separately;
 - same number of samples.
 
 Measure:
@@ -131,11 +138,11 @@ Measure:
 - motion consistency;
 - audio quality/synchronization only where both outputs contain audio.
 
-Because video generation is asynchronous, provider job polling is counted as provider execution behavior, while TRUYN orchestration overhead is reported separately.
+Because video generation is asynchronous, provider job polling is provider execution behavior while TRUYN orchestration overhead is reported separately.
 
 ## Artifact-transfer comparison
 
-TRUYN should avoid embedding large image/video payloads into signed protocol envelopes. Benchmarks should report separately:
+TRUYN avoids embedding large image/video payloads into signed protocol envelopes when an artifact reference is sufficient. Benchmarks should report separately:
 
 ```text
 provider artifact bytes
@@ -144,35 +151,66 @@ artifact-reference bytes
 actual artifact download bytes
 ```
 
-This prevents a small `ArtifactRef` from being incorrectly presented as if the underlying image or video required no transfer.
+This prevents a small `ArtifactRef` from being presented as if the underlying media required no transfer.
 
-Private bucket/container names or long-lived credential-bearing URLs must not be published as benchmark evidence. Use logical artifact references/hashes or intentionally public evidence artifacts.
+Private bucket/container names or long-lived credential-bearing URLs must not be published. Use logical artifact references/hashes or intentionally public evidence artifacts.
 
 ## Cost reporting
 
-Public benchmark reports should distinguish:
+Public reports should distinguish:
 
 ```text
 provider list-price equivalent
 account-specific effective cash cost (only when safely reportable)
 ```
 
-Credits, sponsorships, negotiated discounts and private billing arrangements can change independently of the protocol and should not be treated as a universal TRUYN cost claim.
+Credits, sponsorships, negotiated discounts and private billing arrangements can change independently of the protocol and must not be treated as a universal TRUYN cost claim.
 
 ## Model lifecycle and reproducibility
 
-Concrete model IDs/versions are resolved immediately before a benchmark because provider catalogs change over time.
+Concrete model IDs/versions are resolved immediately before a benchmark because provider catalogs change.
 
-Benchmark reports SHOULD record the public model family/version actually tested and deployment class/region when needed for interpreting performance. They SHOULD NOT publish a private cloud deployment resource name merely for reproducibility; a logical benchmark label can represent that deployment while protected evidence retains the operational mapping.
+Reports SHOULD record the public model family/version actually tested and deployment class/region where needed for performance interpretation. They SHOULD NOT publish private cloud deployment resource names merely for reproducibility; a logical benchmark label may represent protected operational mapping.
 
-## Provider-security gate
+## Provider-security invariant
 
-Multimodal benchmark success is separate from provider-access security. Before public users can safely coexist with owner-funded benchmark providers, the negative test matrix in `../architecture/THREAT_MODEL.md` must prove unauthorized requests cause zero upstream provider calls/jobs.
+Benchmark infrastructure MUST NOT weaken the normal provider-security boundary.
+
+Required negative invariant:
+
+```text
+unauthorized requester
+        ↓
+private benchmark provider
+        ↓
+DENY before upstream execution
+        ↓
+provider execution count = 0
+```
+
+A benchmark workflow may temporarily provision or address private providers for its owner, but it does not create public entitlement and should not leave privileged workflow/topology details in permanent public `main` when they are unnecessary.
+
+## What implementation now exists
+
+This methodology file does not create implementation, but the broader repository now contains:
+
+- Google/Azure text adapter paths;
+- Google/Azure image adapter paths;
+- Google/Azure video adapter paths;
+- normalized provider telemetry;
+- media artifact reference/provenance handling;
+- async video execution support;
+- owner-private authorization/billing guards.
+
+That implementation makes a future parity run possible without changing the protocol architecture. It does **not** mean a parity result has already been measured.
 
 ## References
 
-Provider-specific public references may be updated at benchmark time because catalogs and model lifecycles change. Architecture semantics remain defined in `../architecture/MULTI_CLOUD_PROVIDER_ARCHITECTURE.md`.
+- `../architecture/MULTI_CLOUD_PROVIDER_ARCHITECTURE.md`
+- `../architecture/IMPLEMENTATION_STATUS.md`
+- `../architecture/AUTHORIZATION_MODEL.md`
+- `README.md` for the durable evidence ledger.
 
-## Implementation boundary
+## Evidence rule
 
-This file defines benchmark scope only. It does not create providers, resources, deployments, credentials, quotas, workflows, authorization policy or inference traffic.
+When a real multimodal parity benchmark is eventually run, publish its measured result as a separate dated report under `docs/benchmarks/`. Keep this methodology as the control contract rather than rewriting it into an evidence result.
