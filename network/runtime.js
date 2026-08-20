@@ -110,7 +110,7 @@ export class TruynNetworkNode {
       nodeId: this.identity.nodeId,
       sequence: this.sequence,
       savedAt: new Date().toISOString(),
-      peerRecords: this.discovery.snapshot(),
+      peerRecords: this.discovery.durableSnapshot(),
       dhtRecords: this.recordStore.snapshot()
     };
   }
