@@ -1,3 +1,4 @@
+# trigger: pinned-v16-accepted
 name: tmp-class-d100-v16-accepted
 
 on:
@@ -23,11 +24,9 @@ jobs:
         with:
           ref: e59460c01e05ea1d670a793d5376504b1f0d53fc
           persist-credentials: false
-
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-
       - name: Verify immutable V16 source
         env:
           TRUYN_LOCAL_DEVELOPMENT: '1'
@@ -39,14 +38,7 @@ jobs:
           npm install --ignore-scripts --no-audit --no-fund
           npm test
           git diff --check
-          bash -n scripts/class-d-100-final-acceptance.sh
-          bash -n scripts/class-d-100-v10-acceptance.sh
-          bash -n scripts/class-d-100-v11-acceptance.sh
-          bash -n scripts/class-d-100-v12-acceptance.sh
-          bash -n scripts/class-d-100-v13-acceptance.sh
-          bash -n scripts/class-d-100-v16-acceptance.sh
-          bash -n benchmarks/scale/class-d-azure-100-provision.sh
-          bash -n benchmarks/scale/class-d-azure-100-campaign.sh
+          for f in scripts/class-d-100-final-acceptance.sh scripts/class-d-100-v10-acceptance.sh scripts/class-d-100-v11-acceptance.sh scripts/class-d-100-v12-acceptance.sh scripts/class-d-100-v13-acceptance.sh scripts/class-d-100-v16-acceptance.sh benchmarks/scale/class-d-azure-100-provision.sh benchmarks/scale/class-d-azure-100-campaign.sh; do bash -n "$f"; done
           TRUYN_CLASS_D100_PREPARE_ONLY=1 bash scripts/class-d-100-v16-acceptance.sh | tee class-d-100-v16-preflight.txt
           node --check benchmarks/scale/evaluate-class-d-evidence.js
           node --check benchmarks/scale/verify-class-d-terminal.js
@@ -60,14 +52,12 @@ jobs:
           grep -q 'staleRevokedReceiptAcceptedMax: 0' benchmarks/scale/class-d.js
           printf 'tested_commit=%s\nstatus=PASS\nsafety_contract=unchanged\n' "$TESTED_COMMIT" >>class-d-100-v16-preflight.txt
           echo "TRUYN_CLASS_D_100_V16_IMMUTABLE_PREFLIGHT=PASS testedCommit=${TESTED_COMMIT}"
-
       - name: Upload immutable preflight
         uses: actions/upload-artifact@v4
         with:
           name: truyn-class-d100-v16-preflight-${{ github.run_id }}
           retention-days: 90
           path: class-d-100-v16-preflight.txt
-
       - name: Preflight PASS marker
         env:
           GH_TOKEN: ${{ github.token }}
@@ -86,11 +76,9 @@ jobs:
         with:
           ref: e59460c01e05ea1d670a793d5376504b1f0d53fc
           persist-credentials: false
-
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-
       - name: Accepted run start marker
         env:
           GH_TOKEN: ${{ github.token }}
@@ -99,14 +87,12 @@ jobs:
           body="$(printf 'run=%s workflow_sha=%s tested_sha=%s stage=accepted_d100_v16_started' "$GITHUB_RUN_ID" "$GITHUB_SHA" "$TESTED_COMMIT")"
           test "${#body}" -ge 30
           gh api "repos/${GITHUB_REPOSITORY}/issues" -f 'title=TRUYN CLASS D-100 V16 ACCEPTED RUN STARTED' -f "body=${body}" >/dev/null
-
       - name: Azure login
         uses: azure/login@v2
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-
       - name: Execute real 4-host 100-node campaign
         id: campaign
         continue-on-error: true
@@ -116,7 +102,6 @@ jobs:
         run: |
           set -o pipefail
           bash scripts/class-d-100-v16-acceptance.sh 2>&1 | tee class-d-100-run.log
-
       - name: Canonical post-cleanup evaluation and strict terminal verification
         id: terminal
         if: always()
@@ -134,15 +119,10 @@ jobs:
             printf '%s\n' '{"ok":false,"error":"class_d_terminal_evidence_missing"}' >class-d-100-terminal.json
           fi
           campaign_outcome='${{ steps.campaign.outcome }}'
-          printf 'campaign_outcome=%s\n' "$campaign_outcome" >class-d-100-v16-summary.txt
-          printf 'evaluator_rc=%s\n' "$evaluator_rc" >>class-d-100-v16-summary.txt
-          printf 'terminal_rc=%s\n' "$terminal_rc" >>class-d-100-v16-summary.txt
-          printf 'tested_commit=%s\n' "$TESTED_COMMIT" >>class-d-100-v16-summary.txt
-          printf 'run_id=%s\n' "$GITHUB_RUN_ID" >>class-d-100-v16-summary.txt
+          printf 'campaign_outcome=%s\nevaluator_rc=%s\nterminal_rc=%s\ntested_commit=%s\nrun_id=%s\n' "$campaign_outcome" "$evaluator_rc" "$terminal_rc" "$TESTED_COMMIT" "$GITHUB_RUN_ID" >class-d-100-v16-summary.txt
           echo "evaluator_rc=$evaluator_rc" >>"$GITHUB_OUTPUT"
           echo "terminal_rc=$terminal_rc" >>"$GITHUB_OUTPUT"
           exit 0
-
       - name: Upload immutable evidence bundle
         if: always()
         uses: actions/upload-artifact@v4
@@ -158,7 +138,6 @@ jobs:
             class-d-100-terminal.json
             class-d-100-terminal.stderr
             class-d-100-v16-summary.txt
-
       - name: Terminal marker
         if: always()
         env:
@@ -172,7 +151,6 @@ jobs:
           body="$(printf 'run=%s workflow_sha=%s tested_sha=%s result=%s campaign_outcome=%s evaluator_rc=%s terminal_rc=%s' "$GITHUB_RUN_ID" "$GITHUB_SHA" "$TESTED_COMMIT" "$result" "${CAMPAIGN_OUTCOME:-missing}" "${EVALUATOR_RC:-missing}" "${TERMINAL_RC:-missing}")"
           test "${#body}" -ge 30
           gh api "repos/${GITHUB_REPOSITORY}/issues" -f "title=TRUYN CLASS D-100 V16 ACCEPTED ${result}" -f "body=${body}" >/dev/null
-
       - name: Strict accepted gate
         if: always()
         env:
