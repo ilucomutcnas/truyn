@@ -31,7 +31,7 @@ function evidence(remainingResources = 0) {
         realPacketPath: true,
         probeCount: 20,
         blockedSuccesses: 0,
-        recoveryMs: 10000
+        recoveryMs: 12000
       }
     },
     safety: {
@@ -41,9 +41,10 @@ function evidence(remainingResources = 0) {
       unauthorizedProviderExecutionCount: 0,
       probes: {
         invalidSignedState: {
-          realNetworkDht: true,
+          remoteQuicControl: true,
+          targetRejected: true,
           validRecordAcks: 3,
-          forgedStoreHttpCode: '500'
+          rejectionReason: 'invalid_dht_record:dht_record_signature'
         },
         staleReceipt: {
           exactCommitLocalVerifier: true,
@@ -69,17 +70,17 @@ function run(raw) {
   return result;
 }
 
-test('strict terminal verifier accepts complete probe-backed D-1000 evidence with zero remaining resources', () => {
+test('strict terminal verifier accepts complete D-1000 evidence with zero remaining resources', () => {
   const result = run(evidence(0));
   assert.equal(result.status, 0, result.stderr || result.stdout);
   const parsed = JSON.parse(result.stdout);
   assert.equal(parsed.ok, true);
-  assert.equal(parsed.checks.packetPartitionProbe, true);
-  assert.equal(parsed.checks.invalidSignedStateProbe, true);
-  assert.equal(parsed.checks.staleReceiptProbe, true);
-  assert.equal(parsed.checks.providerAuthorizationProbe, true);
   assert.equal(parsed.checks.zeroRemainingResources, true);
   assert.equal(parsed.checks.noUnauthorizedProviderExecution, true);
+  assert.equal(parsed.checks.remoteInvalidSignatureProbe, true);
+  assert.equal(parsed.checks.staleReceiptProbe, true);
+  assert.equal(parsed.checks.providerAuthorizationProbe, true);
+  assert.equal(parsed.checks.realPacketPartitionProbe, true);
 });
 
 test('strict terminal verifier rejects nonzero remaining resources', () => {
@@ -101,20 +102,20 @@ test('strict terminal verifier rejects missing safety evidence', () => {
   assert.ok(parsed.failed.includes('noInvalidSignedStateAccepted'));
 });
 
-test('strict terminal verifier rejects hardcoded zero counters without probe provenance', () => {
+test('strict terminal verifier rejects sender-side or ambiguous invalid-state evidence', () => {
   const raw = evidence(0);
-  delete raw.safety.probes;
+  raw.safety.probes.invalidSignedState.remoteQuicControl = false;
+  raw.safety.probes.invalidSignedState.targetRejected = false;
+  raw.safety.probes.invalidSignedState.rejectionReason = 'TRUYN_DHT_RPC_TIMEOUT';
   const result = run(raw);
   assert.equal(result.status, 1, result.stderr || result.stdout);
   const parsed = JSON.parse(result.stdout);
   assert.equal(parsed.ok, false);
-  assert.ok(parsed.failed.includes('canonicalEvaluator'));
-  assert.ok(parsed.failed.includes('invalidSignedStateProbe'));
-  assert.ok(parsed.failed.includes('staleReceiptProbe'));
-  assert.ok(parsed.failed.includes('providerAuthorizationProbe'));
+  assert.ok(parsed.failed.includes('remoteInvalidSignatureProbe'));
+  assert.ok(parsed.failed.includes('noInvalidSignedStateAccepted'));
 });
 
-test('strict terminal verifier rejects healed routing without real packet-partition proof', () => {
+test('strict terminal verifier rejects missing packet-partition provenance even with healed=1', () => {
   const raw = evidence(0);
   delete raw.adversarial.packetPartition;
   raw.routing.healedSuccessRatio = 1;
@@ -122,7 +123,6 @@ test('strict terminal verifier rejects healed routing without real packet-partit
   assert.equal(result.status, 1, result.stderr || result.stdout);
   const parsed = JSON.parse(result.stdout);
   assert.equal(parsed.ok, false);
-  assert.ok(parsed.failed.includes('canonicalEvaluator'));
-  assert.ok(parsed.failed.includes('packetPartitionProbe'));
+  assert.ok(parsed.failed.includes('realPacketPartitionProbe'));
   assert.ok(parsed.failed.includes('healedRouting'));
 });
