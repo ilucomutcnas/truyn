@@ -18,24 +18,27 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
-      - name: Check exact p00 subpart digests
+      - name: Check exact part digests
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
-          names=(p00a p00b p00c p00d)
           expected=(
-            a6a07558d63cef696148d4252ef9953931038c97ffda0f906ff79051885b8b3c
-            7c92529baf19fc52367e3d699aab7001a66c8288810c1b5eff4cb6739dd0e71d
-            1561a00fa24979a2081e0d08e8014ccccf53a9441a54db843ff7081bfd1ac4f8
-            b4ff773e5e81bd22078aca286d44c13097d85c479cbaead1ccfbfc17ed5729bf
+            a900539e13ce8e2511c52059e426594b1eb4c009bd51486250996062b015c1de
+            7f5e12abd28c5c45d4f876446b63cbe1b430ffe0ed16b0be22acb58ce76de335
+            360bc74b0204e762f3e10d2bbcb9a8924e74c5b4759d0a3ff2c60b711f33006b
+            2c6c541564c90efd176502d3e201abead52776dc7d1c33e4b4e876e870e7708c
+            ac40c40a49fc8aea64c17f3c8f4deb154eb5b2bead6c7f4a4ced234ee881c9d3
+            4048b37aa49f84a5db3ce3b7f96d8ac97c58bf9209301f90ca78240e440ce9a5
+            4392b3e1b567172ab84898b2e4287c083241fb1283cf2fbfe85150997e03ffcd
+            d1a003f208f22900f98099069008d288ddfe6a34167658bedbcd8e06d65455f5
           )
           failed=0
-          for i in 0 1 2 3; do
-            f="_tmp_parts/${names[$i]}"
+          for i in 0 1 2 3 4 5 6 7; do
+            f="_tmp_parts/p0${i}"
             got="$(sha256sum "$f" | awk '{print $1}')"
             if [[ "$got" == "${expected[$i]}" ]]; then state=success; else state=failure; failed=1; fi
-            gh api --method POST -H 'Accept: application/vnd.github+json' "repos/${GITHUB_REPOSITORY}/statuses/${GITHUB_SHA}" -f state="$state" -f context="truyn-subpart/${names[$i]}" >/dev/null
+            gh api --method POST -H 'Accept: application/vnd.github+json' "repos/${GITHUB_REPOSITORY}/statuses/${GITHUB_SHA}" -f state="$state" -f context="truyn-part-current/p0${i}" >/dev/null
           done
           exit "$failed"
