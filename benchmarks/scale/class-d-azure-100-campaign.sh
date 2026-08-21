@@ -81,11 +81,24 @@ PY")
 [[ "$(marker "$out" PARTITION_SUCCESSES)" == 0 ]]
 remote "${VMS[0]}" "iptables -D OUTPUT -p udp -d '${block_ip}' --dport ${QUIC_BASE}:$((QUIC_BASE+24)) -j DROP; echo HEALED=1" >/dev/null
 heal_start=$(date +%s%3N)
-for n in $(seq 1 30); do
-  out=$(remote "${VMS[0]}" "target=\$(jq -r '[.[]|select(.endpoints[0]|contains(\"${block_ip}\"))][0].nodeId' /tmp/all-records.json); b=\$(jq -nc --arg n \"\$target\" '{nodeId:\$n,input:{scenario:\"partition-heal\"}}'); c=\$(curl -sS --max-time 5 -o /tmp/b -w '%{http_code}' -H 'content-type: application/json' --data-binary \"\$b\" http://127.0.0.1:${CONTROL_BASE}/need||true); echo CODE=\$c")
-  [[ "$(marker "$out" CODE)" == 200 ]] && break
-  sleep 1
-done
+out=$(remote "${VMS[0]}" "python3 - <<'PY'
+import json,subprocess,time
+records=json.load(open('/tmp/all-records.json'))
+target=[x['nodeId'] for x in records if '${block_ip}' in x['endpoints'][0]][0]
+last='000'
+for attempt in range(1,31):
+ body=json.dumps({'nodeId':target,'input':{'scenario':'partition-heal'}},separators=(',',':'))
+ p=subprocess.run(['curl','-sS','--max-time','5','-o','/tmp/b','-w','%{http_code}','-H','content-type: application/json','--data-binary',body,'http://127.0.0.1:${CONTROL_BASE}/need'],text=True,capture_output=True)
+ last=p.stdout.strip() if p.returncode==0 else '000'
+ if last=='200':
+  print('CODE=200')
+  print(f'PARTITION_HEAL_ATTEMPTS={attempt}')
+  raise SystemExit(0)
+ time.sleep(1)
+print(f'CODE={last}')
+print('PARTITION_HEAL_ATTEMPTS=30')
+raise SystemExit(1)
+PY")
 [[ "$(marker "$out" CODE)" == 200 ]]
 partition_recovery_ms=$(( $(date +%s%3N) - heal_start ))
 echo "TRUYN_CLASS_D_100 stage=packet-partition exercised=true blockedSuccesses=0 recoveryMs=${partition_recovery_ms}"
@@ -104,19 +117,27 @@ print(f'CHURN_DOWN_SUCCESSES={ok}')
 PY")
 [[ "$(marker "$out" CHURN_DOWN_SUCCESSES)" -le 1 ]]
 remote "${VMS[2]}" "for idx in \$(seq 50 57); do systemctl start truyn-d100@\${idx}.service; done; echo STARTED=8" >/dev/null
-for n in $(seq 1 45); do
-  out=$(remote "${VMS[0]}" "python3 - <<'PY'
-import json,subprocess
-r=json.load(open('/tmp/all-records.json')); ts=[x['nodeId'] for x in r if '${PRIV[2]}' in x['endpoints'][0]][:8]; ok=0
-for n in ts:
- b=json.dumps({'nodeId':n,'input':{'scenario':'churn-recover'}},separators=(',',':'))
- p=subprocess.run(['curl','-sS','--max-time','4','-o','/tmp/b','-w','%{http_code}','-H','content-type: application/json','--data-binary',b,'http://127.0.0.1:${CONTROL_BASE}/need'],text=True,capture_output=True)
- ok += int(p.returncode==0 and p.stdout.strip()=='200')
-print(f'CHURN_RECOVERED={ok}')
+out=$(remote "${VMS[0]}" "python3 - <<'PY'
+import json,subprocess,time
+records=json.load(open('/tmp/all-records.json'))
+targets=[x['nodeId'] for x in records if '${PRIV[2]}' in x['endpoints'][0]][:8]
+last=0
+for attempt in range(1,46):
+ ok=0
+ for node_id in targets:
+  body=json.dumps({'nodeId':node_id,'input':{'scenario':'churn-recover'}},separators=(',',':'))
+  p=subprocess.run(['curl','-sS','--max-time','4','-o','/tmp/b','-w','%{http_code}','-H','content-type: application/json','--data-binary',body,'http://127.0.0.1:${CONTROL_BASE}/need'],text=True,capture_output=True)
+  ok += int(p.returncode==0 and p.stdout.strip()=='200')
+ last=ok
+ if ok==8:
+  print('CHURN_RECOVERED=8')
+  print(f'CHURN_RECOVERY_ATTEMPTS={attempt}')
+  raise SystemExit(0)
+ time.sleep(1)
+print(f'CHURN_RECOVERED={last}')
+print('CHURN_RECOVERY_ATTEMPTS=45')
+raise SystemExit(1)
 PY")
-  [[ "$(marker "$out" CHURN_RECOVERED)" == 8 ]] && break
-  sleep 1
-done
 [[ "$(marker "$out" CHURN_RECOVERED)" == 8 ]]
 churn_recovery_ms=$(( $(date +%s%3N) - churn_start ))
 echo "TRUYN_CLASS_D_100 stage=churn stopped=8 restarted=8 identityStatePreserved=true recoveryMs=${churn_recovery_ms}"

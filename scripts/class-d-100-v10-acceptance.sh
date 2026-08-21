@@ -51,7 +51,21 @@ install_new = install_new.replace('truqyn-d100', 'truyn-d100')
 s = s[:start] + install_new + s[end:]
 
 # Capture every RunCommand message component while preserving fail-closed behavior.
-s = s.replace("--query 'value[0].message' -o tsv --only-show-errors", "--query 'value[].message' -o tsv --only-show-errors", 1)
+# V16 moved RunCommand execution from the prepared provisioner into a copied
+# admission-aware helper. Preserve V10's all-message invariant in either shape:
+# patch the legacy inline command when present, otherwise patch/validate the
+# copied helper that now owns the Azure CLI boundary.
+run_command_query_old = "--query 'value[0].message' -o tsv --only-show-errors"
+run_command_query_all = "--query 'value[].message' -o tsv --only-show-errors"
+run_command_helper_path = p.parent / 'run-command-helper.sh'
+run_command_helper = run_command_helper_path.read_text() if run_command_helper_path.exists() else ''
+if run_command_query_old in s:
+    s = s.replace(run_command_query_old, run_command_query_all, 1)
+elif run_command_query_old in run_command_helper:
+    run_command_helper = run_command_helper.replace(run_command_query_old, run_command_query_all, 1)
+    run_command_helper_path.write_text(run_command_helper)
+elif run_command_query_all not in s and run_command_query_all not in run_command_helper:
+    raise SystemExit('V10 RunCommand query boundary missing during preparation')
 
 # Preserve V8 guest diagnostics.
 readiness = r'''[ "\$ok" -eq 1 ]'''
@@ -145,7 +159,8 @@ if noop in s:
     raise SystemExit('fatal D-100 records-service no-op mv survived V10 preparation')
 if "TRUYN_D100_INSTALL_DIAG readiness=FAIL" not in s:
     raise SystemExit('V10 guest install diagnostics missing after preparation')
-if "--query 'value[].message' -o tsv --only-show-errors" not in s:
+run_command_helper = run_command_helper_path.read_text() if run_command_helper_path.exists() else ''
+if run_command_query_all not in s and run_command_query_all not in run_command_helper:
     raise SystemExit('V10 RunCommand all-message extraction missing after preparation')
 """
 
