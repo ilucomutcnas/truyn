@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: read
+  issues: write
 
 env:
   TESTED_COMMIT: e9ff238b77aa82926151f592e94b8b47b520bf17
@@ -17,6 +18,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
+      - name: Record immutable preflight start
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          body="run=${GITHUB_RUN_ID} workflow_sha=${GITHUB_SHA} tested_sha=${TESTED_COMMIT} phase=immutable-preflight"
+          gh api "repos/${GITHUB_REPOSITORY}/issues" -f 'title=TRUYN CLASS D-100 V16 IMMUTABLE PREFLIGHT STARTED' -f "body=${body}" >/dev/null
+
       - uses: actions/checkout@v4
         with:
           ref: e9ff238b77aa82926151f592e94b8b47b520bf17
@@ -97,6 +106,7 @@ jobs:
           {
             printf 'tested_commit=%s\n' "$TESTED_COMMIT"
             printf 'launcher_commit=%s\n' "$GITHUB_SHA"
+            printf 'run_id=%s\n' "$GITHUB_RUN_ID"
             printf 'status=PASS\n'
             printf 'safety_contract=unchanged\n'
             printf 'node_count=100\n'
@@ -120,3 +130,11 @@ jobs:
           path: |
             class-d-100-v16-preflight.txt
             class-d-100-v16-source-manifest.sha256
+
+      - name: Record immutable preflight PASS
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          body="run=${GITHUB_RUN_ID} workflow_sha=${GITHUB_SHA} tested_sha=${TESTED_COMMIT} status=PASS immutable_preflight=true artifact_name=truyn-class-d100-v16-preflight-${GITHUB_RUN_ID}"
+          gh api "repos/${GITHUB_REPOSITORY}/issues" -f 'title=TRUYN CLASS D-100 V16 IMMUTABLE PREFLIGHT PASS' -f "body=${body}" >/dev/null
