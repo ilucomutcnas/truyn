@@ -22,6 +22,7 @@ for (const script of scripts) {
 test('final launchers patch known native/runtime hazards before cloud execution', async () => {
   const { readFile } = await import('node:fs/promises');
   const d100 = await readFile('scripts/class-d-100-final-acceptance.sh', 'utf8');
+  const d100RunCommand = await readFile('scripts/lib/class-d-run-command.sh', 'utf8');
   assert.match(d100, /npm install --no-audit --no-fund/);
   assert.match(d100, /50command-not-found/);
   assert.match(d100, /TRUYN_AZ_CLI_RETRIES:=4/);
@@ -38,12 +39,13 @@ test('final launchers patch known native/runtime hazards before cloud execution'
   assert.doesNotMatch(d100, /apt-get (?:update|install)[^\n]*\|\|\s*true/);
 
   // Canonical guest payload is normalized before any Azure execution. Lock the
-  // corrected runtime paths and reject the historical typo families.
+  // corrected runtime paths at the acceptance-only RunCommand boundary and
+  // reject the historical typo families.
   assert.match(d100, /s = s\.replace\('truqyn', 'truyn'\)/);
   assert.match(d100, /s = s\.replace\('truinyn', 'truyn'\)/);
   assert.match(d100, /s = s\.replace\('truin-d100', 'truyn-d100'\)/);
-  assert.match(d100, /\/bin\/bash \/tmp\/truyn-d100-run\.sh/);
-  assert.doesNotMatch(d100, /\/bin\/bash \/tmp\/truin-d100-run\.sh/);
+  assert.match(d100RunCommand, /\/bin\/bash \/tmp\/truyn-d100-run\.sh/);
+  assert.doesNotMatch(d100RunCommand, /\/bin\/bash \/tmp\/truin-d100-run\.sh/);
   assert.match(d100, /invalid Class D prepared harness token survived/);
   assert.match(d100, /\/var\/lib\/truyn-d100\/records\.json/);
   assert.match(d100, /EnvironmentFile=\/etc\/truyn-d100\/node-%i\.env/);
