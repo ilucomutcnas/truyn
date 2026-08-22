@@ -1,0 +1,37 @@
+name: tmp-d100-v16-main-ci-id-probe
+
+on:
+  push:
+    branches:
+      - ci/d100-v16-main-security-green-observer-23360cbe
+    paths:
+      - '.github/workflows/tmp-d100-v16-main-ci-id-probe.yml'
+
+permissions:
+  actions: read
+  issues: write
+  contents: read
+
+env:
+  TARGET_SHA: 23360cbe86e725f79ef0c6772a51f70825b92aef
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Record exact main CI identity
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          runs_json="$(gh api -X GET "repos/${GITHUB_REPOSITORY}/actions/runs" -f head_sha="$TARGET_SHA" -f branch='main' -f event='push' -f per_page=100)"
+          run_json="$(jq -c --arg sha "$TARGET_SHA" '[.workflow_runs[] | select(.name == "CI" and .event == "push" and .head_branch == "main" and .head_sha == $sha)] | sort_by(.created_at) | last // empty' <<<"$runs_json")"
+          test -n "$run_json"
+          run_id="$(jq -r '.id' <<<"$run_json")"
+          attempt="$(jq -r '.run_attempt' <<<"$run_json")"
+          status="$(jq -r '.status' <<<"$run_json")"
+          conclusion="$(jq -r '.conclusion // ""' <<<"$run_json")"
+          body="tested_sha=${TARGET_SHA}\nrun_id=${run_id}\nrun_attempt=${attempt}\nstatus=${status}\nconclusion=${conclusion}\nhead_branch=main\nevent=push\nstage=main_ci_identity_probe"
+          gh api "repos/${GITHUB_REPOSITORY}/issues" -f 'title=TRUYN D-100 V16 MAIN CI IDENTITY' -f "body=${body}" >/dev/null
