@@ -1,0 +1,49 @@
+name: tmp-d100-v16-policy-source-probe
+
+on:
+  push:
+    branches:
+      - ci/d100-v16-main-security-green-observer-23360cbe
+    paths:
+      - '.github/workflows/tmp-d100-v16-policy-source-probe.yml'
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Identify main workflow actor policy source
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set +e
+          curl -fsSL -H 'User-Agent: truyn-ci-diagnostic' 'https://github.com/inn-media/truyn/actions/runs/32558383377' -o /tmp/run.html
+          html_rc=$?
+          python - <<'PY' >/tmp/html-context.txt
+          from pathlib import Path
+          import html,re
+          s=Path('/tmp/run.html').read_text(errors='replace') if Path('/tmp/run.html').exists() else ''
+          needles=['Actor is not allowed to trigger Actions workflows','ruleset','workflow execution','policy violation']
+          out=[]
+          for needle in needles:
+              for m in re.finditer(re.escape(needle),s,re.I):
+                  x=s[max(0,m.start()-1800):m.end()+3500]
+                  x=html.unescape(x)
+                  x=re.sub(r'\s+',' ',x)
+                  if x not in out: out.append(x)
+                  if len(out)>=8: break
+          print('\n---\n'.join(out)[:30000])
+          PY
+          curl -fsSL -H 'Accept: application/vnd.github+json' -H 'User-Agent: truyn-ci-diagnostic' 'https://api.github.com/repos/inn-media/truyn/rulesets?includes_parents=true' -o /tmp/public-rulesets.json 2>/tmp/public.err
+          rules_rc=$?
+          rules="$(head -c 20000 /tmp/public-rulesets.json 2>/dev/null || true)"
+          err="$(tr '\n' ' ' </tmp/public.err 2>/dev/null | head -c 3000)"
+          context="$(head -c 30000 /tmp/html-context.txt)"
+          body="html_rc=${html_rc}\npublic_rulesets_rc=${rules_rc}\npublic_rulesets=${rules}\npublic_rulesets_stderr=${err}\nui_context=${context}\nstage=workflow_execution_policy_source_probe"
+          gh api "repos/${GITHUB_REPOSITORY}/issues" -f 'title=TRUYN D-100 V16 WORKFLOW EXECUTION POLICY SOURCE' -f "body=${body}" >/dev/null
+          exit 0
