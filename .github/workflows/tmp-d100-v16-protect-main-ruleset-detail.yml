@@ -1,0 +1,29 @@
+name: tmp-d100-v16-protect-main-ruleset-detail
+
+on:
+  push:
+    branches:
+      - ci/d100-v16-main-security-green-observer-23360cbe
+    paths:
+      - '.github/workflows/tmp-d100-v16-protect-main-ruleset-detail.yml'
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Read public Protect main ruleset details
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set +e
+          curl -fsSL -H 'Accept: application/vnd.github+json' -H 'User-Agent: truyn-ci-diagnostic' 'https://api.github.com/repos/inn-media/truyn/rulesets/20891936' -o /tmp/ruleset.json 2>/tmp/err
+          rc=$?
+          body="rc=${rc}\nruleset=$(head -c 45000 /tmp/ruleset.json 2>/dev/null || true)\nstderr=$(tr '\n' ' ' </tmp/err 2>/dev/null | head -c 3000)\nstage=protect_main_ruleset_detail"
+          gh api "repos/${GITHUB_REPOSITORY}/issues" -f 'title=TRUYN D-100 V16 PROTECT MAIN RULESET DETAIL' -f "body=${body}" >/dev/null
+          exit 0
