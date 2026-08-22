@@ -37,6 +37,15 @@ jobs:
           test "$GITHUB_REF" = refs/heads/main
           test "$GITHUB_RUN_ATTEMPT" = 1
 
+      - name: Record immutable preflight start
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          body="stage=STARTED\ntested_commit=${TESTED_COMMIT}\ntested_parent=${TESTED_PARENT}\nsecurity_green_run=${SECURITY_GREEN_RUN}\nlauncher_commit=${GITHUB_SHA}\nworkflow_run_id=${GITHUB_RUN_ID}\nresource_writes=0"
+          gh api "repos/${GITHUB_REPOSITORY}/issues" -f "title=TRUYN CLASS D-1000 IMMUTABLE PREFLIGHT STARTED ${TESTED_COMMIT} run ${GITHUB_RUN_ID}" -f "body=${body}" >/dev/null
+
       - name: Checkout exact migrated D-1000 source
         uses: actions/checkout@v4
         with:
