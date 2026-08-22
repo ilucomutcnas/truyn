@@ -1,0 +1,80 @@
+name: D-1000 assertion diagnostic
+
+on:
+  push:
+    branches:
+      - d1000/diagnose-43814a-assertions
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout exact D-1000 candidate
+        uses: actions/checkout@v4
+        with:
+          ref: 43814a903e3c7bbf8d9eb80dc3be59b896fb3aca
+
+      - name: Setup Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install dependencies
+        run: npm install --ignore-scripts --no-audit --no-fund
+
+      - name: Run exact full test suite and capture log
+        id: tests
+        env:
+          TRUYN_LOCAL_DEVELOPMENT: '1'
+        shell: bash
+        run: |
+          set +e
+          npm test > /tmp/test.log 2>&1
+          code=$?
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Extract assertion failure context
+        shell: bash
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+          const text = fs.readFileSync('/tmp/test.log', 'utf8');
+          const lines = text.split(/\r?\n/);
+          const hits = [];
+          for (let i = 0; i < lines.length; i++) {
+            if (/^(not ok\b)|AssertionError|ERR_ASSERTION/.test(lines[i].trim())) {
+              hits.push(i);
+            }
+          }
+          const merged = [];
+          for (const hit of hits) {
+            const start = Math.max(0, hit - 6);
+            const end = Math.min(lines.length, hit + 24);
+            const block = lines.slice(start, end).join('\n');
+            if (!merged.includes(block)) merged.push(block);
+          }
+          fs.writeFileSync('/tmp/failures.txt', merged.join('\n\n===== FAILURE CONTEXT =====\n\n'));
+          console.log(`captured ${hits.length} failure markers`);
+          NODE
+
+      - name: Upload diagnostic logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: d1000-43814a-assertion-diagnostic
+          path: |
+            /tmp/failures.txt
+            /tmp/test.log
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Preserve test result
+        if: always()
+        shell: bash
+        run: exit ${{ steps.tests.outputs.exit_code }}
