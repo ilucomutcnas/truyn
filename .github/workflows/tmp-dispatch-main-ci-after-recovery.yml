@@ -1,0 +1,43 @@
+name: tmp-dispatch-main-ci-after-recovery
+
+on:
+  push:
+    branches: [ci/d100-v16-actions-policy-probe-2]
+    paths:
+      - '.github/workflows/tmp-dispatch-main-ci-after-recovery.yml'
+
+permissions:
+  actions: write
+  contents: read
+  issues: write
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dispatch canonical CI on main and record run id
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: '82eba28c25aceb273444da6edb97904cbaea03db'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          before="$(gh api "repos/${REPO}/actions/workflows/ci.yml/runs?event=workflow_dispatch&branch=main&per_page=100" --jq '[.workflow_runs[].id]')"
+          gh workflow run ci.yml --repo "${REPO}" --ref main
+          run_id=''
+          for i in $(seq 1 30); do
+            run_id="$(gh api "repos/${REPO}/actions/workflows/ci.yml/runs?event=workflow_dispatch&branch=main&per_page=100" --jq --arg sha "$SHA" --argjson before "$before" '[.workflow_runs[] | select(.head_sha==$sha and ([ $before[] ] | index(.id) | not))][0].id // empty')"
+            [[ -n "$run_id" ]] && break
+            sleep 2
+          done
+          [[ -n "$run_id" ]]
+          meta="$(gh api "repos/${REPO}/actions/runs/${run_id}" --jq '{id,name,head_branch,head_sha,event,status,conclusion,run_attempt,created_at}')"
+          body=$(cat <<EOF
+          exact_sha=${SHA}
+          run_id=${run_id}
+          meta=${meta}
+          stage=dispatch_canonical_ci_main
+          EOF
+          )
+          gh api "repos/${REPO}/issues" -f 'title=TRUYN D-100 V16 CANONICAL MAIN CI DISPATCHED' -f "body=${body}" >/dev/null
