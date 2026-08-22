@@ -20,7 +20,7 @@ A newer node may support multiple protocol generations simultaneously. We do **n
 - `WHITEPAPER.md` — academic and engineering rationale.
 - `STRUCTURE.md` — repository ownership and versioning model.
 - `ROADMAP.md` — staged implementation/maturity sequence.
-- `LICENSE` — 0BSD.
+- `LICENSE` — Apache License 2.0 (`Apache-2.0`), including the explicit contributor patent grant in Section 3.
 - `SECURITY.md` — security reporting, provider/relay security baseline and repository boundary.
 - `CONTRIBUTING.md` — contribution principles.
 - `CHANGELOG.md` — factual repository/release changes.
