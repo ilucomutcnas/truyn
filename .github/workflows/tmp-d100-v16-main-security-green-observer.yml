@@ -20,6 +20,17 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
+      - name: Record observer start
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          body="observer_run_id=${GITHUB_RUN_ID}\nobserver_job=${GITHUB_JOB}\ntarget_sha=${TARGET_SHA}\nstage=observer_started"
+          gh api "repos/${GITHUB_REPOSITORY}/issues" \
+            -f 'title=TRUYN D-100 V16 MAIN SECURITY-GREEN OBSERVER STARTED' \
+            -f "body=${body}" >/dev/null
+
       - name: Find exact main push CI and request fresh rerun
         id: rerun
         env:
