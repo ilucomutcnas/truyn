@@ -1,9 +1,19 @@
-# TRUYN security-sensitive ownership boundary.
-# Public contributions remain welcome; changes to the trust boundary require explicit owner review once CODEOWNERS review is enforced by the repository ruleset.
+# TRUYN security-sensitive and governance-sensitive ownership boundary.
+# Public contributions remain welcome. CODEOWNERS is an implementation/review control, not the source of project governance authority.
+# Current ownership reflects bootstrap stewardship. GOV-2 requires this to evolve with the factual external/earned maintainer roster.
 
 .github/CODEOWNERS @ilucomutcnas
 .github/workflows/ @ilucomutcnas
 SECURITY.md @ilucomutcnas
+
+# Governance / standardization contracts
+GOVERNANCE.md @ilucomutcnas
+MAINTAINERS.md @ilucomutcnas
+ROADMAP.md @ilucomutcnas
+docs/governance/ @ilucomutcnas
+docs/architecture/GOVERNANCE_ARCHITECTURE.md @ilucomutcnas
+docs/architecture/ARCHITECTURE_CONTRACT.md @ilucomutcnas
+docs/architecture/IMPLEMENTATION_STATUS.md @ilucomutcnas
 
 core/security/ @ilucomutcnas
 network/relay/ @ilucomutcnas

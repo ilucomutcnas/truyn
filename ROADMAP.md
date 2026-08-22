@@ -1,12 +1,14 @@
 # TRUYN Roadmap
 
-This roadmap describes intended engineering milestones and factual maturity. Protocol semantics live in `spec/`; measured claims live in `docs/benchmarks/`.
+This roadmap describes intended engineering, ecosystem and governance milestones and factual maturity. Protocol semantics live in `spec/`; governance rules live in `GOVERNANCE.md` + `docs/governance/`; measured claims live in `docs/benchmarks/`.
 
 The implementation has not evolved strictly in version order: semantic, provider, Trustability and benchmark layers advanced faster than the physical peer-network underlay. As of 2026-08-17, v0.1 Connect is implemented as a real QUIC/Kademlia/P2P/NAT reference underlay, while several later roadmap slices already have bounded implementations/evidence. The immediate engineering priority is network failure/churn durability and real multi-host scale rather than additional semantic sophistication.
 
 Developer experience is now an explicit implementation track: TRUYN requires first-party SDKs for JavaScript/TypeScript, Python, Go, Java and C#/.NET plus a signed TRUYN Agent Descriptor for low-friction discovery/onboarding. The architecture can be implemented in parallel with network productionization, but stable SDK compatibility cannot be claimed before the underlying protocol/interface contracts are stabilized.
 
 A2A/MCP interoperability is also an explicit implementation track. MCP already has bounded executable reference paths; A2A and the generalized bidirectional A2A↔TRUYN↔MCP bridge are defined architecture but remain implementation/evidence work.
+
+Governance and standardization are now a separate mandatory track. TRUYN currently operates under bootstrap Founding Stewardship by InnMedia. Public governance/RFC/extension/decision contracts can be defined immediately, but external maintainers, a multi-organization TSC and neutral legal stewardship require real organizational evidence. A code/spec release MUST NOT be used to imply governance maturity that has not been reached.
 
 ## Maturity scale
 
@@ -22,9 +24,11 @@ Every substantial subsystem should be described with an explicit maturity state:
 
 A design document does not promote implementation maturity. Conversely, once implementation/evidence exists, the roadmap must stop describing that slice as purely future work.
 
+Governance uses its own factual maturity axis G0→G5 because organizational independence cannot be measured by code maturity. See `GOVERNANCE.md` and `docs/architecture/GOVERNANCE_ARCHITECTURE.md`.
+
 Canonical status matrix: `docs/architecture/IMPLEMENTATION_STATUS.md`.
 
-## Current snapshot — 2026-08-22
+## Current snapshot — 2026-08-23
 
 | Area | Current maturity |
 |---|---|
@@ -40,6 +44,7 @@ Canonical status matrix: `docs/architecture/IMPLEMENTATION_STATUS.md`.
 | Trustability v1/v2 | Implemented + CI/benchmark proven; bounded real-network trust slice proven |
 | Multi-cloud text/image/video providers | Implemented reference adapter paths; individual deployment availability varies |
 | SDK / developer experience | **Defined architecture; repository scaffolding only. Required first-party targets: JavaScript/TypeScript, Python, Go, Java, C#/.NET. Agent Descriptor draft defined; runtime SDK/descriptor implementation open** |
+| Governance / standardization | **G1 public governance architecture/process defined; operational governance remains bootstrap Founding Stewardship. External maintainers, multi-org TSC and neutral legal stewardship are not yet facts** |
 | Network productionization | **In progress — Class B closed; Class C heterogeneous WAN/reachability remains next** |
 | Operations / compatibility / separate security docs | Documentation baseline implemented in current synchronization |
 | Mainnet | Not productionized / not stable |
@@ -77,6 +82,75 @@ See:
 - `docs/architecture/BYOK_ARCHITECTURE.md`
 - `docs/architecture/THREAT_MODEL.md`
 - `docs/security/`
+
+## Governance & Standardization Gate — **GOV-0/GOV-1 DEFINED; ORGANIZATIONAL GATES OPEN**
+
+Architecture: `docs/architecture/GOVERNANCE_ARCHITECTURE.md`.  
+Canonical governance: `GOVERNANCE.md`.  
+Processes: `docs/governance/`.
+
+This track is independent from network/SDK/security implementation maturity. Markdown can define governance, but cannot create independent maintainers, organizations or neutral legal stewardship.
+
+### GOV-0 — Governance contract — **DEFINED**
+
+- [x] publish `GOVERNANCE.md`;
+- [x] define Contributor / Maintainer / Subsystem Maintainer / TSC / Chair / Security Response Team roles;
+- [x] declare current bootstrap Founding Stewardship honestly;
+- [x] separate protocol governance from repository ownership, infrastructure operation and commercial ownership;
+- [x] define decision classes A-D plus governance changes;
+- [x] define quorum/ordinary/supermajority rules for the future TSC;
+- [x] define conflict/recusal and public decision-record expectations;
+- [x] publish factual `MAINTAINERS.md` roster.
+
+### GOV-1 — RFC + extension framework — **DEFINED**
+
+- [x] public RFC lifecycle and review expectations;
+- [x] Community → Experimental → Official → Core Candidate → Core extension lifecycle;
+- [x] permissionless third-party Community Extensions in third-party namespaces;
+- [x] governance-controlled official `truyn.org` extension namespace target;
+- [x] security/compatibility/conformance requirements for Official extensions;
+- [x] separate normative RFC required for promotion to Core;
+- [x] durable negative/rejected/superseded decision history policy.
+
+### GOV-2 — Open maintainer model — **OPEN / ORGANIZATIONAL**
+
+- [ ] appoint and publicly record earned Maintainers under the published criteria;
+- [ ] include meaningful independent/external Maintainer participation;
+- [ ] align repository review/CODEOWNERS mechanics with the factual maintainer roster without treating GitHub permission as governance by itself;
+- [ ] demonstrate routine Class A review/merge without Founding Steward acting as the only practical reviewer;
+- [ ] demonstrate at least one public normative RFC handled under the process.
+
+### GOV-3 — Multi-organization TSC — **OPEN / ORGANIZATIONAL**
+
+- [ ] constitute a TSC with at least three independent organizations/constituencies;
+- [ ] no single organization holds a voting majority;
+- [ ] publish affiliations, active seats and decision/minutes record;
+- [ ] elect/record Chair if used;
+- [ ] demonstrate quorum/vote/recusal rules on real decisions;
+- [ ] remove Founding Steward as the sole final normative authority.
+
+Only after this gate is factually met may TRUYN claim multi-organization/vendor-neutral governance in operation.
+
+### GOV-4 — Neutral stewardship — **OPEN / LEGAL + ORGANIZATIONAL**
+
+- [ ] select an appropriate neutral legal/stewardship structure (for example a neutral foundation or independent open-standards steward);
+- [ ] define/execute stewardship of protocol/spec IP where applicable;
+- [ ] define/execute stewardship of TRUYN marks and official namespaces where applicable;
+- [ ] adopt a neutral charter consistent with the public governance rules;
+- [ ] make infrastructure/administrative dependencies that must be neutral independent of a single commercial vendor.
+
+No documentation change alone can close GOV-4.
+
+### GOV-5 — Stable ecosystem governance — **OPEN**
+
+- [ ] succession process demonstrated;
+- [ ] maintainer/TSC inactivity/removal process demonstrated;
+- [ ] appeals/escalation process demonstrated;
+- [ ] release/deprecation authority demonstrated;
+- [ ] security emergency → post-embargo public decision process demonstrated;
+- [ ] governance continuity remains functional through organization/personnel changes.
+
+Governance maturity is not a blocker for continuing engineering work, but it is a blocker for claims that TRUYN is already a mature vendor-neutral standard. Stable-v1 technical release and governance maturity remain separately reported dimensions.
 
 ## v0.1 — Connect — **IMPLEMENTED / CI-PROVEN REFERENCE UNDERLAY**
 
@@ -137,7 +211,7 @@ Still open and required:
 
 Class B is durable evidence. The signed peer-record lifecycle is a later CI-proven productionization prerequisite. Neither fact closes Class C heterogeneous WAN/reachability or Class D scale/adversarial gates.
 
-This gate is deliberately prioritized ahead of further semantic-router feature expansion and ahead of settlement-adapter implementation. SDK/DX and bounded A2A/MCP interoperability implementation may proceed in parallel, but neither may be used to imply network productionization.
+This gate is deliberately prioritized ahead of further semantic-router feature expansion and ahead of settlement-adapter implementation. SDK/DX, governance organization-building and bounded A2A/MCP interoperability implementation may proceed in parallel, but none may be used to imply network productionization.
 
 ## v0.2 — Verify — **SUBSTANTIALLY IMPLEMENTED / SCALE GATE OPEN**
 
@@ -369,6 +443,9 @@ Architecture: `docs/architecture/SETTLEMENT_ADAPTERS.md`.
 - Published and documented first-party SDKs for JavaScript/TypeScript, Python, Go, Java and C#/.NET
 - Shared SDK conformance suite green across all five first-party languages
 - Stable SDK compatibility/deprecation policy
+- Public governance/RFC/extension process in force and factual governance maturity reported independently of technical release maturity
+- No claim of multi-organization/vendor-neutral governance unless GOV-3 is actually closed
+- No claim of neutral legal stewardship unless GOV-4 is actually closed
 
 ## Post-v1 research track — Capability Economy
 
@@ -381,7 +458,7 @@ Architecture: `docs/architecture/SETTLEMENT_ADAPTERS.md`.
 
 ## Current execution order
 
-The network productionization gate remains the primary infrastructure priority. Developer experience and bounded A2A/MCP interoperability are required productization/interoperability tracks and can proceed in parallel where they do not depend on stable protocol choices.
+The network productionization gate remains the primary infrastructure priority. Developer experience, governance institution-building and bounded A2A/MCP interoperability are required productization/standardization tracks and can proceed in parallel where they do not depend on stable protocol choices.
 
 The intended high-level order is:
 
@@ -401,8 +478,24 @@ TRUYN/1 + A2A/MCP adapter boundary + Agent Descriptor + SDK compatibility stabil
 optional settlement-adapter implementation / capability-economy expansion
 ```
 
-This ordering does not prohibit early SDK or A2A/MCP adapter implementation. It prevents early package/adapter availability from being confused with a stable protocol/mainnet claim.
+In parallel with those technical stages:
+
+```text
+GOV-0/GOV-1 public process — defined
+        ↓
+GOV-2 external/earned maintainers
+        ↓
+GOV-3 multi-organization TSC
+        ↓
+GOV-4 neutral stewardship
+        ↓
+GOV-5 demonstrated governance continuity
+```
+
+This ordering does not prohibit early SDK, A2A/MCP adapter or governance-organization work. It prevents early package/adapter availability, open source code or public process documents from being confused with a stable mainnet or mature neutral-governance claim.
 
 ## Versioning rule
 
 Software releases (`v0.1.0`, `v1.0.0`) and network protocol generations (`TRUYN/1`, `TRUYN/2`) are deliberately separate. A newer node may support multiple protocol generations simultaneously. Current software remains `0.1.0-dev`; `TRUYN/1` remains draft until explicitly stabilized. A2A/MCP external protocol versions and SDK package versions are additional independent compatibility dimensions owned by their adapters/packages rather than by the core TRUYN wire generation.
+
+Governance maturity (G0-G5) is another independent dimension. A software/protocol version number never implies a governance stage.

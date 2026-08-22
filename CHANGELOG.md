@@ -4,6 +4,21 @@ All notable factual repository changes should be recorded here without publishin
 
 ## Unreleased
 
+### Governance and standardization architecture — 2026-08-23
+
+- Added root `GOVERNANCE.md` defining current bootstrap Founding Stewardship, earned Maintainer roles, target multi-organization TSC, quorum/voting, conflicts, security exception, neutral-stewardship target and G0→G5 governance maturity.
+- Added `MAINTAINERS.md` as a factual role roster that intentionally does not invent external maintainers or a TSC before they exist.
+- Added `docs/architecture/GOVERNANCE_ARCHITECTURE.md`, making governance a first-class architecture dimension that controls how normative sources may change while remaining separate from implementation, infrastructure and commercial ownership.
+- Added `docs/governance/RFC_PROCESS.md`, `EXTENSIONS.md`, `DECISION_PROCESS.md` and governance index.
+- Added reusable RFC, extension-proposal and decision-record templates plus an explicit extension registry that starts empty rather than treating existing adapters as automatically official extensions.
+- Defined normative decision classes A-D plus governance changes, public RFC review expectations and future TSC simple-majority/two-thirds-supermajority rules.
+- Defined permissionless Community Extensions plus Experimental, Official and Core Candidate tiers; official `truyn.org` extension namespace/status is governance-controlled and promotion to Core requires a separate normative RFC.
+- Added the Governance & Standardization Gate to `ROADMAP.md`: GOV-0/GOV-1 are defined now, while GOV-2 external maintainers, GOV-3 multi-organization TSC, GOV-4 neutral legal stewardship and GOV-5 continuity remain factual organizational work.
+- Made stable software/protocol maturity independent from governance maturity: a v1 release cannot be used as evidence that TRUYN is already neutrally governed.
+- Updated `README.md`, `MANIFESTO.md`, `CONTRIBUTING.md`, `STRUCTURE.md`, `SECURITY.md`, `docs/README.md`, `ARCHITECTURE_CONTRACT.md` and `IMPLEMENTATION_STATUS.md` so governance is part of the project DNA/source-of-truth hierarchy rather than an optional community appendix.
+- Extended `.github/CODEOWNERS` to protect governance-sensitive files under the current bootstrap owner while explicitly documenting that CODEOWNERS is a review control, not governance authority, and must evolve with the factual GOV-2 maintainer roster.
+- Preserved factual honesty: current operational governance remains single-steward/bootstrap; no foundation, multi-organization TSC or neutral stewardship is claimed yet.
+
 ### A2A / MCP interoperability architecture — 2026-08-22
 
 - Added `docs/architecture/A2A_MCP_INTEROPERABILITY.md` as the canonical external agent/tool protocol bridge architecture.

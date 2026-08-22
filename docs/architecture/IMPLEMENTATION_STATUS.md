@@ -2,15 +2,17 @@
 
 **Status:** canonical factual status index.
 
-**Snapshot date:** 2026-08-22  
+**Snapshot date:** 2026-08-23  
 **Software version:** `0.1.0-dev`  
 **Protocol generation:** `TRUYN/1` draft
 
 This document answers one question: **what is actually implemented and proven now, versus only designed or planned?**
 
-Architecture documents define contracts. Benchmark reports prove bounded claims. This file connects the two and MUST be updated when implementation maturity materially changes.
+Architecture documents define contracts. Benchmark reports prove bounded claims. Governance documents define how the standard may change. This file connects those dimensions and MUST be updated when implementation or governance maturity materially changes.
 
 ## Status vocabulary
+
+Technical maturity:
 
 - **Defined** — architecture/spec exists.
 - **Implemented** — executable reference code exists.
@@ -20,9 +22,11 @@ Architecture documents define contracts. Benchmark reports prove bounded claims.
 - **Internet-scale proven** — large real-node/WAN/adversarial evidence exists.
 - **Stable** — compatibility guarantees are declared.
 
+Governance maturity uses the independent G0-G5 model defined in `../../GOVERNANCE.md` and `GOVERNANCE_ARCHITECTURE.md`.
+
 ## System status matrix
 
-| Subsystem | Architecture | Implementation | Evidence | Current limitation / next gate |
+| Subsystem | Architecture | Implementation / operating state | Evidence | Current limitation / next gate |
 |---|---|---|---|---|
 | Node identity / signed envelopes | Defined | Implemented | CI-proven | protocol still draft |
 | QUIC underlay | Defined | Implemented | CI-proven | multi-host/WAN productionization still open |
@@ -51,12 +55,47 @@ Architecture documents define contracts. Benchmark reports prove bounded claims.
 | Settlement adapters (x402/AP2) | **Defined** | **Not implemented** | none | deferred v0.9 milestone after higher-priority productionization/operations gates |
 | TRUYN Agent Descriptor | **Defined draft** | **Not implemented as a served/discovered runtime contract** | none | implement well-known/native discovery, signature/expiry validation and scoped visibility |
 | First-party SDK program | **Defined** | **Scaffolding/documentation only** | no cross-language SDK conformance evidence | implement TS/Python reference pair, then Go/Java/.NET parity and package publication |
+| Governance architecture/process | **Defined (G1)** | **Bootstrap Founding Stewardship operating** | public `GOVERNANCE.md`, `MAINTAINERS.md`, RFC/extension/decision contracts | external maintainers (G2), multi-org TSC (G3), neutral stewardship (G4) remain unproven/not established |
 | Origin guard / edge proxy | Defined | Implemented reference controls | security tests/evaluation | deployment-specific direct-origin proof remains operational |
 | Protected-provider M2M guard | Defined | Implemented | regression proven | live token issuance/rotation is deployment-specific |
 | Multi-cloud text/image/video adapters | Defined | Implemented reference paths | smoke/benchmark evidence for available deployments | cloud entitlement/quota can block individual models |
 | Operations documentation | Defined | baseline implemented | this docs layer | production runbooks evolve with testnet/mainnet |
 | Compatibility documentation | Defined | baseline implemented | this docs layer | no stable `TRUYN/1`, A2A/MCP or SDK compatibility promise yet |
 | Mainnet | Defined conceptually | Not productionized | none | requires productionization + stabilization gates |
+
+## Governance status boundary
+
+Governance is now an explicit architecture dimension rather than an implicit repository-owner policy.
+
+What is **defined now (G1)**:
+
+- `GOVERNANCE.md` with current bootstrap state, roles, TSC target, voting and maturity model;
+- factual role roster in `MAINTAINERS.md`;
+- public RFC lifecycle;
+- Community → Experimental → Official → Core Candidate → Core extension lifecycle;
+- decision classes A-D plus governance changes;
+- future TSC quorum, ordinary and two-thirds supermajority rules;
+- conflict/recusal/public decision-record expectations;
+- architectural separation of protocol governance, repository ownership, infrastructure operation and commercial ownership;
+- explicit transition target from Founding Stewardship to multi-organization and neutral stewardship.
+
+What is **not yet factual**:
+
+- a demonstrated external/independent Maintainer cohort (G2);
+- a constituted multi-organization TSC (G3);
+- three independent constituencies with no single-vendor voting majority;
+- neutral legal/foundation/stewardship ownership of marks/namespaces/specification stewardship (G4);
+- demonstrated succession/appeals/governance continuity (G5).
+
+Current state must therefore be described as:
+
+> **Public governance architecture/process defined; operational governance remains bootstrap Founding Stewardship.**
+
+It must **not** be described as already neutrally governed, foundation-governed or multi-vendor governed.
+
+GitHub collaborator/CODEOWNERS permissions are implementation controls, not automatic governance roles. The factual role roster is `../../MAINTAINERS.md`.
+
+See `GOVERNANCE_ARCHITECTURE.md`, `../../GOVERNANCE.md`, `../../MAINTAINERS.md` and `../governance/`.
 
 ## A2A / MCP interoperability status boundary
 
@@ -142,11 +181,13 @@ The current reference implementation enforces these core invariants:
 
 Future SDK/Agent Descriptor and A2A/MCP implementations must preserve these invariants. An SDK, descriptor, Agent Card, MCP tool list or external protocol credential must never turn public metadata into private-provider authorization.
 
-See `SECURITY.md`, `docs/security/`, `AUTHORIZATION_MODEL.md`, `BILLING_BOUNDARY.md`, `A2A_MCP_INTEROPERABILITY.md`, `SETTLEMENT_ADAPTERS.md`, `SDK_DEVELOPER_EXPERIENCE.md` and `RELAY_SECURITY.md`.
+Governance cannot vote these security invariants away silently under a stable protocol identifier. Material normative security changes follow the RFC/decision process, except for time-bounded embargoed incident response followed by a public record after safe disclosure.
+
+See `SECURITY.md`, `docs/security/`, `AUTHORIZATION_MODEL.md`, `BILLING_BOUNDARY.md`, `A2A_MCP_INTEROPERABILITY.md`, `SETTLEMENT_ADAPTERS.md`, `SDK_DEVELOPER_EXPERIENCE.md`, `GOVERNANCE_ARCHITECTURE.md` and `RELAY_SECURITY.md`.
 
 ## Evidence discipline
 
-A claim is only promoted to a proven maturity when a durable public benchmark/security report exists or the repository CI contract is explicitly referenced. Temporary cloud workflows and Actions logs are operational mechanisms, not the durable evidence ledger.
+A claim is only promoted to a proven technical maturity when a durable public benchmark/security report exists or the repository CI contract is explicitly referenced. Temporary cloud workflows and Actions logs are operational mechanisms, not the durable evidence ledger.
 
 `docs/benchmarks/` remains append-only. Sensitive fields are redacted; measured reports are not deleted as a security shortcut.
 
@@ -154,11 +195,13 @@ SDK maturity follows the same rule: package publication or a compiling language 
 
 A2A/MCP maturity follows the same rule: separate adapter files are not enough. Bidirectional cross-protocol execution, exact-version compatibility and negative provider-security evidence are required before claiming a completed bridge.
 
+Governance maturity follows the same rule: documents can close G1, but G2-G5 require real people/organizations/decisions/legal arrangements. A future foundation name in a document is not evidence of neutral stewardship.
+
 ## Current priority
 
-The primary architecture/engineering priority is **network productionization**. Class B real multi-host proof is closed and the signed peer-record lifecycle prerequisite is now CI-proven; the next evidence class remains heterogeneous WAN/reachability.
+The primary architecture/engineering priority remains **network productionization**. Class B real multi-host proof is closed and the signed peer-record lifecycle prerequisite is now CI-proven; the next evidence class remains heterogeneous WAN/reachability.
 
-SDK/developer experience and bounded A2A/MCP interoperability are required pre-v1 productization/interoperability tracks that may proceed in parallel where they do not depend on unstable protocol decisions. They do not supersede the network productionization gate and must not be used to imply mainnet maturity.
+SDK/developer experience, bounded A2A/MCP interoperability and governance institution-building are required pre-v1 productization/standardization tracks that may proceed in parallel where they do not depend on unstable protocol decisions. They do not supersede the network productionization gate and must not be used to imply mainnet maturity.
 
 ```text
 bounded working decentralized primitives
@@ -188,4 +231,18 @@ TRUYN/1 + A2A/MCP adapter boundary + Agent Descriptor + SDK compatibility stabil
 settlement-adapter implementation milestone
 ```
 
-Until those gates are passed, TRUYN should be described as an advanced experimental/reference intelligence-network implementation, not a production mainnet.
+In parallel, governance evolves independently:
+
+```text
+GOV-0/GOV-1 public governance/process — defined
+        ↓
+GOV-2 open external-maintainer model
+        ↓
+GOV-3 multi-organization TSC
+        ↓
+GOV-4 neutral stewardship
+        ↓
+GOV-5 demonstrated continuity
+```
+
+Until the technical gates are passed, TRUYN should be described as an advanced experimental/reference intelligence-network implementation, not a production mainnet. Until the applicable governance gates are passed, it should be described as an open project with defined public governance under bootstrap Founding Stewardship, not as already neutrally governed.

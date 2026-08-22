@@ -1,6 +1,22 @@
 # Contributing to TRUYN
 
-TRUYN is an open infrastructure project. Contributions are welcome across protocol design, distributed systems, networking, cryptography, trustability, provider authorization, BYOK, A2A/MCP and other agent interoperability, SDKs, developer experience, benchmarks, documentation, and adversarial testing.
+TRUYN is an open infrastructure project. Contributions are welcome across protocol design, distributed systems, networking, cryptography, trustability, provider authorization, BYOK, A2A/MCP and other agent interoperability, SDKs, developer experience, benchmarks, documentation, governance, standards work and adversarial testing.
+
+## Governance comes first for normative changes
+
+Contributing code and changing the standard are related but different activities.
+
+Before proposing a normative protocol, stable compatibility, official extension or governance change, read:
+
+- `GOVERNANCE.md`;
+- `MAINTAINERS.md`;
+- `docs/governance/RFC_PROCESS.md`;
+- `docs/governance/EXTENSIONS.md`;
+- `docs/governance/DECISION_PROCESS.md`.
+
+Routine non-normative implementation work can use the normal PR process. A PR does not silently acquire normative authority merely because it is merged into the reference implementation.
+
+TRUYN is currently in bootstrap governance: InnMedia is the Founding Steward while the project transitions toward an earned external-maintainer model, a multi-organization TSC and ultimately neutral stewardship. Do not describe current bootstrap control as already vendor-neutral governance.
 
 ## License for contributions
 
@@ -9,6 +25,9 @@ TRUYN is licensed under the **Apache License 2.0**. Contributions are accepted u
 ## Principles
 
 - Keep the network vendor-neutral.
+- Keep governance capable of evolving beyond any single vendor.
+- Separate protocol governance, implementation/repository ownership, infrastructure operation and commercial ownership.
+- Prefer extensions/adapters before expanding the stable core when a feature can remain independently versioned.
 - Separate protocol semantics from adapters, SDK ergonomics and product-specific integrations.
 - Treat A2A and MCP as independently versioned interoperability edges rather than new TRUYN/1 wire primitives.
 - Preserve backward compatibility once a protocol version is declared stable.
@@ -21,6 +40,32 @@ TRUYN is licensed under the **Apache License 2.0**. Contributions are accepted u
 - Do not expose private TRUYN providers through public Agent Cards, MCP tool/resource lists or compatibility metadata without authorization.
 - Do not commit secrets or private keys.
 - Do not publish unnecessary production topology, privileged cloud identities, private origins, allowlists, quotas/cost ceilings or billing information in examples/docs.
+
+## Normative change classification
+
+Use the governance decision classes:
+
+- **Class A** — routine/non-normative implementation or documentation;
+- **Class B** — compatible normative change;
+- **Class C** — core/normative architecture change;
+- **Class D** — breaking stable change requiring a new protocol generation/major boundary;
+- **Governance change** — governance/TSC/stewardship rules.
+
+Class B-D and governance changes require the applicable public RFC/decision process. During bootstrap, decisions are recorded explicitly as Founding Steward decisions rather than fictional TSC votes.
+
+## Extensions
+
+Third parties may create Community Extensions in their own namespace without permission.
+
+Project-hosted extension maturity is:
+
+```text
+Community → Experimental → Official → Core Candidate → Core
+```
+
+Official `truyn.org` extension identifiers and Official TRUYN Extension status require governance approval. Promotion to Core is a separate normative RFC and should be rare.
+
+See `docs/governance/EXTENSIONS.md`.
 
 ## SDK and developer-experience contributions
 
@@ -84,6 +129,8 @@ For A2A/MCP work, read:
 
 ## Before v1.0
 
-The repository is intentionally evolving quickly. Proposed protocol, descriptor, SDK or interoperability changes should explain compatibility impact, security implications, versioning assumptions and how they can be tested.
+The repository is intentionally evolving quickly. Proposed protocol, descriptor, SDK, interoperability or governance changes should explain compatibility impact, security implications, versioning assumptions, governance classification and how they can be tested.
 
-See `ROADMAP.md`, `SECURITY.md`, `spec/`, `sdk/`, and `docs/architecture/` for the current direction.
+Stable-v1 technical maturity does not by itself prove neutral governance maturity. See the Governance & Standardization Gate in `ROADMAP.md`.
+
+See `ROADMAP.md`, `GOVERNANCE.md`, `SECURITY.md`, `spec/`, `sdk/`, `docs/governance/` and `docs/architecture/` for the current direction.
