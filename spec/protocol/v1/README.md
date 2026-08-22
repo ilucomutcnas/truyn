@@ -24,6 +24,29 @@ TRUYN/1 is the first logical network protocol generation. It runs over existing 
 
 All top-level payloads are carried by `proto/v1/envelope.proto`.
 
+## Discovery metadata — TRUYN Agent Descriptor
+
+TRUYN/1 also defines the draft **TRUYN Agent Descriptor** for low-friction participant onboarding/discovery.
+
+The Agent Descriptor is **not a new top-level exchange object**. It is signed, expiry-bound discovery/bootstrap metadata describing a participant's identity, supported TRUYN protocol/interface versions, intentionally visible capability classes and interaction features.
+
+For intentionally public HTTP-facing participants, the target well-known location is:
+
+```text
+https://<domain>/.well-known/truyn-agent.json
+```
+
+The Descriptor does not replace signed `OFFER` messages:
+
+```text
+Agent Descriptor = relatively stable bootstrap/self-description
+OFFER            = dynamic availability/conditions/candidate state
+```
+
+A Descriptor never grants provider authorization. Public/scoped descriptor views MUST respect the same provider-visibility policy as normal discovery and MUST NOT expose private capabilities/providers to requesters that are not authorized to discover them.
+
+See `agent-descriptor.md`.
+
 ## Provider policy
 
 Provider ownership/visibility/billing policy is specified in `provider-policy.md`. It is an authorization layer around discovery and execution rather than a new top-level envelope kind.
@@ -37,7 +60,7 @@ Core invariants:
 - discovery SHOULD hide private providers from unauthorized requesters;
 - every execution-capable transport converges on equivalent provider-policy enforcement.
 
-The current MVP does not yet implement every provider-policy requirement in the draft target.
+The reference implementation covers a substantial provider-policy baseline, while richer account/organization tenancy, commercial entitlements and production distributed accounting remain broader work.
 
 ## Settlement neutrality
 
@@ -89,9 +112,17 @@ Trust(claim, requester, purpose, domain, time, policy)
 
 Trustability and authorization are distinct: a trusted provider may still be unavailable to a requester because ownership policy denies access. Payment/settlement is a third independent concern: a successful payment does not establish result truth or provider authorization.
 
+## SDK relationship
+
+First-party SDKs consume TRUYN/1 rather than redefining it. The required SDK implementation program covers JavaScript/TypeScript, Python, Go, Java and C#/.NET.
+
+SDKs SHOULD use canonical protocol/wire/descriptor schemas or shared conformance fixtures and MUST fail explicitly on unsupported required semantics rather than inventing language-specific protocol behavior.
+
+See `docs/architecture/SDK_DEVELOPER_EXPERIENCE.md` and `docs/compatibility/SDK_COMPATIBILITY.md`.
+
 ## Security
 
-See `security.md` for protocol security assumptions and `provider-policy.md` for provider execution authorization. Public relay reachability does not create an entitlement to private provider capacity.
+See `security.md` for protocol security assumptions and `provider-policy.md` for provider execution authorization. Public relay reachability, an Agent Descriptor entry or SDK discovery result does not create an entitlement to private provider capacity.
 
 ## Normative language
 

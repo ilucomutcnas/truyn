@@ -46,12 +46,51 @@ Architecture documents define contracts. Benchmark reports prove bounded claims.
 | Sponsored billing | Defined | Guard implementation exists | activation requires signed entitlement + durable atomic usage store | production entitlement issuance/store deployment open |
 | Prepaid/subscription billing | Defined | fail-closed placeholder | denies without resolver | entitlement resolver/accounting not implemented |
 | Settlement adapters (x402/AP2) | **Defined** | **Not implemented** | none | deferred v0.9 milestone after higher-priority productionization/operations gates |
+| TRUYN Agent Descriptor | **Defined draft** | **Not implemented as a served/discovered runtime contract** | none | implement well-known/native discovery, signature/expiry validation and scoped visibility |
+| First-party SDK program | **Defined** | **Scaffolding/documentation only** | no cross-language SDK conformance evidence | implement TS/Python reference pair, then Go/Java/.NET parity and package publication |
 | Origin guard / edge proxy | Defined | Implemented reference controls | security tests/evaluation | deployment-specific direct-origin proof remains operational |
 | Protected-provider M2M guard | Defined | Implemented | regression proven | live token issuance/rotation is deployment-specific |
 | Multi-cloud text/image/video adapters | Defined | Implemented reference paths | smoke/benchmark evidence for available deployments | cloud entitlement/quota can block individual models |
 | Operations documentation | Defined | baseline implemented | this docs layer | production runbooks evolve with testnet/mainnet |
-| Compatibility documentation | Defined | baseline implemented | this docs layer | no stable `TRUYN/1` compatibility promise yet |
+| Compatibility documentation | Defined | baseline implemented | this docs layer | no stable `TRUYN/1` or SDK compatibility promise yet |
 | Mainnet | Defined conceptually | Not productionized | none | requires productionization + stabilization gates |
+
+## Developer Experience status boundary
+
+The required stable-v1 first-party SDK targets are:
+
+```text
+JavaScript / TypeScript
+Python
+Go
+Java
+C# / .NET
+```
+
+Rust is an optional additional track and does not replace any of the five required targets.
+
+What is now **defined**:
+
+- common SDK semantic surface;
+- SDK security/authorization invariants;
+- shared conformance expectations;
+- draft TRUYN Agent Descriptor semantics;
+- target public well-known path `/.well-known/truyn-agent.json` for intentionally public HTTP-facing participants;
+- language/package distribution targets;
+- DX-0 through DX-4 implementation gates.
+
+What is **not yet implemented/proven**:
+
+- published first-party SDK packages;
+- runtime Agent Descriptor serving/discovery;
+- descriptor signature/expiry validation in the SDK/node path;
+- shared golden conformance fixtures across languages;
+- cross-language CI parity;
+- stable SDK compatibility/deprecation guarantees.
+
+The `sdk/` tree must therefore be described as scaffolding/documentation until executable client libraries and conformance evidence exist.
+
+See `SDK_DEVELOPER_EXPERIENCE.md`, `../../spec/protocol/v1/agent-descriptor.md` and `../compatibility/SDK_COMPATIBILITY.md`.
 
 ## Settlement status boundary
 
@@ -74,7 +113,9 @@ The current reference implementation enforces these core invariants:
 9. protected provider M2M proof is transport-only and stripped before the inner relay;
 10. sponsored mode cannot activate without an actor-bound signed entitlement verifier and a durable atomic usage store.
 
-See `SECURITY.md`, `docs/security/`, `AUTHORIZATION_MODEL.md`, `BILLING_BOUNDARY.md`, `SETTLEMENT_ADAPTERS.md` and `RELAY_SECURITY.md`.
+Future SDK/Agent Descriptor implementations must preserve these invariants. An SDK or descriptor must never turn public metadata into private-provider authorization.
+
+See `SECURITY.md`, `docs/security/`, `AUTHORIZATION_MODEL.md`, `BILLING_BOUNDARY.md`, `SETTLEMENT_ADAPTERS.md`, `SDK_DEVELOPER_EXPERIENCE.md` and `RELAY_SECURITY.md`.
 
 ## Evidence discipline
 
@@ -82,9 +123,13 @@ A claim is only promoted to a proven maturity when a durable public benchmark/se
 
 `docs/benchmarks/` remains append-only. Sensitive fields are redacted; measured reports are not deleted as a security shortcut.
 
+SDK maturity follows the same rule: package publication or a compiling language client is not enough. Cross-language conformance/security evidence is required before promoting SDK parity/stability claims.
+
 ## Current priority
 
-The primary architecture/engineering priority is **network productionization**, not settlement implementation or additional semantic sophistication. Class B real multi-host proof is closed and the signed peer-record lifecycle prerequisite is now CI-proven; the next evidence class remains heterogeneous WAN/reachability:
+The primary architecture/engineering priority is **network productionization**. Class B real multi-host proof is closed and the signed peer-record lifecycle prerequisite is now CI-proven; the next evidence class remains heterogeneous WAN/reachability.
+
+SDK/developer experience is now a required pre-v1 implementation track that may proceed in parallel where it does not depend on unstable protocol decisions. It does not supersede the network productionization gate and must not be used to imply mainnet maturity.
 
 ```text
 bounded working decentralized primitives
@@ -104,6 +149,10 @@ real NAT and relay-failure matrix
 Byzantine / Sybil / eclipse / collusion exercises
         ↓
 stable operational and compatibility contracts
+        ↓
+SDK DX-1/DX-2/DX-3 completion + five-language conformance
+        ↓
+TRUYN/1 + Agent Descriptor + SDK compatibility stabilization
         ↓
 settlement-adapter implementation milestone
 ```

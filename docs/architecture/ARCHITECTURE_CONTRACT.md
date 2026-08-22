@@ -20,6 +20,9 @@ This document prevents architectural ideas and factual implementation status fro
 | BYOK model | `docs/architecture/BYOK_ARCHITECTURE.md` |
 | Billing/quota/entitlement boundary | `docs/architecture/BILLING_BOUNDARY.md` |
 | Settlement neutrality / external payment adapters | `spec/protocol/v1/economics.md` and `docs/architecture/SETTLEMENT_ADAPTERS.md` |
+| SDK / developer experience architecture | `docs/architecture/SDK_DEVELOPER_EXPERIENCE.md` and `sdk/README.md` |
+| TRUYN Agent Descriptor | `spec/protocol/v1/agent-descriptor.md` |
+| SDK compatibility | `docs/compatibility/SDK_COMPATIBILITY.md` |
 | Provider/relay threat model | `docs/architecture/THREAT_MODEL.md` |
 | Public/private information boundary | `docs/architecture/PUBLIC_PRIVATE_BOUNDARY.md` |
 | Public multi-cloud provider architecture | `docs/architecture/MULTI_CLOUD_PROVIDER_ARCHITECTURE.md` |
@@ -49,6 +52,8 @@ TRUYN documentation distinguishes:
 
 The repository is intentionally mixed maturity. The v0.1 QUIC/Kademlia underlay is implemented and CI-proven; the trust lifecycle has bounded real four-node QUIC/Kademlia evidence; semantic retrieval and provider security have substantial implementation/evidence; large real-node WAN scale, rich commercial/account control planes and stable mainnet remain open.
 
+The SDK/DX architecture and Agent Descriptor are **Defined**, but the five required first-party SDK packages and Agent Descriptor runtime serving/discovery path are not yet implementation-complete.
+
 An approved architecture document is not an implementation-complete security claim. Conversely, once a slice is implemented and evidenced, documentation must not continue describing it as purely planned.
 
 ## Canonical concepts
@@ -60,6 +65,39 @@ Cryptographic identity is independent of current IP address. Underlay addresses 
 A capability describes what can be provided or computed. `OFFER` advertises a capability with validity, location/policy conditions and optional price.
 
 Capability does not imply authorization. A matching provider is only a candidate until provider ownership, visibility, billing and entitlement policy make it eligible for the requester.
+
+### TRUYN Agent Descriptor
+
+The **TRUYN Agent Descriptor** is bootstrap/self-description metadata for a TRUYN-facing participant. It is not a new top-level TRUYN envelope kind.
+
+It describes, for the visibility scope of the requester:
+
+- participant identity;
+- supported TRUYN protocol generation(s);
+- supported interfaces/bindings;
+- intentionally visible capability classes;
+- supported interaction/features such as streaming/artifacts/trust receipts;
+- security/compatibility metadata safe to disclose;
+- issue/expiry/signature information.
+
+For intentionally public HTTP-facing participants, the target well-known path is:
+
+```text
+https://<domain>/.well-known/truyn-agent.json
+```
+
+The Descriptor is deliberately different from `OFFER`:
+
+```text
+Agent Descriptor = relatively stable bootstrap/self-description
+OFFER            = dynamic capability availability/conditions
+```
+
+A descriptor never grants provider authorization and MUST NOT expose a private provider/capability that provider-policy discovery would hide from that requester. A public descriptor is a public subset, not a dump of internal topology/providers.
+
+A valid descriptor signature proves integrity/key binding, not capability truth, current availability or requester entitlement.
+
+See `spec/protocol/v1/agent-descriptor.md`.
 
 ### Provider ownership
 
@@ -220,6 +258,40 @@ Cost-aware routing is part of the core request model; mandatory settlement is no
 
 Provider ownership remains intact in a market: paid/shared cross-owner execution requires an explicit contract/entitlement and, when required by policy, successful external payment authorization/settlement handling.
 
+## SDK and developer-experience contract
+
+TRUYN requires first-party SDKs for:
+
+```text
+JavaScript / TypeScript
+Python
+Go
+Java
+C# / .NET
+```
+
+Rust may be an additional SDK, but is not a replacement for the five required first-party targets.
+
+All SDKs MUST expose equivalent network semantics while remaining idiomatic to their host language. A minimum SDK must provide:
+
+- node/client connection/configuration;
+- identity retrieval;
+- Agent Descriptor retrieval/validation;
+- authorization-aware capability discovery;
+- `OFFER` publish/revoke;
+- `NEED` → `RESULT` correlation;
+- deadline/timeout/cancellation;
+- artifact/reference handling;
+- normalized errors and compatibility metadata.
+
+As protocol surfaces stabilize, typed coverage expands to generic object/state/compute/trust primitives.
+
+SDK implementation MUST reuse canonical protocol/wire schemas or shared golden fixtures wherever practical. SDK code MUST NOT invent wire semantics absent from `spec/`.
+
+Stable v1 requires a shared conformance suite green across all five first-party languages. The conformance suite must include security-negative cases proving private-capability non-disclosure and zero unauthorized upstream provider execution.
+
+See `docs/architecture/SDK_DEVELOPER_EXPERIENCE.md` and `docs/compatibility/SDK_COMPATIBILITY.md`.
+
 ## Relay and control-plane contract
 
 A relay may be public while providers remain private. Public reachability is not provider authorization.
@@ -287,7 +359,9 @@ Public architecture describes invariants, schemas, threats, generic deployment p
 
 Private operational state includes credentials/private keys, unnecessary cloud identity details, private origins/backchannels, privileged allowlists, exact quotas/cost ceilings, billing/credit information, secret paths and sensitive incident/customer data.
 
-Security MUST remain correct even if the public architecture is fully known.
+Public Agent Descriptors and SDK examples MUST follow the same boundary. SDK quickstarts/examples must never normalize embedding real provider credentials or private topology into source code or descriptor payloads.
+
+Security MUST remain correct even if the public architecture and all SDK source code are fully known.
 
 ## Network modes
 
@@ -307,7 +381,9 @@ Public network mode never overrides provider visibility/authorization.
 
 ## Versioning
 
-Software, protocol, wire and storage versions are independent. Current software is `0.1.0-dev`; `TRUYN/1` remains draft. A new software release does not automatically imply a new wire generation.
+Software, protocol, wire, descriptor, SDK and storage versions are independently declared where needed. Current software is `0.1.0-dev`; `TRUYN/1` remains draft. A new software release does not automatically imply a new wire generation.
+
+SDK releases must declare the TRUYN protocol/descriptor versions they support. An SDK release does not itself stabilize TRUYN/1.
 
 See `docs/compatibility/`.
 
@@ -317,10 +393,14 @@ Installation, first-run bootstrap and update/rollback are infrastructure contrac
 
 Production installer/updater/rollback maturity remains a v0.8/v1.0 gate.
 
+SDK package publication has its own release/provenance requirements but does not replace node installer/update security.
+
 ## Interoperability
 
 TRUYN is model/provider-neutral. Vendor adapters are replaceable edges. MCP, SDKs, HTTP/gRPC/WebSocket gateways and provider-specific adapters connect systems to TRUYN; none defines the network itself.
 
+The required first-party SDK targets are JavaScript/TypeScript, Python, Go, Java and C#/.NET. Their shared job is to make the same TRUYN semantics easy to consume from the major software ecosystems without creating five subtly different protocols.
+
 Settlement adapters follow the same extension philosophy: x402, AP2 and future payment systems are replaceable external edges and do not define the TRUYN core network.
 
-See `docs/compatibility/ADAPTER_COMPATIBILITY.md` for the factual adapter compatibility boundary.
+See `docs/compatibility/ADAPTER_COMPATIBILITY.md` and `docs/compatibility/SDK_COMPATIBILITY.md` for the factual compatibility boundaries.

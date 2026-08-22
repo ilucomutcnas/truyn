@@ -41,6 +41,8 @@ TRUYN is pre-1.0 experimental software. The public reference runtime is intentio
 
 This implements the first provider ownership/BYOK enforcement boundary plus reference edge-to-origin and protected-provider backchannel defense-in-depth components. Sponsored mode is deliberately non-activatable unless an actor-bound signed entitlement verifier and an atomic durable usage store are supplied; the old process-local quota counter is not accepted as a billing boundary. Rich account/tenant ownership, commercial entitlement issuance, durable store deployment and billing attribution remain later operational layers and must preserve these fail-closed invariants. Deployment-specific edge token issuance/rotation, firewall/tunnel policy and direct-origin denial still require separate operational verification.
 
+The TRUYN Agent Descriptor and first-party SDK program are currently **defined architecture/scaffolding**, not implemented runtime security claims. When implemented, they must preserve the existing provider-security invariants in this document.
+
 ## Core principles
 
 ### Open protocol does not mean open billing account
@@ -49,13 +51,35 @@ TRUYN source code and protocol can be public while individual AI providers remai
 
 ### BYOK by default
 
-Normal users Bring Their Own Intelligence / Bring Their Own Provider. Raw upstream credentials stay with the user's/provider runtime and do not belong in TRUYN envelopes or relay state.
+Normal users Bring Their Own Intelligence / Bring Their Own Provider. Raw upstream credentials stay with the user's/provider runtime and do not belong in TRUYN envelopes, relay state or Agent Descriptors.
 
 A private BYOK provider may authorize one or more requester node identities in its signed `OFFER`. The relay verifies the `OFFER` signature/session binding, derives provider ownership from the provider node identity, and applies the signed requester allowlist before discovery or dispatch.
 
 ### Server-side authorization
 
-Provider authorization is enforced before provider selection/dispatch and again at the provider-host execution boundary. UI, CLI, obscurity, hidden provider IDs, DNS controls, or Cloudflare rules are not sufficient authorization boundaries.
+Provider authorization is enforced before provider selection/dispatch and again at the provider-host execution boundary. UI, CLI, SDK, Agent Descriptor content, obscurity, hidden provider IDs, DNS controls, or Cloudflare rules are not sufficient authorization boundaries.
+
+### Agent Descriptor is not authorization
+
+The draft TRUYN Agent Descriptor is discovery/bootstrap metadata. A signed Descriptor can establish integrity/key binding for the metadata, but it does not grant access to a provider and does not prove capability truth/current availability.
+
+Public/scoped Descriptor generation must apply a visibility boundary equivalent to normal authorization-aware discovery:
+
+```text
+public descriptor view
+    → public/intentionally visible capability subset only
+
+authenticated scoped descriptor view
+    → no more than this requester is authorized to discover
+```
+
+A Descriptor must not contain upstream provider credentials, private keys, private origins/backchannels, privileged allowlists, hidden private provider IDs/capabilities, long-lived secret-bearing URLs or other private operational state.
+
+### SDKs are not a policy boundary
+
+First-party SDKs for JavaScript/TypeScript, Python, Go, Java and C#/.NET are developer convenience surfaces. They must converge on the same server/node authorization and billing decisions as CLI, MCP, HTTP, WebSocket and native paths.
+
+A modified SDK must not gain any capability that the same requester could not obtain by speaking the public protocol directly.
 
 ### Fail closed
 
@@ -67,7 +91,7 @@ HTTP, WebSocket, MCP, SDK, fast paths, and legacy compatibility paths must conve
 
 ## Public/private repository boundary
 
-The public repository may contain protocol semantics, generic implementation code, security invariants, local examples, generic adapters, reviewed benchmark methodology, and sanitized benchmark evidence.
+The public repository may contain protocol semantics, generic implementation code, security invariants, local examples, generic adapters, first-party SDK source/scaffolding, Agent Descriptor schemas, conformance fixtures, reviewed benchmark methodology, and sanitized benchmark evidence.
 
 It must not contain unnecessary live operational data such as:
 
@@ -78,14 +102,17 @@ It must not contain unnecessary live operational data such as:
 - WIF/service-account/managed-identity topology;
 - private bucket/container names;
 - live quota, cost ceilings, emergency controls, allowlists, protected provider node IDs, or secret-manager paths;
+- hidden/private provider IDs or capability inventories that provider policy is intended to conceal;
 - raw benchmark logs/artifacts when they expose private execution topology, credentials, prompts/customer data, or privileged operational state;
 - incident-sensitive logs, prompts, outputs, or customer data.
 
-Sanitized benchmark reports may retain reproducibility evidence such as public model versions, tested commit SHAs, workflow/run identifiers, artifact identifiers and cryptographic digests when those identifiers do not disclose a private execution boundary. Public relay hostnames intentionally exposed as part of the protocol may also remain.
+Sanitized benchmark reports may retain reproducibility evidence such as public model versions, tested commit SHAs, workflow/run identifiers, artifact identifiers and cryptographic digests when those identifiers do not disclose a private execution boundary. Public relay hostnames and public Agent Descriptor endpoints intentionally exposed as part of the protocol may also remain.
 
 Privileged deployment/operations material belongs in access-controlled operational systems, not in this public repository. Encrypting a file inside a public repository is not treated as making the file private.
 
 The public tree is guarded by automated tests that allowlist the safe public workflow set and reject known operational paths/markers, credential/private-key patterns, and live cloud-topology patterns. The public CI workflow has read-only repository contents permission and does not receive provider/cloud credentials from its workflow definition.
+
+Future SDK/Descriptor release tests should extend that leakage boundary to generated packages, example applications and descriptor fixtures so a safe source tree cannot produce an unsafe package or public descriptor.
 
 ## Benchmark evidence preservation
 
@@ -109,7 +136,7 @@ The normal public Git refs were rewritten onto a sanitized root after validated 
 
 Removing content from the current tree is not enough when sensitive data existed historically. Any credential that may have been exposed must still be revoked/rotated; history rewriting is not a substitute for credential rotation.
 
-Git hosting providers may retain unreachable objects, pull-request refs, caches, forks, clones, Actions logs, or artifacts after a force rewrite. Those copies must be purged through the hosting provider and affected fork/clone owners as applicable. Historical Actions artifacts/logs and immutable hosting-side refs are therefore treated as a separate cleanup surface from the sanitized Git tree.
+Git hosting providers may retain unreachable objects, pull-request refs, caches, forks, clones, Actions logs, artifacts or published package versions after a force rewrite. Those copies must be purged through the hosting/package provider and affected fork/clone owners as applicable. Historical Actions artifacts/logs and immutable hosting-side refs are therefore treated as a separate cleanup surface from the sanitized Git tree.
 
 History cleanup must not be used as a blanket mechanism to erase sanitized benchmark evidence. If a history rewrite is required for secret removal, the sanitized benchmark reports must be restored into the new root/history immediately, with their evidence fields preserved to the maximum safe extent.
 
@@ -145,6 +172,16 @@ The in-repository regression suite now proves at minimum:
 
 Deployment-specific cloud/IAM/edge activation, direct-origin production proof, issuance/rotation of live edge and protected-provider tokens, deployment of the durable sponsored-usage store, and richer account-level tenancy remain separate from these in-repository tests.
 
+The future SDK/DX conformance gate must add, before SDK parity/stability is claimed:
+
+- public Agent Descriptor → no private capability/provider disclosure;
+- scoped Agent Descriptor → no more visibility than normal authorized discovery;
+- expired/invalidly signed Descriptor → explicit rejection;
+- every supported SDK language → unauthorized private-provider request causes zero upstream execution;
+- generated SDK packages/examples/descriptor fixtures → public-repository leakage scan.
+
+These are future SDK/Descriptor acceptance requirements, not claims about tests that already exist today.
+
 ## Related architecture
 
 - `docs/architecture/PROVIDER_OWNERSHIP.md`
@@ -152,7 +189,10 @@ Deployment-specific cloud/IAM/edge activation, direct-origin production proof, i
 - `docs/architecture/RELAY_SECURITY.md`
 - `docs/architecture/BILLING_BOUNDARY.md`
 - `docs/architecture/BYOK_ARCHITECTURE.md`
+- `docs/architecture/SDK_DEVELOPER_EXPERIENCE.md`
 - `docs/architecture/THREAT_MODEL.md`
 - `docs/architecture/PUBLIC_PRIVATE_BOUNDARY.md`
+- `docs/compatibility/SDK_COMPATIBILITY.md`
 - `docs/benchmarks/README.md`
 - `spec/protocol/v1/provider-policy.md`
+- `spec/protocol/v1/agent-descriptor.md`

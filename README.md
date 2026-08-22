@@ -8,7 +8,7 @@ TRUYN is an open-source project for **agent-to-agent communication, decentralize
 
 No new cables. No new hardware Internet. A new network contract.
 
-[Manifesto](MANIFESTO.md) · [Whitepaper](WHITEPAPER.md) · [Architecture](STRUCTURE.md) · [Security](SECURITY.md) · [Provider ownership](docs/architecture/PROVIDER_OWNERSHIP.md) · [BYOK](docs/getting-started/BYOK.md) · [Protocol](spec/protocol/v1/README.md) · [Roadmap](ROADMAP.md) · [Apache-2.0 License](LICENSE)
+[Manifesto](MANIFESTO.md) · [Whitepaper](WHITEPAPER.md) · [Architecture](STRUCTURE.md) · [Developer SDK/DX](docs/architecture/SDK_DEVELOPER_EXPERIENCE.md) · [Security](SECURITY.md) · [Provider ownership](docs/architecture/PROVIDER_OWNERSHIP.md) · [BYOK](docs/getting-started/BYOK.md) · [Protocol](spec/protocol/v1/README.md) · [Roadmap](ROADMAP.md) · [Apache-2.0 License](LICENSE)
 
 ---
 
@@ -270,6 +270,48 @@ The names above describe intended interoperability, not endorsement, partnership
 
 ---
 
+## Developer experience: first-party SDKs + Agent Descriptor
+
+Developer experience is now an explicit TRUYN implementation track. The project requires first-party client SDKs for the five major application ecosystems:
+
+| Language | Required first-party target | Current maturity |
+|---|---|---|
+| JavaScript / TypeScript | npm SDK | architecture/scaffold only |
+| Python | PyPI SDK | architecture/scaffold only |
+| Go | Go module | architecture/scaffold only |
+| Java | Maven-compatible SDK | architecture/scaffold only |
+| C# / .NET | NuGet SDK | architecture/scaffold only |
+
+Rust remains an optional additional SDK track; it does not replace the five required targets.
+
+TRUYN also defines a **TRUYN Agent Descriptor**: a signed, cacheable self-description document for easy onboarding and discovery. For intentionally public HTTP-facing participants, the target well-known path is:
+
+```text
+https://<domain>/.well-known/truyn-agent.json
+```
+
+The Descriptor advertises identity, supported TRUYN versions/interfaces and intentionally public capability classes. It **does not** replace dynamic `OFFER` state and does not grant authorization. Private capabilities/providers remain hidden by provider policy.
+
+The target developer flow is:
+
+```text
+install SDK
+   ↓
+connect to TRUYN node
+   ↓
+fetch/verify Agent Descriptor
+   ↓
+discover authorized capability
+   ↓
+send NEED
+   ↓
+receive RESULT + identity/provenance/trust metadata
+```
+
+See [SDK & Developer Experience Architecture](docs/architecture/SDK_DEVELOPER_EXPERIENCE.md), [SDK Quickstart target](docs/getting-started/SDK_QUICKSTART.md), [SDK compatibility](docs/compatibility/SDK_COMPATIBILITY.md) and the draft [Agent Descriptor specification](spec/protocol/v1/agent-descriptor.md).
+
+---
+
 ## Multi-cloud, multimodal reference implementation
 
 The public provider layer contains adapters for equivalent capabilities across independent clouds, rather than requiring protocol-level model names.
@@ -306,6 +348,8 @@ TRUYN is an **experimental architecture and implementation project**. The reposi
 
 The current reference implementation demonstrates signed identity, capability discovery, authorization-aware routing, signed results, private provider requester allowlists, provider-host access control, fail-closed billing modes, explicit public-network configuration gates, and a first official verified BYOK CLI flow.
 
+The SDK/DX architecture and Agent Descriptor are now defined, but the five required first-party SDK packages and Agent Descriptor runtime serving/discovery are **not yet implemented/published**. The `sdk/` tree is currently documentation/scaffolding for that implementation program.
+
 This does **not** mean the entire future security/control plane is finished. Rich account/tenant ownership, durable distributed quota/accounting, prepaid/subscription entitlement resolution, OS credential-store integration, production origin/perimeter hardening and the future stable mainnet remain additional work.
 
 No document or public endpoint should be interpreted as permission to consume TRUYN-operated provider accounts.
@@ -316,7 +360,7 @@ No document or public endpoint should be interpreted as permission to consume TR
 
 **Read it. Challenge it. Fork it. Implement it. Break it. Improve it.**
 
-Useful contributions include protocol design, networking implementation, trust algorithms, adversarial testing, cryptography, discovery/NAT traversal, agent adapters, provider authorization, BYOK UX, compute sandboxing, SDKs, benchmarks, simulations, documentation and independent academic critique.
+Useful contributions include protocol design, networking implementation, trust algorithms, adversarial testing, cryptography, discovery/NAT traversal, agent adapters, provider authorization, BYOK UX, compute sandboxing, first-party SDKs, Agent Descriptor/conformance work, benchmarks, simulations, documentation and independent academic critique.
 
 TRUYN is licensed under the **Apache License 2.0 (`Apache-2.0`)**. See [`LICENSE`](LICENSE).
 
@@ -327,6 +371,8 @@ TRUYN is licensed under the **Apache License 2.0 (`Apache-2.0`)**. See [`LICENSE
 - [Manifesto](MANIFESTO.md) — why TRUYN should exist.
 - [Whitepaper](WHITEPAPER.md) — academic rationale, formulas, threat model and research basis.
 - [Architecture Contract](docs/architecture/ARCHITECTURE_CONTRACT.md) — canonical mapping of concepts to implementation owners.
+- [SDK & Developer Experience](docs/architecture/SDK_DEVELOPER_EXPERIENCE.md) — first-party SDK matrix, Agent Descriptor and conformance program.
+- [SDK Quickstart](docs/getting-started/SDK_QUICKSTART.md) — intended cross-language onboarding shape.
 - [Provider Ownership](docs/architecture/PROVIDER_OWNERSHIP.md) — who owns provider capacity and who may use it.
 - [Authorization Model](docs/architecture/AUTHORIZATION_MODEL.md) — fail-closed server-side provider authorization.
 - [Relay Security](docs/architecture/RELAY_SECURITY.md) — public relay vs private provider/control-plane boundaries.

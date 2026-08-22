@@ -1,11 +1,12 @@
 # Documentation
 
-Human-facing documentation for TRUYN architecture, factual implementation status, concepts, setup, operations, security, Trustability, compatibility, benchmarks and architecture decisions.
+Human-facing documentation for TRUYN architecture, factual implementation status, concepts, setup, operations, security, Trustability, compatibility, developer experience, benchmarks and architecture decisions.
 
 ## Start here
 
 - [Architecture Contract](architecture/ARCHITECTURE_CONTRACT.md) — canonical source-of-truth ownership and cross-subsystem invariants.
 - [Implementation Status](architecture/IMPLEMENTATION_STATUS.md) — factual defined/implemented/proven/remaining-work matrix.
+- [SDK & Developer Experience](architecture/SDK_DEVELOPER_EXPERIENCE.md) — required first-party SDK languages, Agent Descriptor, conformance and implementation stages.
 - [Roadmap](../ROADMAP.md) — engineering sequence and maturity gates.
 - [Security Policy](../SECURITY.md) — public repository/security baseline.
 - [Benchmark Evidence](benchmarks/README.md) — append-only public evidence ledger.
@@ -14,6 +15,7 @@ Human-facing documentation for TRUYN architecture, factual implementation status
 
 - [v0.1 Connect Network Underlay](architecture/NETWORK_UNDERLAY_V01.md) — implemented real QUIC/UDP, authenticated peer sessions, Kademlia discovery/state RPC, direct-first P2P, STUN/same-port hole punching, backpressure and relay fallback.
 - [Network Productionization Gate](architecture/NETWORK_PRODUCTIONIZATION_GATE.md) — durability, bounded admission, restart continuity, DHT replication/repair and controlled failure requirements proven by the bounded Azure four-host gate.
+- [SDK & Developer Experience](architecture/SDK_DEVELOPER_EXPERIENCE.md) — SDK ownership, required language matrix, TRUYN Agent Descriptor and cross-language conformance gate.
 - [Provider Ownership](architecture/PROVIDER_OWNERSHIP.md) — implemented node-level provider owner/visibility boundary and future account/tenant model.
 - [Authorization Model](architecture/AUTHORIZATION_MODEL.md) — implemented fail-closed provider authorization baseline and remaining control-plane layers.
 - [Relay Security](architecture/RELAY_SECURITY.md) — public relay, owner control plane, provider backchannel, origin guard, edge proxy and legacy-route rules.
@@ -27,6 +29,36 @@ Human-facing documentation for TRUYN architecture, factual implementation status
 - [Distributed Semantic Retrieval](architecture/DISTRIBUTED_SEMANTIC_RETRIEVAL.md) — signed distributed holders, bounded candidates, provenance and fail-closed coverage.
 - [Decentralized Placement and Byzantine Read Quorum](architecture/DECENTRALIZED_PLACEMENT_BYZANTINE_RETRIEVAL.md) — relay-independent placement discovery, Trustability-aware replica selection and distinct-holder immutable-CID quorum.
 - [Kademlia/QUIC Trust Testnet](architecture/KADEMLIA_QUIC_TRUST_TESTNET.md) — real relay-free verifier discovery + replicated signed trust lifecycle state.
+
+## Developer experience and SDKs
+
+TRUYN now has an explicit first-party SDK implementation program for:
+
+- **JavaScript / TypeScript** — npm target;
+- **Python** — PyPI target;
+- **Go** — Go module target;
+- **Java** — Maven-compatible publication target;
+- **C# / .NET** — NuGet target.
+
+Rust is an optional additional track and does not replace the five required first-party targets.
+
+Current status: architecture/specification and repository scaffolding are defined; the production client libraries and package publications are still open implementation work.
+
+Developer documents:
+
+- [SDK & Developer Experience Architecture](architecture/SDK_DEVELOPER_EXPERIENCE.md) — common SDK surface, security contract, Agent Descriptor and DX-0…DX-4 gates.
+- [SDK Quickstart target](getting-started/SDK_QUICKSTART.md) — intended cross-language install/connect/discover/NEED/RESULT flow.
+- [SDK Compatibility](compatibility/SDK_COMPATIBILITY.md) — protocol/descriptor/SDK version declarations and stable-v1 parity gate.
+- [SDK repository index](../sdk/README.md) — language directories and distribution targets.
+- [TRUYN Agent Descriptor](../spec/protocol/v1/agent-descriptor.md) — draft discovery metadata semantics.
+
+For intentionally public HTTP-facing participants, the target Agent Descriptor discovery path is:
+
+```text
+https://<domain>/.well-known/truyn-agent.json
+```
+
+The Descriptor is self-description/bootstrap metadata. It does not replace dynamic `OFFER`, does not grant provider authorization and must not disclose private providers/capabilities that provider policy hides from the requester.
 
 ## Trustability
 
@@ -69,8 +101,9 @@ Root `SECURITY.md` remains the public policy/reporting entry point; `docs/securi
 - [Compatibility index](compatibility/README.md)
 - [Protocol and Node Compatibility](compatibility/PROTOCOL_AND_NODE_COMPATIBILITY.md)
 - [Adapter Compatibility](compatibility/ADAPTER_COMPATIBILITY.md)
+- [SDK Compatibility](compatibility/SDK_COMPATIBILITY.md)
 
-Current software is `0.1.0-dev`; `TRUYN/1` remains draft. No stable mainnet compatibility promise is implied.
+Current software is `0.1.0-dev`; `TRUYN/1` remains draft. No stable mainnet or first-party SDK compatibility promise is implied yet.
 
 ## Benchmarks and evidence
 
@@ -106,6 +139,7 @@ A benchmark result never grants access to provider accounts used to produce it.
 - [BYOK](getting-started/BYOK.md) — user-facing provider onboarding/credential locality.
 - [MVP Quickstart](getting-started/MVP_QUICKSTART.md) — current executable relay/node MVP boundary.
 - [MVP AI Interoperability](getting-started/MVP_AI_INTEROP.md) — current adapters/live-demo boundary.
+- [SDK Quickstart target](getting-started/SDK_QUICKSTART.md) — planned first-party cross-language onboarding shape.
 
 ## Architecture status rule
 
@@ -124,5 +158,7 @@ A lower maturity state must not be promoted by wording alone. The canonical stat
 ## Public documentation rule
 
 Provider catalogs, model versions, regions, quotas and access requirements change over time. Public docs describe stable TRUYN capabilities/security invariants and sanitized evidence. Exact deployment details remain private when they reveal topology, cloud identities, quotas, billing information, privileged allowlists or secret paths.
+
+The same rule applies to Agent Descriptors and SDK examples: public onboarding metadata must disclose only intentionally public interfaces/capabilities and must never contain provider credentials/private operational state.
 
 See [Public / Private Information Boundary](architecture/PUBLIC_PRIVATE_BOUNDARY.md).
