@@ -13,6 +13,29 @@ An adapter being present does **not** imply:
 - the provider version is permanently stable;
 - every vendor-specific feature maps to a TRUYN capability.
 
+## Adapters versus first-party SDKs
+
+Adapters and SDKs serve different directions of interoperability:
+
+```text
+external AI/provider/framework
+          ↓
+       adapter
+          ↓
+        TRUYN
+          ↑
+   first-party SDK
+          ↑
+application / agent code
+```
+
+- **Adapters** bridge external provider/agent ecosystems into TRUYN capabilities.
+- **First-party SDKs** let application developers consume TRUYN from JavaScript/TypeScript, Python, Go, Java and C#/.NET without manually implementing the protocol.
+
+An SDK does not replace provider adapters, and an adapter does not satisfy the first-party SDK requirement.
+
+SDK compatibility is defined separately in `SDK_COMPATIBILITY.md`.
+
 ## User/BYOK reference surfaces
 
 The current repository contains reference setup/runtime support for combinations including:
@@ -44,8 +67,12 @@ An adapter should preserve:
 - provider-specific errors without leaking secrets/private topology;
 - explicit unsupported/blocked status rather than pretending success.
 
+If an adapter exposes participant discovery metadata through a TRUYN Agent Descriptor, the descriptor must contain only intentionally visible capability/interface information for that requester. It does not replace provider-policy discovery or grant authorization.
+
 ## Version changes
 
 Model catalogs and APIs change faster than the TRUYN protocol. Adapter/model upgrades should therefore be independently testable and should not require a new protocol generation unless network semantics themselves change.
 
 When a provider version change materially affects benchmark comparability, record the concrete model/version in the benchmark evidence.
+
+SDK API/version changes follow the separate SDK compatibility policy rather than being coupled to provider model releases.
