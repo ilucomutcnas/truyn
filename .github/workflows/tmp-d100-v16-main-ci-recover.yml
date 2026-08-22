@@ -1,0 +1,47 @@
+name: tmp-d100-v16-main-ci-recover
+
+on:
+  push:
+    branches: [ci/d100-v16-actions-policy-probe-2]
+    paths:
+      - '.github/workflows/tmp-d100-v16-main-ci-recover.yml'
+
+permissions:
+  contents: read
+  actions: write
+  issues: write
+
+jobs:
+  recover:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Cancel stuck exact-main attempt and request clean rerun
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: '32558383377'
+          TARGET_SHA: '23360cbe86e725f79ef0c6772a51f70825b92aef'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          before="$(gh api "repos/${REPO}/actions/runs/${RUN_ID}" --jq '[.head_branch,.head_sha,.event,.status,.conclusion,.run_attempt] | @tsv')"
+          test "$(printf '%s' "$before" | cut -f1)" = main
+          test "$(printf '%s' "$before" | cut -f2)" = "$TARGET_SHA"
+          test "$(printf '%s' "$before" | cut -f3)" = push
+          gh api -X POST "repos/${REPO}/actions/runs/${RUN_ID}/cancel" >/dev/null || true
+          for i in $(seq 1 60); do
+            status="$(gh api "repos/${REPO}/actions/runs/${RUN_ID}" --jq '.status')"
+            [[ "$status" = completed ]] && break
+            sleep 2
+          done
+          after_cancel="$(gh api "repos/${REPO}/actions/runs/${RUN_ID}" --jq '[.status,.conclusion,.run_attempt] | @tsv')"
+          test "$(printf '%s' "$after_cancel" | cut -f1)" = completed
+          rerun_resp="$(gh api -X POST "repos/${REPO}/actions/runs/${RUN_ID}/rerun" 2>&1)" || {
+            body=$(printf 'before=%s\nafter_cancel=%s\nrerun=FAIL %s\nstage=main_ci_recover\n' "$before" "$after_cancel" "$rerun_resp")
+            gh api "repos/${REPO}/issues" -f 'title=TRUYN D-100 V16 MAIN CI RECOVER' -f "body=${body}" >/dev/null
+            exit 1
+          }
+          sleep 3
+          after_rerun="$(gh api "repos/${REPO}/actions/runs/${RUN_ID}" --jq '[.head_branch,.head_sha,.event,.status,.conclusion,.run_attempt] | @tsv')"
+          body=$(printf 'before=%s\nafter_cancel=%s\nafter_rerun=%s\nstage=main_ci_recover\n' "$before" "$after_cancel" "$after_rerun")
+          gh api "repos/${REPO}/issues" -f 'title=TRUYN D-100 V16 MAIN CI RECOVER' -f "body=${body}" >/dev/null
