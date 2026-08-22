@@ -7,6 +7,7 @@ Human-facing documentation for TRUYN architecture, factual implementation status
 - [Architecture Contract](architecture/ARCHITECTURE_CONTRACT.md) — canonical source-of-truth ownership and cross-subsystem invariants.
 - [Implementation Status](architecture/IMPLEMENTATION_STATUS.md) — factual defined/implemented/proven/remaining-work matrix.
 - [Roadmap](../ROADMAP.md) — engineering sequence and maturity gates.
+- [A2A / MCP Interoperability Architecture](architecture/A2A_MCP_INTEROPERABILITY.md) — canonical external agent/tool protocol bridge contract and implementation gate.
 - [Security Policy](../SECURITY.md) — public repository/security baseline.
 - [Benchmark Evidence](benchmarks/README.md) — append-only public evidence ledger.
 
@@ -18,6 +19,7 @@ Human-facing documentation for TRUYN architecture, factual implementation status
 - [Authorization Model](architecture/AUTHORIZATION_MODEL.md) — implemented fail-closed provider authorization baseline and remaining control-plane layers.
 - [Relay Security](architecture/RELAY_SECURITY.md) — public relay, owner control plane, provider backchannel, origin guard, edge proxy and legacy-route rules.
 - [Billing Boundary](architecture/BILLING_BOUNDARY.md) — actual BYOK/owner-funded/sponsored/prepaid/subscription safety semantics.
+- [A2A / MCP Interoperability Architecture](architecture/A2A_MCP_INTEROPERABILITY.md) — A2A Agent Card/task/artifact and MCP tool/resource bridge boundary; MCP bounded reference exists, A2A and cross-protocol proof remain open.
 - [Settlement Adapter Architecture](architecture/SETTLEMENT_ADAPTERS.md) — settlement-neutral core plus deferred x402/AP2 extension path; architecture only, implementation not started.
 - [BYOK Architecture](architecture/BYOK_ARCHITECTURE.md) — Bring Your Own Intelligence / Provider.
 - [Threat Model](architecture/THREAT_MODEL.md) — provider/relay abuse scenarios and required negative security matrix.
@@ -34,10 +36,14 @@ Human-facing documentation for TRUYN architecture, factual implementation status
 - [Claim-Centric Trustability v1](trustability/CLAIM_TRUSTABILITY_V1.md) — signed `CLAIM`/`ATTEST`, provenance, source-lineage independence and trust receipts.
 - [Active Trustability Lifecycle v2](trustability/ACTIVE_TRUST_LIFECYCLE_V2.md) — signed challenge/verify/dispute lifecycle, authority/revocation/freshness semantics.
 
-## Provider and edge architecture
+## Provider, interoperability and edge architecture
 
 - [Multi-Cloud Provider Architecture](architecture/MULTI_CLOUD_PROVIDER_ARCHITECTURE.md) — Google Cloud / Microsoft Azure capability architecture without private deployment identifiers.
+- [A2A / MCP Interoperability Architecture](architecture/A2A_MCP_INTEROPERABILITY.md) — external protocol edges and bidirectional bridge target.
+- [A2A / MCP Compatibility Matrix](compatibility/A2A_MCP_COMPATIBILITY.md) — factual current implementation/version support and remaining gate.
 - [Public Edge Domains](architecture/PUBLIC_EDGE_DOMAINS.md) — intentionally public hostname roles and public/control-plane separation.
+
+A2A and MCP are adapter-level interoperability edges. They do not redefine TRUYN identity, provider authorization, Trustability, billing or settlement semantics.
 
 ## Economics and settlement
 
@@ -69,8 +75,9 @@ Root `SECURITY.md` remains the public policy/reporting entry point; `docs/securi
 - [Compatibility index](compatibility/README.md)
 - [Protocol and Node Compatibility](compatibility/PROTOCOL_AND_NODE_COMPATIBILITY.md)
 - [Adapter Compatibility](compatibility/ADAPTER_COMPATIBILITY.md)
+- [A2A / MCP Compatibility](compatibility/A2A_MCP_COMPATIBILITY.md)
 
-Current software is `0.1.0-dev`; `TRUYN/1` remains draft. No stable mainnet compatibility promise is implied.
+Current software is `0.1.0-dev`; `TRUYN/1` remains draft. No stable mainnet compatibility promise is implied. External A2A/MCP versions are independently versioned adapter concerns.
 
 ## Benchmarks and evidence
 
@@ -92,6 +99,8 @@ Current software is `0.1.0-dev`; `TRUYN/1` remains draft. No stable mainnet comp
 - [Trust Network v2 — 2026-08-16](benchmarks/TRUST_NETWORK_V2_2026-08-16.md) — placement/read-quorum/active Trustability resistance proof.
 - [Origin Bypass Security Evaluation — 2026-08-16](benchmarks/ORIGIN_BYPASS_SECURITY_EVALUATION_2026-08-16.md) — production-origin bypass evaluation with negative experiments/limitations.
 - [Multimodal Provider Parity](benchmarks/MULTIMODAL_PROVIDER_PARITY.md) — apples-to-apples methodology for text/image/video; methodology, not a completed parity result.
+
+A future A2A/MCP interoperability report belongs in `docs/benchmarks/` only after the bidirectional bridge and negative security matrix have actually run.
 
 ## Benchmark documentation boundary
 
@@ -123,6 +132,6 @@ A lower maturity state must not be promoted by wording alone. The canonical stat
 
 ## Public documentation rule
 
-Provider catalogs, model versions, regions, quotas and access requirements change over time. Public docs describe stable TRUYN capabilities/security invariants and sanitized evidence. Exact deployment details remain private when they reveal topology, cloud identities, quotas, billing information, privileged allowlists or secret paths.
+Provider catalogs, model versions, external protocol versions, regions, quotas and access requirements change over time. Public docs describe stable TRUYN capabilities/security invariants and sanitized evidence. Exact deployment details remain private when they reveal topology, cloud identities, quotas, billing information, privileged allowlists or secret paths.
 
 See [Public / Private Information Boundary](architecture/PUBLIC_PRIVATE_BOUNDARY.md).
