@@ -1,21 +1,53 @@
 # Documentation
 
-Human-facing documentation for TRUYN architecture, factual implementation status, concepts, setup, operations, security, Trustability, compatibility, developer experience, benchmarks and architecture decisions.
+Human-facing documentation for TRUYN architecture, factual implementation status, governance, concepts, setup, operations, security, Trustability, compatibility, developer experience, benchmarks and architecture decisions.
 
 ## Start here
 
+- [Governance](../GOVERNANCE.md) — canonical project governance, bootstrap stewardship, roles, TSC target and G0→G5 maturity.
+- [Governance Architecture](architecture/GOVERNANCE_ARCHITECTURE.md) — governance as an architectural boundary of the standard.
+- [Governance Process](governance/README.md) — RFC, extension and decision-process index.
 - [Architecture Contract](architecture/ARCHITECTURE_CONTRACT.md) — canonical source-of-truth ownership and cross-subsystem invariants.
-- [Implementation Status](architecture/IMPLEMENTATION_STATUS.md) — factual defined/implemented/proven/remaining-work matrix.
+- [Implementation Status](architecture/IMPLEMENTATION_STATUS.md) — factual defined/implemented/proven/remaining-work matrix including governance maturity.
 - [SDK & Developer Experience](architecture/SDK_DEVELOPER_EXPERIENCE.md) — required first-party SDK languages, Agent Descriptor, conformance and implementation stages.
 - [A2A / MCP Interoperability Architecture](architecture/A2A_MCP_INTEROPERABILITY.md) — canonical external agent/tool protocol bridge contract and implementation gate.
-- [Roadmap](../ROADMAP.md) — engineering sequence and maturity gates.
+- [Roadmap](../ROADMAP.md) — engineering + governance sequence and maturity gates.
 - [Security Policy](../SECURITY.md) — public repository/security baseline.
 - [Benchmark Evidence](benchmarks/README.md) — append-only public evidence ledger.
+
+## Governance and standardization
+
+TRUYN governance is part of the architecture because it determines how normative protocol and conformance rules may change.
+
+Current factual state:
+
+```text
+Public governance/RFC/extension/decision contracts: defined (G1)
+Founding Steward: InnMedia
+External/independent maintainer model: not yet operating
+Multi-organization TSC: not yet constituted
+Neutral legal stewardship: not yet established
+```
+
+Do not describe this as already neutral or foundation governance.
+
+Canonical governance documents:
+
+- [GOVERNANCE.md](../GOVERNANCE.md) — roles, bootstrap → TSC transition, voting and maturity.
+- [MAINTAINERS.md](../MAINTAINERS.md) — factual current role roster.
+- [Governance Architecture](architecture/GOVERNANCE_ARCHITECTURE.md) — protocol governance vs repository/infrastructure/commercial ownership.
+- [RFC Process](governance/RFC_PROCESS.md) — Draft → Discussion → Accepted/Rejected/Withdrawn → Implemented/Superseded.
+- [Extension Governance](governance/EXTENSIONS.md) — Community → Experimental → Official → Core Candidate → Core.
+- [Decision Process](governance/DECISION_PROCESS.md) — Class A-D decisions, quorum, supermajority, conflicts and public records.
+- [Roadmap Governance Gate](../ROADMAP.md) — GOV-0…GOV-5 implementation sequence.
+
+Community Extensions are permissionless in third-party namespaces. Official project namespace/status requires governance approval. Promotion from an extension to Core requires a separate normative RFC and should be rare.
 
 ## Core architecture
 
 - [v0.1 Connect Network Underlay](architecture/NETWORK_UNDERLAY_V01.md) — implemented real QUIC/UDP, authenticated peer sessions, Kademlia discovery/state RPC, direct-first P2P, STUN/same-port hole punching, backpressure and relay fallback.
 - [Network Productionization Gate](architecture/NETWORK_PRODUCTIONIZATION_GATE.md) — durability, bounded admission, restart continuity, DHT replication/repair and controlled failure requirements proven by the bounded Azure four-host gate.
+- [Governance Architecture](architecture/GOVERNANCE_ARCHITECTURE.md) — public governance as a first-class standard architecture dimension.
 - [SDK & Developer Experience](architecture/SDK_DEVELOPER_EXPERIENCE.md) — SDK ownership, required language matrix, TRUYN Agent Descriptor and cross-language conformance gate.
 - [Provider Ownership](architecture/PROVIDER_OWNERSHIP.md) — implemented node-level provider owner/visibility boundary and future account/tenant model.
 - [Authorization Model](architecture/AUTHORIZATION_MODEL.md) — implemented fail-closed provider authorization baseline and remaining control-plane layers.
@@ -75,7 +107,7 @@ The Descriptor is self-description/bootstrap metadata. It does not replace dynam
 - [A2A / MCP Compatibility Matrix](compatibility/A2A_MCP_COMPATIBILITY.md) — factual current implementation/version support and remaining gate.
 - [Public Edge Domains](architecture/PUBLIC_EDGE_DOMAINS.md) — intentionally public hostname roles and public/control-plane separation.
 
-A2A and MCP are adapter-level interoperability edges. They do not redefine TRUYN identity, provider authorization, Trustability, billing or settlement semantics.
+A2A and MCP are adapter-level interoperability edges. They do not redefine TRUYN identity, provider authorization, Trustability, billing or settlement semantics. Their official TRUYN bindings/compatibility profiles are also subject to the public governance/extension process rather than vendor-specific promotion into core.
 
 ## Economics and settlement
 
@@ -83,7 +115,7 @@ A2A and MCP are adapter-level interoperability edges. They do not redefine TRUYN
 - [TRUYN/1 Economics](../spec/protocol/v1/economics.md) — protocol-level settlement neutrality.
 - [Settlement Adapter Architecture](architecture/SETTLEMENT_ADAPTERS.md) — planned x402 and AP2 integration boundary.
 
-TRUYN/1 does not prescribe currency, billing provider, blockchain, smart contract or settlement rail. x402/AP2 are optional future adapters, not TRUYN/1 wire dependencies.
+TRUYN/1 does not prescribe currency, billing provider, blockchain, smart contract or settlement rail. x402/AP2 are optional future adapters, not TRUYN/1 wire dependencies. Their presence does not bypass the extension/core promotion process.
 
 ## Operations
 
@@ -100,7 +132,7 @@ These documents describe the actual reference operational boundary and explicitl
 - [Security Architecture Status](security/SECURITY_ARCHITECTURE_STATUS.md)
 - [Operational Security](security/OPERATIONAL_SECURITY.md)
 
-Root `SECURITY.md` remains the public policy/reporting entry point; `docs/security/` provides detailed architecture/status/runbook documentation.
+Root `SECURITY.md` remains the public policy/reporting entry point; `docs/security/` provides detailed architecture/status/runbook documentation. Governance allows time-bounded security embargoes but requires a durable public decision record for material permanent normative changes after safe disclosure.
 
 ## Compatibility
 
@@ -111,6 +143,8 @@ Root `SECURITY.md` remains the public policy/reporting entry point; `docs/securi
 - [SDK Compatibility](compatibility/SDK_COMPATIBILITY.md)
 
 Current software is `0.1.0-dev`; `TRUYN/1` remains draft. No stable mainnet, external A2A/MCP or first-party SDK compatibility promise is implied yet. External A2A/MCP versions are independently versioned adapter concerns.
+
+Governance maturity is independently versioned as G0-G5 and is not implied by a software/protocol version.
 
 ## Benchmarks and evidence
 
@@ -134,6 +168,8 @@ Current software is `0.1.0-dev`; `TRUYN/1` remains draft. No stable mainnet, ext
 - [Multimodal Provider Parity](benchmarks/MULTIMODAL_PROVIDER_PARITY.md) — apples-to-apples methodology for text/image/video; methodology, not a completed parity result.
 
 A future A2A/MCP interoperability report belongs in `docs/benchmarks/` only after the bidirectional bridge and negative security matrix have actually run.
+
+Governance evidence is different from benchmark evidence: G2-G5 require actual public role/decision/organizational/legal facts, not synthetic test output.
 
 ## Benchmark documentation boundary
 
@@ -162,12 +198,14 @@ Documents explicitly distinguish:
 - Internet-scale evidence;
 - Stable compatibility.
 
-A lower maturity state must not be promoted by wording alone. The canonical status matrix is [Implementation Status](architecture/IMPLEMENTATION_STATUS.md).
+Governance separately distinguishes G0-G5. A lower technical or governance maturity state must not be promoted by wording alone. The canonical factual matrix is [Implementation Status](architecture/IMPLEMENTATION_STATUS.md).
 
 ## Public documentation rule
 
 Provider catalogs, model versions, external protocol versions, regions, quotas and access requirements change over time. Public docs describe stable TRUYN capabilities/security invariants and sanitized evidence. Exact deployment details remain private when they reveal topology, cloud identities, quotas, billing information, privileged allowlists or secret paths.
 
 The same rule applies to Agent Descriptors, A2A Agent Cards, MCP discovery and SDK examples: public onboarding/interoperability metadata must disclose only intentionally public interfaces/capabilities and must never contain provider credentials/private operational state.
+
+Governance decisions should be public, but an active security embargo may temporarily keep vulnerability details private. The permanent normative outcome must enter the public record when safe.
 
 See [Public / Private Information Boundary](architecture/PUBLIC_PRIVATE_BOUNDARY.md).
