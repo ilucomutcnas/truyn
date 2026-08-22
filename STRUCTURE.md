@@ -2,13 +2,14 @@
 
 TRUYN is a **single evolving codebase**. Software releases are tracked with Git tags/releases, while compatibility-sensitive network contracts coexist in versioned directories.
 
-The repository deliberately separates four kinds of versioning:
+The repository deliberately separates versioning dimensions:
 
 ```text
 Software release      0.1.0-dev, v1.0.0, v2.3.1, ...
 Network protocol      TRUYN/1, TRUYN/2, ...
 Wire schema           proto/v1, proto/v2, ...
 Local storage/config  migrated independently
+External adapters     A2A / MCP versions negotiated independently
 ```
 
 A newer node may support multiple protocol generations simultaneously. We do **not** copy the entire repository into `v1/`, `v2/`, `v3/`.
@@ -54,6 +55,9 @@ If these disagree, the inconsistency must be corrected rather than treated as a 
 - `runtime/` — executable relay/provider runtime composition and security configuration.
 - `cli/` — user-facing `truyn` commands, including implemented reference BYOK onboarding. CLI gates are UX/defense-in-depth, not authoritative provider security.
 - `adapters/` — bridges to AI/model/agent ecosystems and protocols. Provider credentials belong at adapter/runtime secret boundaries, not TRUYN envelopes.
+- `adapters/mcp/` — implemented bounded TRUYN-as-MCP server surface.
+- `adapters/a2a/` — **reserved implementation owner** for the planned A2A Agent Card/server facade and A2A client/provider bridge; directory may not exist until code implementation begins.
+- `adapters/providers/` — provider-specific and external-tool-backed provider adapters, including the bounded configured MCP HTTP tool provider path.
 - `sdk/` — native/public client SDK surfaces as they stabilize.
 - `gateways/` — HTTP/REST/webhook/legacy compatibility bridges. Execution-capable gateways must preserve equivalent central authorization.
 - `compute/` — remote capability execution, compute-near-data placement, sandboxing and execution policy ownership; not yet a fully productionized general subsystem.
@@ -66,6 +70,7 @@ If these disagree, the inconsistency must be corrected rather than treated as a 
 - `config/` — defaults plus `local`, `testnet`, `mainnet` profiles. Public network mode never overrides provider visibility.
 - `bootstrap/` — bootstrap/discovery configuration/contracts for testnet/mainnet.
 - `tests/` — unit, integration, interoperability, network, trust, compute, security and adversarial tests.
+- `tests/interoperability/` — **reserved target owner** for A2A/MCP cross-protocol round-trip, version and negative-security gates.
 - `benchmarks/` — benchmark code/workloads for latency, tokens, bandwidth, inference cost, trust and scale. Durable reports live in `docs/benchmarks/`.
 - `simulations/` — controlled multi-node, network-failure, trust and adversarial simulations.
 - `examples/` — runnable interoperability/use-case examples; no live private secrets/topology.
@@ -79,7 +84,7 @@ If these disagree, the inconsistency must be corrected rather than treated as a 
 docs/
 ├── architecture/     canonical architecture + implementation status
 ├── benchmarks/       append-only sanitized evidence ledger
-├── compatibility/    software/protocol/node/adapter compatibility
+├── compatibility/    software/protocol/node/adapter/A2A/MCP compatibility
 ├── concepts/         explanatory concepts
 ├── decisions/        ADR-style decisions
 ├── getting-started/  user setup/BYOK/MVP guidance
@@ -92,7 +97,7 @@ docs/
 
 ## Public architecture documents
 
-Canonical provider/network/security/status documents include:
+Canonical provider/network/security/status/interoperability documents include:
 
 ```text
 docs/architecture/
@@ -103,6 +108,8 @@ docs/architecture/
 ├── AUTHORIZATION_MODEL.md
 ├── RELAY_SECURITY.md
 ├── BILLING_BOUNDARY.md
+├── A2A_MCP_INTEROPERABILITY.md
+├── SETTLEMENT_ADAPTERS.md
 ├── BYOK_ARCHITECTURE.md
 ├── THREAT_MODEL.md
 ├── PUBLIC_PRIVATE_BOUNDARY.md
@@ -113,6 +120,12 @@ docs/architecture/
 ├── DISTRIBUTED_SEMANTIC_RETRIEVAL.md
 ├── DECENTRALIZED_PLACEMENT_BYZANTINE_RETRIEVAL.md
 └── KADEMLIA_QUIC_TRUST_TESTNET.md
+```
+
+Factual external-protocol compatibility:
+
+```text
+docs/compatibility/A2A_MCP_COMPATIBILITY.md
 ```
 
 User-facing BYOK setup contract:
@@ -135,11 +148,31 @@ Normative provider-policy target:
 spec/protocol/v1/provider-policy.md
 ```
 
+## Adapter protocol ownership
+
+A2A and MCP are **external adapter protocols**, not normative TRUYN/1 vocabulary.
+
+Their repository boundary is:
+
+```text
+A2A/MCP client or server
+        ↓
+adapters/a2a or adapters/mcp
+        ↓ normalize / version-check / authenticate
+TRUYN node + normal provider authorization
+        ↓
+TRUYN network
+```
+
+The current MCP implementation has bounded reference server/provider paths. A2A is architecture-only until `adapters/a2a/` is implemented and evidenced. External Agent Card/Task/Artifact or Tool/Resource objects do not become new TRUYN wire primitives merely because adapters translate them.
+
 ## Public repository vs private operations
 
 The public repository owns protocol/architecture, generic adapters, generic deployment patterns, tests and reproducible sanitized public benchmarks.
 
 Credentials, private keys, private cloud identity/topology, privileged allowlists, private origins/backchannels, exact production quotas/cost ceilings, billing/credit information and sensitive incident/customer data belong to protected operational systems.
+
+A2A/MCP remote credentials follow the same rule: public adapter code is fine; live bearer tokens, API keys, private agent endpoints and privileged extended-card/resource access remain protected operational data.
 
 Security must remain correct even if the public architecture is fully known.
 
@@ -168,6 +201,8 @@ REVOKE
 Provider ownership/authorization/billing policy is not a new top-level exchange object. It is a policy layer around discovery/eligibility/execution, specified in `spec/protocol/v1/provider-policy.md` and implemented incrementally by `core/security/` + relay/provider runtime boundaries.
 
 `CHALLENGE`, `VERIFY` and `DISPUTE` are composed verification behaviors built from existing primitives, not additional TRUYN/1 envelope types.
+
+A2A Agent Cards/Tasks/Artifacts and MCP Tools/Resources are also **not** additional TRUYN/1 envelope types; they are compatibility objects owned by adapters.
 
 ## Runtime model
 
@@ -255,4 +290,4 @@ Network mode affects reachability/compatibility; it never grants access to a pri
 
 ## Current maturity
 
-Current software is `0.1.0-dev`; `TRUYN/1` remains draft. The v0.1 underlay is implemented/CI-proven and bounded real QUIC/Kademlia trust-network evidence exists. Stable mainnet, production commercial tenancy/accounting, large real-node WAN scale and stable updater/compatibility contracts remain future gates.
+Current software is `0.1.0-dev`; `TRUYN/1` remains draft. The v0.1 underlay is implemented/CI-proven and bounded real QUIC/Kademlia trust-network evidence exists. MCP has bounded executable reference paths. A2A, stable mainnet, production commercial tenancy/accounting, large real-node WAN scale and stable updater/compatibility contracts remain future gates.
