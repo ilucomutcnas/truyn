@@ -1,6 +1,6 @@
 # TRUYN Architecture Contract
 
-This document prevents architectural ideas and factual implementation status from being lost or silently diverging between the whitepaper, public README, protocol specification, implementation tree, operations and benchmark evidence.
+This document prevents architectural ideas and factual implementation status from being lost or silently diverging between the whitepaper, public README, protocol specification, governance, implementation tree, operations and benchmark evidence.
 
 ## Document authority
 
@@ -9,9 +9,12 @@ This document prevents architectural ideas and factual implementation status fro
 | Scientific rationale and prior art | `WHITEPAPER.md` |
 | Normative protocol behavior | `spec/protocol/<generation>/` |
 | Wire representation | `proto/<generation>/` |
+| Project governance / roles / TSC target | `GOVERNANCE.md` and `MAINTAINERS.md` |
+| Normative RFC / extension / decision process | `docs/governance/` |
+| Governance as architecture / maturity boundary | `docs/architecture/GOVERNANCE_ARCHITECTURE.md` |
 | Repository ownership | `STRUCTURE.md` and subsystem READMEs |
 | Implementation sequence | `ROADMAP.md` |
-| Factual implementation maturity | `docs/architecture/IMPLEMENTATION_STATUS.md` |
+| Factual implementation/governance maturity | `docs/architecture/IMPLEMENTATION_STATUS.md` |
 | Public explanation | `README.md` |
 | Network underlay | `docs/architecture/NETWORK_UNDERLAY_V01.md` |
 | Provider ownership | `docs/architecture/PROVIDER_OWNERSHIP.md` |
@@ -37,7 +40,9 @@ This document prevents architectural ideas and factual implementation status fro
 | Measured claims | `docs/benchmarks/` |
 | Multimodal comparison methodology | `docs/benchmarks/MULTIMODAL_PROVIDER_PARITY.md` |
 
-A mismatch is a defect to be reconciled. README/roadmap language MUST NOT silently create protocol semantics that do not exist in `spec/`. Architecture language MUST NOT promote a subsystem to a maturity state that its implementation/evidence does not support.
+A mismatch is a defect to be reconciled. README/roadmap language MUST NOT silently create protocol semantics that do not exist in `spec/`. Architecture language MUST NOT promote a subsystem or governance state to a maturity level that factual implementation/organizational evidence does not support.
+
+Governance defines **how normative sources may change**. It does not replace `spec/` as the source of protocol semantics.
 
 ## Architecture status discipline
 
@@ -55,7 +60,66 @@ The repository is intentionally mixed maturity. The v0.1 QUIC/Kademlia underlay 
 
 The SDK/DX architecture and Agent Descriptor are **Defined**, but the five required first-party SDK packages and Agent Descriptor runtime serving/discovery path are not yet implementation-complete.
 
-An approved architecture document is not an implementation-complete security claim. Conversely, once a slice is implemented and evidenced, documentation must not continue describing it as purely planned.
+Governance has its own factual maturity axis. Public governance/RFC/extension/decision contracts are now **Defined (G1)**, while operational control remains bootstrap Founding Stewardship. External maintainers, a multi-organization TSC and neutral legal stewardship are not yet facts.
+
+An approved architecture/governance document is not an implementation-complete or organization-complete claim. Conversely, once a slice is implemented/evidenced or a governance stage becomes factual, documentation must stop describing it as purely planned.
+
+## Governance architecture
+
+Governance is a meta-layer of the standard because it determines how normative architecture is allowed to evolve.
+
+TRUYN separates:
+
+```text
+protocol/specification governance
+repository/reference implementation maintenance
+TRUYN-operated infrastructure
+commercial products/services
+```
+
+Authority in one domain MUST NOT silently become permanent authority in another.
+
+Current factual governance:
+
+```text
+Founding Steward: InnMedia
+Public governance contract: defined
+Independent maintainer model: not yet operating
+Multi-organization TSC: not yet constituted
+Neutral legal stewardship: not yet established
+```
+
+Target maturity:
+
+```text
+G0 founder governed
+ ↓
+G1 public governance defined
+ ↓
+G2 open/external maintainer model operating
+ ↓
+G3 multi-organization TSC, no single-vendor majority
+ ↓
+G4 neutral legal stewardship
+ ↓
+G5 stable ecosystem governance/continuity
+```
+
+Markdown can close G1 only. G2-G5 require real organizational evidence.
+
+The core evolves extension-first where practical:
+
+```text
+Community → Experimental → Official → Core Candidate → Core
+```
+
+Official project namespace/status is governed; Community Extensions remain permissionless in third-party namespaces. Promotion to Core requires a separate normative RFC and should be rare.
+
+A stable protocol identifier MUST NOT be silently redefined merely because one organization controls a repository. Breaking stable behavior requires a new generation/major compatibility boundary under the governance process.
+
+Security embargoes may temporarily delay disclosure, but they do not create a hidden permanent standards channel. Material normative incident-driven changes receive a public decision record after safe disclosure.
+
+See `GOVERNANCE.md`, `MAINTAINERS.md`, `docs/governance/`, `docs/architecture/GOVERNANCE_ARCHITECTURE.md` and the Governance & Standardization Gate in `ROADMAP.md`.
 
 ## Canonical concepts
 
@@ -390,9 +454,11 @@ Different provider families or materially different capability runtimes SHOULD r
 
 ## Public/private information contract
 
-Public architecture describes invariants, schemas, threats, generic deployment patterns and intentionally public service roles.
+Public architecture describes invariants, schemas, threats, generic deployment patterns, governance rules and intentionally public service roles.
 
 Private operational state includes credentials/private keys, unnecessary cloud identity details, private origins/backchannels, privileged allowlists, exact quotas/cost ceilings, billing/credit information, secret paths and sensitive incident/customer data.
+
+Public governance does not require publication of active vulnerability details, private security-team identities where disclosure creates risk, or commercial secrets that are irrelevant to normative decisions. It does require a durable public record for normative decisions after any legitimate embargo ends.
 
 Public Agent Descriptors, A2A Agent Cards, MCP examples and SDK examples MUST follow the same boundary. Quickstarts/examples must never normalize embedding real provider credentials or private topology into source code, descriptor/card payloads or protocol discovery surfaces.
 
@@ -416,11 +482,13 @@ Public network mode never overrides provider visibility/authorization.
 
 ## Versioning
 
-Software, TRUYN protocol, wire, Agent Descriptor, SDK, storage and external adapter-protocol versions are independently declared where needed. Current software is `0.1.0-dev`; `TRUYN/1` remains draft. A new software release does not automatically imply a new wire generation, and an A2A/MCP adapter upgrade does not automatically imply a new TRUYN generation.
+Software, TRUYN protocol, wire, Agent Descriptor, SDK, storage, external adapter-protocol versions and governance maturity are independently declared where needed. Current software is `0.1.0-dev`; `TRUYN/1` remains draft. A new software release does not automatically imply a new wire generation, and an A2A/MCP adapter upgrade does not automatically imply a new TRUYN generation.
 
 SDK releases must declare the TRUYN protocol/descriptor versions they support. A2A/MCP adapters must record the external protocol version they actually implement. Neither an SDK nor adapter release itself stabilizes TRUYN/1.
 
-See `docs/compatibility/`.
+Governance maturity is G0-G5 and is not inferred from a software/protocol version. Stable code can coexist with immature governance, and public governance documents can coexist with immature network code.
+
+See `docs/compatibility/`, `GOVERNANCE.md` and `docs/architecture/GOVERNANCE_ARCHITECTURE.md`.
 
 ## Installation and upgrades
 
@@ -440,4 +508,6 @@ The required first-party SDK targets are JavaScript/TypeScript, Python, Go, Java
 
 Settlement adapters follow the same extension philosophy: x402, AP2 and future payment systems are replaceable external edges and do not define the TRUYN core network.
 
-See `docs/compatibility/ADAPTER_COMPATIBILITY.md`, `docs/compatibility/A2A_MCP_COMPATIBILITY.md`, `docs/compatibility/SDK_COMPATIBILITY.md` and `docs/architecture/A2A_MCP_INTEROPERABILITY.md` for the factual compatibility boundaries.
+Official interoperability/settlement bindings should use the extension/governance process rather than becoming core simply because a particular vendor implementation is popular.
+
+See `docs/compatibility/ADAPTER_COMPATIBILITY.md`, `docs/compatibility/A2A_MCP_COMPATIBILITY.md`, `docs/compatibility/SDK_COMPATIBILITY.md`, `docs/architecture/A2A_MCP_INTEROPERABILITY.md` and `docs/governance/EXTENSIONS.md` for the factual compatibility and standardization boundaries.
