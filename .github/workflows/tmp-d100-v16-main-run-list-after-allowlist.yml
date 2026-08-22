@@ -1,0 +1,33 @@
+name: tmp-d100-v16-main-run-list-after-allowlist
+
+on:
+  push:
+    branches: [ci/d100-v16-actions-policy-probe-2]
+    paths:
+      - '.github/workflows/tmp-d100-v16-main-run-list-after-allowlist.yml'
+
+permissions:
+  actions: read
+  contents: read
+  issues: write
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - name: List exact-SHA CI runs after actor allow-list repair
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: '23360cbe86e725f79ef0c6772a51f70825b92aef'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          runs="$(gh api --paginate "repos/${REPO}/actions/runs?head_sha=${SHA}&per_page=100" --jq '[.workflow_runs[] | select(.name=="CI") | {id,name,head_branch,head_sha,event,status,conclusion,run_attempt,created_at,updated_at}]')"
+          body=$(cat <<EOF
+          exact_sha=${SHA}
+          ci_runs=${runs}
+          stage=main_run_list_after_allowlist
+          EOF
+          )
+          gh api "repos/${REPO}/issues" -f 'title=TRUYN D-100 V16 MAIN RUN LIST AFTER ALLOWLIST' -f "body=${body}" >/dev/null
