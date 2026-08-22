@@ -34,7 +34,7 @@ Different documents have different jobs:
 2. `proto/<generation>/` — **machine-readable wire schema** implementing normative semantics.
 3. `docs/architecture/ARCHITECTURE_CONTRACT.md` — subsystem ownership and cross-document mapping.
 4. `docs/architecture/IMPLEMENTATION_STATUS.md` — canonical factual maturity/status.
-5. subsystem architecture documents — current implementation contracts + target boundaries.
+5. subsystem architecture documents — current implementation contracts + target boundaries, including SDK/developer experience.
 6. `docs/benchmarks/` — durable measured evidence.
 7. `WHITEPAPER.md` — scientific rationale/models/research basis.
 8. `README.md` — human-facing summary; must not redefine protocol behavior.
@@ -44,8 +44,8 @@ If these disagree, the inconsistency must be corrected rather than treated as a 
 
 ## Main architecture directories
 
-- `docs/` — architecture, concepts, setup, operations, security, Trustability, compatibility, decisions and evidence.
-- `spec/` — normative protocol specifications, versioned by protocol generation.
+- `docs/` — architecture, concepts, setup, operations, security, Trustability, compatibility, developer onboarding, decisions and evidence.
+- `spec/` — normative protocol specifications, versioned by protocol generation. `spec/protocol/v1/agent-descriptor.md` owns the draft TRUYN Agent Descriptor semantics without creating a new top-level envelope kind.
 - `proto/` — machine-readable wire schemas.
 - `core/` — protocol-independent domain logic: identity, capability, intent, claims, content-addressed objects, provenance, trust, state, routing policy and crypto.
 - `core/security/` — **implemented reference owner** for provider access policy, relay provider policy, provider billing safety, protected-node/backchannel helpers and sponsored entitlement verification. Rich account/tenant membership, commercial entitlement administration and distributed accounting remain broader future control-plane work.
@@ -54,35 +54,35 @@ If these disagree, the inconsistency must be corrected rather than treated as a 
 - `runtime/` — executable relay/provider runtime composition and security configuration.
 - `cli/` — user-facing `truyn` commands, including implemented reference BYOK onboarding. CLI gates are UX/defense-in-depth, not authoritative provider security.
 - `adapters/` — bridges to AI/model/agent ecosystems and protocols. Provider credentials belong at adapter/runtime secret boundaries, not TRUYN envelopes.
-- `sdk/` — native/public client SDK surfaces as they stabilize.
+- `sdk/` — first-party/native client SDK program. Required stable-v1 targets are JavaScript/TypeScript, Python, Go, Java and C#/.NET; Rust is an optional additional track. SDKs consume TRUYN contracts and MUST NOT redefine protocol or bypass authorization.
 - `gateways/` — HTTP/REST/webhook/legacy compatibility bridges. Execution-capable gateways must preserve equivalent central authorization.
 - `compute/` — remote capability execution, compute-near-data placement, sandboxing and execution policy ownership; not yet a fully productionized general subsystem.
 - `trust/` — Trustability engine, provenance/independence, receipts, lifecycle, source-owner authority, revocation and trust-network components.
 - `storage/` — persistent state/claims/content/index/cache metadata and migrations.
 - `economics/` — optional capability pricing/settlement/accounting abstractions; never an implicit authorization source.
 - `installers/` — OS installation/service-registration lifecycle target.
-- `packaging/` — package/distribution metadata and checksums target.
+- `packaging/` — package/distribution metadata and checksums target, including future SDK publication/release metadata where appropriate.
 - `updater/` — signed update channels, compatibility checks, migrations, rollback/recovery target.
 - `config/` — defaults plus `local`, `testnet`, `mainnet` profiles. Public network mode never overrides provider visibility.
 - `bootstrap/` — bootstrap/discovery configuration/contracts for testnet/mainnet.
-- `tests/` — unit, integration, interoperability, network, trust, compute, security and adversarial tests.
+- `tests/` — unit, integration, interoperability, network, trust, compute, security, adversarial and future SDK conformance tests.
 - `benchmarks/` — benchmark code/workloads for latency, tokens, bandwidth, inference cost, trust and scale. Durable reports live in `docs/benchmarks/`.
 - `simulations/` — controlled multi-node, network-failure, trust and adversarial simulations.
-- `examples/` — runnable interoperability/use-case examples; no live private secrets/topology.
-- `scripts/` — development/testing/benchmark/release helpers.
+- `examples/` — runnable interoperability/use-case examples; future SDK examples should demonstrate the same semantic flow across languages; no live private secrets/topology.
+- `scripts/` — development/testing/benchmark/release helpers, including future schema/codegen/conformance generation where appropriate.
 - `migrations/` — explicit config/storage/protocol migration tooling target.
-- `.github/` — CI and temporary bounded operational workflows; permanent public workflows must respect the repository security boundary.
+- `.github/` — CI and temporary bounded operational workflows; permanent public workflows must respect the repository security boundary. Future SDK CI must cover all required first-party languages.
 
 ## Documentation tree
 
 ```text
 docs/
-├── architecture/     canonical architecture + implementation status
+├── architecture/     canonical architecture + implementation status + SDK/DX contract
 ├── benchmarks/       append-only sanitized evidence ledger
-├── compatibility/    software/protocol/node/adapter compatibility
+├── compatibility/    software/protocol/node/adapter/SDK compatibility
 ├── concepts/         explanatory concepts
 ├── decisions/        ADR-style decisions
-├── getting-started/  user setup/BYOK/MVP guidance
+├── getting-started/  user setup/BYOK/MVP/SDK onboarding guidance
 ├── operations/       node/testnet/billing operational contracts
 ├── security/         security architecture status + operational security
 └── trustability/     claim/trust lifecycle architecture
@@ -92,12 +92,13 @@ docs/
 
 ## Public architecture documents
 
-Canonical provider/network/security/status documents include:
+Canonical provider/network/security/status/developer documents include:
 
 ```text
 docs/architecture/
 ├── ARCHITECTURE_CONTRACT.md
 ├── IMPLEMENTATION_STATUS.md
+├── SDK_DEVELOPER_EXPERIENCE.md
 ├── NETWORK_UNDERLAY_V01.md
 ├── PROVIDER_OWNERSHIP.md
 ├── AUTHORIZATION_MODEL.md
@@ -113,6 +114,21 @@ docs/architecture/
 ├── DISTRIBUTED_SEMANTIC_RETRIEVAL.md
 ├── DECENTRALIZED_PLACEMENT_BYZANTINE_RETRIEVAL.md
 └── KADEMLIA_QUIC_TRUST_TESTNET.md
+```
+
+Developer-facing SDK/DX contracts:
+
+```text
+sdk/README.md
+sdk/typescript/README.md
+sdk/python/README.md
+sdk/go/README.md
+sdk/java/README.md
+sdk/dotnet/README.md
+sdk/rust/README.md                 # optional secondary track
+docs/getting-started/SDK_QUICKSTART.md
+docs/compatibility/SDK_COMPATIBILITY.md
+spec/protocol/v1/agent-descriptor.md
 ```
 
 User-facing BYOK setup contract:
@@ -137,11 +153,13 @@ spec/protocol/v1/provider-policy.md
 
 ## Public repository vs private operations
 
-The public repository owns protocol/architecture, generic adapters, generic deployment patterns, tests and reproducible sanitized public benchmarks.
+The public repository owns protocol/architecture, generic adapters, generic deployment patterns, SDK contracts/implementations, tests, conformance fixtures, examples and reproducible sanitized public benchmarks.
 
 Credentials, private keys, private cloud identity/topology, privileged allowlists, private origins/backchannels, exact production quotas/cost ceilings, billing/credit information and sensitive incident/customer data belong to protected operational systems.
 
-Security must remain correct even if the public architecture is fully known.
+Public Agent Descriptors must follow the same boundary: only intentionally public interfaces/capabilities may appear in an unauthenticated descriptor view.
+
+Security must remain correct even if the public architecture and SDK implementation are fully known.
 
 ## Canonical TRUYN/1 vocabulary
 
@@ -164,6 +182,8 @@ REVOKE
 ```
 
 `CAPABILITY` is a descriptor used by `OFFER`, `NEED` and `COMPUTE`.
+
+The **TRUYN Agent Descriptor** is discovery/bootstrap metadata, not a new top-level exchange object. It describes participant identity, supported protocol/interfaces and intentionally visible capability classes; dynamic availability/conditions remain in `OFFER`.
 
 Provider ownership/authorization/billing policy is not a new top-level exchange object. It is a policy layer around discovery/eligibility/execution, specified in `spec/protocol/v1/provider-policy.md` and implemented incrementally by `core/security/` + relay/provider runtime boundaries.
 
@@ -191,6 +211,8 @@ adapter / SDK / local API
 ```
 
 For provider execution, authorization and billing decisions occur before upstream work.
+
+An SDK is a typed developer-facing access surface to this model. It does not move provider policy into application code.
 
 ## First-run lifecycle
 
@@ -224,6 +246,8 @@ TRUYN Node online
 
 Parts of this lifecycle (identity, config, BYOK, networking/testnet runtime) exist in reference form. Verified cross-platform installers, stable service registration and signed updater/rollback remain v0.8/v1.0 work.
 
+The future SDK onboarding path can connect to an already-running node or approved gateway; it does not require every application process to embed the full network node.
+
 ## Intended local runtime data
 
 ```text
@@ -255,4 +279,4 @@ Network mode affects reachability/compatibility; it never grants access to a pri
 
 ## Current maturity
 
-Current software is `0.1.0-dev`; `TRUYN/1` remains draft. The v0.1 underlay is implemented/CI-proven and bounded real QUIC/Kademlia trust-network evidence exists. Stable mainnet, production commercial tenancy/accounting, large real-node WAN scale and stable updater/compatibility contracts remain future gates.
+Current software is `0.1.0-dev`; `TRUYN/1` remains draft. The v0.1 underlay is implemented/CI-proven and bounded real QUIC/Kademlia trust-network evidence exists. The SDK/DX architecture and Agent Descriptor draft are now defined, but the required first-party SDK packages and descriptor runtime path remain implementation work. Stable mainnet, production commercial tenancy/accounting, large real-node WAN scale and stable updater/compatibility contracts remain future gates.
