@@ -8,7 +8,7 @@ TRUYN is an open-source project for **agent-to-agent communication, decentralize
 
 No new cables. No new hardware Internet. A new network contract.
 
-[Manifesto](MANIFESTO.md) · [Whitepaper](WHITEPAPER.md) · [Architecture](STRUCTURE.md) · [Developer SDK/DX](docs/architecture/SDK_DEVELOPER_EXPERIENCE.md) · [A2A/MCP](docs/architecture/A2A_MCP_INTEROPERABILITY.md) · [Security](SECURITY.md) · [Provider ownership](docs/architecture/PROVIDER_OWNERSHIP.md) · [BYOK](docs/getting-started/BYOK.md) · [Protocol](spec/protocol/v1/README.md) · [Roadmap](ROADMAP.md) · [Apache-2.0 License](LICENSE)
+[Manifesto](MANIFESTO.md) · [Whitepaper](WHITEPAPER.md) · [Architecture](STRUCTURE.md) · [Governance](GOVERNANCE.md) · [Developer SDK/DX](docs/architecture/SDK_DEVELOPER_EXPERIENCE.md) · [A2A/MCP](docs/architecture/A2A_MCP_INTEROPERABILITY.md) · [Security](SECURITY.md) · [Provider ownership](docs/architecture/PROVIDER_OWNERSHIP.md) · [BYOK](docs/getting-started/BYOK.md) · [Protocol](spec/protocol/v1/README.md) · [Roadmap](ROADMAP.md) · [Apache-2.0 License](LICENSE)
 
 ---
 
@@ -29,6 +29,51 @@ need → discover capability → verify → authorize → route / execute → re
 An AI agent should not always need to know **which server, company, URL, model, or API** can solve a task. It should be able to describe the required outcome, freshness, deadline, cost, privacy, and trust level. The network can then discover **authorized and eligible** providers, determine whether existing state or a content-addressed object already satisfies the request, decide whether verification is required, choose where computation should happen, and return the minimum sufficient result.
 
 **TRUYN shifts the logical center of networking from _where information is_ to _what intelligence is needed_.**
+
+---
+
+## Open protocol. Open governance path.
+
+TRUYN is vendor-neutral by architectural intent, but open source code alone is not enough to make a standard neutrally governed.
+
+The project therefore treats governance as a first-class architecture and roadmap dimension:
+
+```text
+founding stewardship
+        ↓
+open maintainer model
+        ↓
+multi-organization TSC
+        ↓
+neutral legal stewardship
+        ↓
+stable ecosystem governance
+```
+
+**Current factual state:** public governance, RFC, extension and decision-process contracts are defined (**G1**), while operational governance remains bootstrap Founding Stewardship by InnMedia. External/independent maintainers, a multi-organization Technical Steering Committee and neutral legal stewardship are **not yet facts**.
+
+TRUYN therefore does **not** currently claim to be foundation-governed or neutrally governed in operation.
+
+The governance architecture separates:
+
+```text
+protocol/specification governance
+repository/reference implementation ownership
+network/infrastructure operation
+commercial products/services
+```
+
+Funding the implementation, operating a relay, owning a commercial product or holding GitHub permissions does not create a permanent right to control the standard.
+
+Normative changes use public RFC/decision rules. Extensions follow:
+
+```text
+Community → Experimental → Official → Core Candidate → Core
+```
+
+Community Extensions remain permissionless in third-party namespaces. Official TRUYN status/namespace requires governance approval. Promotion into Core is a separate normative RFC and should be rare.
+
+Read [GOVERNANCE.md](GOVERNANCE.md), [Governance Architecture](docs/architecture/GOVERNANCE_ARCHITECTURE.md), [Maintainers](MAINTAINERS.md) and [Governance Process](docs/governance/README.md).
 
 ---
 
@@ -87,6 +132,7 @@ Read:
 - [Billing Boundary](docs/architecture/BILLING_BOUNDARY.md)
 - [BYOK Architecture](docs/architecture/BYOK_ARCHITECTURE.md)
 - [A2A / MCP Interoperability](docs/architecture/A2A_MCP_INTEROPERABILITY.md)
+- [Governance Architecture](docs/architecture/GOVERNANCE_ARCHITECTURE.md)
 - [Threat Model](docs/architecture/THREAT_MODEL.md)
 - [Public / Private Information Boundary](docs/architecture/PUBLIC_PRIVATE_BOUNDARY.md)
 
@@ -383,17 +429,21 @@ The SDK/DX architecture and Agent Descriptor are now defined, but the five requi
 
 A2A support, generalized/current MCP interoperability, bidirectional A2A↔TRUYN↔MCP proof and its cross-protocol negative security evidence are **not yet implemented/proven**.
 
+Governance architecture/process is now public and defined at **G1**, but operational governance remains bootstrap Founding Stewardship. TRUYN does not yet have a demonstrated external-maintainer cohort, multi-organization TSC or neutral legal steward.
+
 This does **not** mean the entire future security/control plane is finished. Rich account/tenant ownership, durable distributed quota/accounting, prepaid/subscription entitlement resolution, OS credential-store integration, production origin/perimeter hardening and the future stable mainnet remain additional work.
 
-No document or public A2A/MCP endpoint should be interpreted as permission to consume TRUYN-operated provider accounts.
+No document or public A2A/MCP endpoint should be interpreted as permission to consume TRUYN-operated provider accounts. No open-source or protocol-release claim should be interpreted as proof that G2-G5 governance milestones already exist.
 
 ---
 
 ## How to participate
 
-**Read it. Challenge it. Fork it. Implement it. Break it. Improve it.**
+**Read it. Challenge it. Fork it. Implement it. Break it. Improve it. Govern it openly.**
 
-Useful contributions include protocol design, networking implementation, trust algorithms, adversarial testing, cryptography, discovery/NAT traversal, A2A/MCP bridges, agent adapters, provider authorization, BYOK UX, compute sandboxing, first-party SDKs, Agent Descriptor/conformance work, benchmarks, simulations, documentation and independent academic critique.
+Useful contributions include protocol design, networking implementation, trust algorithms, adversarial testing, cryptography, discovery/NAT traversal, A2A/MCP bridges, agent adapters, provider authorization, BYOK UX, compute sandboxing, first-party SDKs, Agent Descriptor/conformance work, benchmarks, simulations, documentation, RFCs, extensions and independent academic critique.
+
+Normative contributions follow [GOVERNANCE.md](GOVERNANCE.md), the [RFC process](docs/governance/RFC_PROCESS.md), [extension governance](docs/governance/EXTENSIONS.md) and the [decision process](docs/governance/DECISION_PROCESS.md). Community Extensions in third-party namespaces do not require project permission.
 
 TRUYN is licensed under the **Apache License 2.0 (`Apache-2.0`)**. See [`LICENSE`](LICENSE).
 
@@ -403,7 +453,12 @@ TRUYN is licensed under the **Apache License 2.0 (`Apache-2.0`)**. See [`LICENSE
 
 - [Manifesto](MANIFESTO.md) — why TRUYN should exist.
 - [Whitepaper](WHITEPAPER.md) — academic rationale, formulas, threat model and research basis.
-- [Architecture Contract](docs/architecture/ARCHITECTURE_CONTRACT.md) — canonical mapping of concepts to implementation owners.
+- [Governance](GOVERNANCE.md) — bootstrap stewardship, roles, TSC target, voting and G0-G5 maturity.
+- [Maintainers](MAINTAINERS.md) — factual current governance-role roster.
+- [Governance Architecture](docs/architecture/GOVERNANCE_ARCHITECTURE.md) — how standard governance is separated from implementation/infrastructure/commercial ownership.
+- [RFC Process](docs/governance/RFC_PROCESS.md) — public normative change lifecycle.
+- [Extension Governance](docs/governance/EXTENSIONS.md) — Community/Experimental/Official/Core Candidate lifecycle.
+- [Architecture Contract](docs/architecture/ARCHITECTURE_CONTRACT.md) — canonical mapping of concepts to implementation and governance owners.
 - [A2A / MCP Interoperability](docs/architecture/A2A_MCP_INTEROPERABILITY.md) — external protocol bridge architecture and implementation gate.
 - [A2A / MCP Compatibility](docs/compatibility/A2A_MCP_COMPATIBILITY.md) — factual current support/version matrix.
 - [SDK & Developer Experience](docs/architecture/SDK_DEVELOPER_EXPERIENCE.md) — first-party SDK matrix, Agent Descriptor and conformance program.
@@ -417,8 +472,8 @@ TRUYN is licensed under the **Apache License 2.0 (`Apache-2.0`)**. See [`LICENSE
 - [Public / Private Boundary](docs/architecture/PUBLIC_PRIVATE_BOUNDARY.md) — what belongs in the open repository vs private operations.
 - [Multi-Cloud Provider Architecture](docs/architecture/MULTI_CLOUD_PROVIDER_ARCHITECTURE.md) — public capability architecture without private deployment identifiers.
 - [TRUYN/1 Protocol](spec/protocol/v1/README.md) — normative protocol semantics.
-- [Repository Structure](STRUCTURE.md) — where each subsystem belongs.
-- [Roadmap](ROADMAP.md) — staged implementation plan.
+- [Repository Structure](STRUCTURE.md) — where each subsystem and authority boundary belongs.
+- [Roadmap](ROADMAP.md) — staged engineering and governance plan.
 
 ---
 
