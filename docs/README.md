@@ -66,7 +66,7 @@ The Descriptor is self-description/bootstrap metadata. It does not replace dynam
 
 - [Trustability index](trustability/README.md) — retrieval integrity, claim evidence and operational trust separation.
 - [Claim-Centric Trustability v1](trustability/CLAIM_TRUSTABILITY_V1.md) — signed `CLAIM`/`ATTEST`, provenance, source-lineage independence and trust receipts.
-- [Active Trustability Lifecycle v2](trustability/ACTIVE_TRUSTABILITY_V2.md) — signed challenge/verify/dispute lifecycle, authority/revocation/freshness semantics.
+- [Active Trustability Lifecycle v2](trustability/ACTIVE_TRUST_LIFECYCLE_V2.md) — signed challenge/verify/dispute lifecycle, authority/revocation/freshness semantics.
 
 ## Provider, interoperability and edge architecture
 
