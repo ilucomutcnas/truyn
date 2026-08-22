@@ -1,0 +1,40 @@
+name: tmp-d100-v16-main-ci-force-cancel
+
+on:
+  push:
+    branches: [ci/d100-v16-actions-policy-probe-2]
+    paths:
+      - '.github/workflows/tmp-d100-v16-main-ci-force-cancel.yml'
+
+permissions:
+  contents: read
+  actions: write
+  issues: write
+
+jobs:
+  force-cancel:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Force-cancel only the stuck exact-main CI run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: '32558383377'
+          TARGET_SHA: '23360cbe86e725f79ef0c6772a51f70825b92aef'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          branch="$(gh api "repos/${REPO}/actions/runs/${RUN_ID}" --jq '.head_branch')"
+          sha="$(gh api "repos/${REPO}/actions/runs/${RUN_ID}" --jq '.head_sha')"
+          event="$(gh api "repos/${REPO}/actions/runs/${RUN_ID}" --jq '.event')"
+          test "$branch" = main
+          test "$sha" = "$TARGET_SHA"
+          test "$event" = push
+          set +e
+          resp="$(gh api -X POST "repos/${REPO}/actions/runs/${RUN_ID}/force-cancel" 2>&1)"
+          rc=$?
+          sleep 2
+          state="$(gh api "repos/${REPO}/actions/runs/${RUN_ID}" --jq '[.status,.conclusion,.run_attempt] | @tsv' 2>&1)"
+          body=$(printf 'force_cancel_rc=%s\nforce_cancel_response=%s\nstate=%s\nstage=main_ci_force_cancel\n' "$rc" "$resp" "$state")
+          gh api "repos/${REPO}/issues" -f 'title=TRUYN D-100 V16 MAIN CI FORCE-CANCEL' -f "body=${body}" >/dev/null
+          exit "$rc"
