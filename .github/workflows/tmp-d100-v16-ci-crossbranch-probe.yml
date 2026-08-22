@@ -1,0 +1,33 @@
+name: tmp-d100-v16-ci-crossbranch-probe
+
+on:
+  push:
+    branches:
+      - ci/d100-v16-main-security-green-observer-23360cbe
+    paths:
+      - '.github/workflows/tmp-d100-v16-ci-crossbranch-probe.yml'
+
+permissions:
+  actions: read
+  issues: write
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Compare CI runs across branches
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: 23360cbe86e725f79ef0c6772a51f70825b92aef
+          OBS_BRANCH: ci/d100-v16-main-security-green-observer-23360cbe
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          main_runs="$(gh api -X GET "repos/${GITHUB_REPOSITORY}/actions/workflows/335193474/runs" -f branch=main -f event=push -f per_page=10)"
+          obs_runs="$(gh api -X GET "repos/${GITHUB_REPOSITORY}/actions/workflows/335193474/runs" -f branch="$OBS_BRANCH" -f event=push -f per_page=10)"
+          main="$(jq -c '[.workflow_runs[]|{id,head_sha,head_branch,status,conclusion,created_at,updated_at}]' <<<"$main_runs")"
+          obs="$(jq -c '[.workflow_runs[]|{id,head_sha,head_branch,status,conclusion,created_at,updated_at}]' <<<"$obs_runs")"
+          body="main_ci_runs=${main}\nobserver_ci_runs=${obs}\nstage=ci_crossbranch_probe"
+          gh api "repos/${GITHUB_REPOSITORY}/issues" -f 'title=TRUYN D-100 V16 CI CROSSBRANCH PROBE' -f "body=${body}" >/dev/null
