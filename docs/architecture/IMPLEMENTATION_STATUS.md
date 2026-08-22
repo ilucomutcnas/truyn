@@ -45,6 +45,9 @@ Architecture documents define contracts. Benchmark reports prove bounded claims.
 | Owner-funded billing safety | Defined | Implemented | fail-closed tests | production accounting/tenant attribution open |
 | Sponsored billing | Defined | Guard implementation exists | activation requires signed entitlement + durable atomic usage store | production entitlement issuance/store deployment open |
 | Prepaid/subscription billing | Defined | fail-closed placeholder | denies without resolver | entitlement resolver/accounting not implemented |
+| MCP interoperability edge | Defined | **Implemented bounded reference server + configured remote-tool path** | adapter tests cover tools/header path | full current MCP conformance/general discovery-import not yet proven |
+| A2A interoperability edge | **Defined** | **Not implemented** | none | Agent Card + task/artifact server/client bridges required |
+| A2A↔TRUYN↔MCP bridge | **Defined** | **Not implemented** | none | bidirectional cross-protocol proof + security matrix required |
 | Settlement adapters (x402/AP2) | **Defined** | **Not implemented** | none | deferred v0.9 milestone after higher-priority productionization/operations gates |
 | Origin guard / edge proxy | Defined | Implemented reference controls | security tests/evaluation | deployment-specific direct-origin proof remains operational |
 | Protected-provider M2M guard | Defined | Implemented | regression proven | live token issuance/rotation is deployment-specific |
@@ -52,6 +55,30 @@ Architecture documents define contracts. Benchmark reports prove bounded claims.
 | Operations documentation | Defined | baseline implemented | this docs layer | production runbooks evolve with testnet/mainnet |
 | Compatibility documentation | Defined | baseline implemented | this docs layer | no stable `TRUYN/1` compatibility promise yet |
 | Mainnet | Defined conceptually | Not productionized | none | requires productionization + stabilization gates |
+
+## A2A / MCP interoperability status boundary
+
+The repository already contains working bounded MCP integration code, so the factual status is **not** “MCP planned only.”
+
+Implemented today:
+
+- TRUYN-as-MCP server over stdio;
+- loopback MCP HTTP bridge exposing `truyn_identity`, `truyn_find`, `truyn_offer`, `truyn_need`, `truyn_poll`, `truyn_result`;
+- configured remote MCP HTTP tool provider path;
+- bounded adapter tests for MCP discovery/tool execution and modern HTTP routing headers.
+
+Not implemented/proven today:
+
+- complete current MCP feature/conformance closure;
+- general MCP tool/resource discovery/import;
+- any A2A Agent Card/server task bridge;
+- any A2A client/provider adapter;
+- A2A→TRUYN→MCP or MCP→TRUYN→A2A real round-trip evidence;
+- cross-protocol negative security evidence.
+
+The architecture is defined in `A2A_MCP_INTEROPERABILITY.md`; the factual version/support matrix is `../compatibility/A2A_MCP_COMPATIBILITY.md`.
+
+A2A/MCP transport authentication never substitutes for TRUYN provider authorization, billing responsibility or Trustability.
 
 ## Settlement status boundary
 
@@ -74,7 +101,9 @@ The current reference implementation enforces these core invariants:
 9. protected provider M2M proof is transport-only and stripped before the inner relay;
 10. sponsored mode cannot activate without an actor-bound signed entitlement verifier and a durable atomic usage store.
 
-See `SECURITY.md`, `docs/security/`, `AUTHORIZATION_MODEL.md`, `BILLING_BOUNDARY.md`, `SETTLEMENT_ADAPTERS.md` and `RELAY_SECURITY.md`.
+These invariants apply equally to native, HTTP, WebSocket, SDK, MCP and future A2A entry paths. An interoperability bridge is not a security bypass.
+
+See `SECURITY.md`, `docs/security/`, `AUTHORIZATION_MODEL.md`, `BILLING_BOUNDARY.md`, `A2A_MCP_INTEROPERABILITY.md`, `SETTLEMENT_ADAPTERS.md` and `RELAY_SECURITY.md`.
 
 ## Evidence discipline
 
@@ -84,7 +113,7 @@ A claim is only promoted to a proven maturity when a durable public benchmark/se
 
 ## Current priority
 
-The primary architecture/engineering priority is **network productionization**, not settlement implementation or additional semantic sophistication. Class B real multi-host proof is closed and the signed peer-record lifecycle prerequisite is now CI-proven; the next evidence class remains heterogeneous WAN/reachability:
+The primary architecture/engineering priority is **network productionization**. Class B real multi-host proof is closed and the signed peer-record lifecycle prerequisite is now CI-proven; the next evidence class remains heterogeneous WAN/reachability. The A2A/MCP bridge is now an explicit v0.5 implementation gate and can be developed as a bounded adapter track, but it does not replace the physical network productionization gate.
 
 ```text
 bounded working decentralized primitives
@@ -108,4 +137,20 @@ stable operational and compatibility contracts
 settlement-adapter implementation milestone
 ```
 
-Until those gates are passed, TRUYN should be described as an advanced experimental/reference intelligence-network implementation, not a production mainnet.
+Parallel bounded interoperability track:
+
+```text
+MCP bounded reference — implemented
+        ↓
+MCP current-conformance closure
+        ↓
+A2A server + client/provider adapters
+        ↓
+A2A ↔ TRUYN ↔ MCP bidirectional proof
+        ↓
+negative security matrix + durable evidence
+        ↓
+stable adapter compatibility contract
+```
+
+Until the network and interoperability gates are passed at their stated maturity levels, TRUYN should be described as an advanced experimental/reference intelligence-network implementation, not a production mainnet.
