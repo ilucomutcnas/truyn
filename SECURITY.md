@@ -6,6 +6,26 @@ TRUYN is security-sensitive infrastructure. Do not publish exploitable vulnerabi
 
 Use GitHub private vulnerability reporting when available. Never place credentials, private keys, production secrets, customer data, or personally identifying data in a public report.
 
+## Security and governance
+
+Normal normative changes are public under `GOVERNANCE.md` and `docs/governance/`. Security incidents are the deliberate exception to **disclosure timing**, not an exception that grants permanent hidden authority to change the standard.
+
+A trusted Security Response Team may privately coordinate an embargoed fix, delay public details and temporarily disable vulnerable functionality. After safe disclosure, any material permanent change to stable protocol/security semantics MUST receive the appropriate public RFC/decision record.
+
+Security response therefore follows:
+
+```text
+private report / embargo
+        ↓
+bounded remediation
+        ↓
+safe disclosure
+        ↓
+public durable record for material normative change
+```
+
+Governance does not require exposing secrets, responder identities when disclosure creates risk, or active exploit details. Conversely, a security label must not be used to create a permanent private standards channel.
+
 ## Current security baseline
 
 TRUYN is pre-1.0 experimental software. The public reference runtime is intentionally conservative:
@@ -81,6 +101,12 @@ First-party SDKs for JavaScript/TypeScript, Python, Go, Java and C#/.NET are dev
 
 A modified SDK must not gain any capability that the same requester could not obtain by speaking the public protocol directly.
 
+### Governance is not an authorization boundary
+
+A Maintainer, TSC member, Founding Steward or official-extension author does not gain provider access by virtue of governance role. Protocol governance authority and provider/resource authorization are separate domains.
+
+Likewise, a governance vote cannot make a private provider public without the provider's own authoritative access policy.
+
 ### Fail closed
 
 If identity, ownership, tenant, authorization, billing responsibility, or required entitlement cannot be resolved, chargeable/private execution must not occur.
@@ -91,7 +117,7 @@ HTTP, WebSocket, MCP, SDK, fast paths, and legacy compatibility paths must conve
 
 ## Public/private repository boundary
 
-The public repository may contain protocol semantics, generic implementation code, security invariants, local examples, generic adapters, first-party SDK source/scaffolding, Agent Descriptor schemas, conformance fixtures, reviewed benchmark methodology, and sanitized benchmark evidence.
+The public repository may contain protocol semantics, governance contracts/decision records, generic implementation code, security invariants, local examples, generic adapters, first-party SDK source/scaffolding, Agent Descriptor schemas, conformance fixtures, reviewed benchmark methodology, and sanitized benchmark evidence.
 
 It must not contain unnecessary live operational data such as:
 
@@ -138,7 +164,7 @@ Removing content from the current tree is not enough when sensitive data existed
 
 Git hosting providers may retain unreachable objects, pull-request refs, caches, forks, clones, Actions logs, artifacts or published package versions after a force rewrite. Those copies must be purged through the hosting/package provider and affected fork/clone owners as applicable. Historical Actions artifacts/logs and immutable hosting-side refs are therefore treated as a separate cleanup surface from the sanitized Git tree.
 
-History cleanup must not be used as a blanket mechanism to erase sanitized benchmark evidence. If a history rewrite is required for secret removal, the sanitized benchmark reports must be restored into the new root/history immediately, with their evidence fields preserved to the maximum safe extent.
+History cleanup must not be used as a blanket mechanism to erase sanitized benchmark evidence or public governance history. If a history rewrite is required for secret removal, sanitized benchmark reports and material governance/RFC decision records must be restored into the new root/history immediately, with safe evidence fields preserved to the maximum extent.
 
 ## Security acceptance gate
 
@@ -182,8 +208,13 @@ The future SDK/DX conformance gate must add, before SDK parity/stability is clai
 
 These are future SDK/Descriptor acceptance requirements, not claims about tests that already exist today.
 
-## Related architecture
+## Related architecture and governance
 
+- `GOVERNANCE.md`
+- `MAINTAINERS.md`
+- `docs/governance/RFC_PROCESS.md`
+- `docs/governance/DECISION_PROCESS.md`
+- `docs/architecture/GOVERNANCE_ARCHITECTURE.md`
 - `docs/architecture/PROVIDER_OWNERSHIP.md`
 - `docs/architecture/AUTHORIZATION_MODEL.md`
 - `docs/architecture/RELAY_SECURITY.md`
