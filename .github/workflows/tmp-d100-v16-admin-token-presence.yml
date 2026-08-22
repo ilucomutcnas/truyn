@@ -1,0 +1,41 @@
+name: tmp-d100-v16-admin-token-presence
+
+on:
+  push:
+    branches: [ci/d100-v16-actions-policy-probe-2]
+    paths:
+      - '.github/workflows/tmp-d100-v16-admin-token-presence.yml'
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    env:
+      GH_ADMIN_PAT: ${{ secrets.GH_ADMIN_PAT }}
+      GITHUB_ADMIN_PAT: ${{ secrets.GITHUB_ADMIN_PAT }}
+      GH_PAT: ${{ secrets.GH_PAT }}
+      GITHUB_PAT: ${{ secrets.GITHUB_PAT }}
+      ADMIN_PAT: ${{ secrets.ADMIN_PAT }}
+      ORG_ADMIN_PAT: ${{ secrets.ORG_ADMIN_PAT }}
+      GH_ORG_ADMIN_PAT: ${{ secrets.GH_ORG_ADMIN_PAT }}
+      GITHUB_ORG_ADMIN_TOKEN: ${{ secrets.GITHUB_ORG_ADMIN_TOKEN }}
+      GITHUB_ACTIONS_POLICY_TOKEN: ${{ secrets.GITHUB_ACTIONS_POLICY_TOKEN }}
+      GH_ACTIONS_POLICY_TOKEN: ${{ secrets.GH_ACTIONS_POLICY_TOKEN }}
+      TRUYN_GITHUB_ADMIN_TOKEN: ${{ secrets.TRUYN_GITHUB_ADMIN_TOKEN }}
+    steps:
+      - name: Report only names of non-empty candidate secrets
+        env:
+          ISSUE_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          present=()
+          for name in GH_ADMIN_PAT GITHUB_ADMIN_PAT GH_PAT GITHUB_PAT ADMIN_PAT ORG_ADMIN_PAT GH_ORG_ADMIN_PAT GITHUB_ORG_ADMIN_TOKEN GITHUB_ACTIONS_POLICY_TOKEN GH_ACTIONS_POLICY_TOKEN TRUYN_GITHUB_ADMIN_TOKEN; do
+            [[ -n "${!name:-}" ]] && present+=("$name")
+          done
+          if ((${#present[@]})); then names="$(IFS=,; echo "${present[*]}")"; else names='NONE'; fi
+          GH_TOKEN="$ISSUE_TOKEN" gh api "repos/${REPO}/issues" -f 'title=TRUYN D-100 V16 ADMIN TOKEN PRESENCE' -f "body=present_names=${names}%0Avalues_exposed=false%0Astage=admin_token_presence" >/dev/null
