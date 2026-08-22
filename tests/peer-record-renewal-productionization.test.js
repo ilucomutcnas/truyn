@@ -114,3 +114,47 @@ test('productionization: PING piggyback repairs a missed proactive renewal annou
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test('productionization: remote QUIC shutdown evicts stale direct and discovery clients before restart traffic', { timeout: 25_000 }, async () => {
+  const root = await mkdtemp(join(tmpdir(), 'truyn-peer-restart-cache-'));
+  const tls = await generateTls(root);
+  const identityA = createIdentity();
+  const statePathA = join(root, 'a-state.json');
+  let a = new TruynNetworkNode({ identity: identityA, host: '127.0.0.1', tls, statePath: statePathA, peerRecordAutoRenew: false });
+  const b = new TruynNetworkNode({ identity: createIdentity(), host: '127.0.0.1', tls, statePath: join(root, 'b-state.json'), peerRecordAutoRenew: false });
+  try {
+    const [recordA, recordB] = await Promise.all([a.start(), b.start()]);
+    a.bootstrap([recordB]);
+    b.bootstrap([recordA]);
+    a.onEnvelope(async (message) => ({ ok: true, type: message.type, phase: 'before-restart' }));
+
+    const directBefore = await b.need(a.identity.nodeId, 'restart-proof', { phase: 'before' });
+    assert.equal(directBefore.transport, 'quic-direct');
+    assert.equal(await b.pingPeer(a.identity.nodeId), true);
+    assert.equal(b.router.connections.has(a.identity.nodeId), true, 'direct cache must be populated before shutdown');
+    assert.equal(b.rpc.clients.has(a.identity.nodeId), true, 'discovery cache must be populated before shutdown');
+
+    const endpoint = new URL(recordA.endpoints[0]);
+    const restartPort = Number(endpoint.port);
+    await a.close();
+    await eventually(
+      () => !b.router.connections.has(identityA.nodeId) && !b.rpc.clients.has(identityA.nodeId),
+      { message: 'closed_quic_clients_not_evicted' }
+    );
+
+    a = new TruynNetworkNode({ identity: identityA, host: '127.0.0.1', port: restartPort, tls, statePath: statePathA, peerRecordAutoRenew: false });
+    const restartedRecord = await a.start();
+    a.bootstrap([recordB]);
+    a.onEnvelope(async (message) => ({ ok: true, type: message.type, phase: 'after-restart' }));
+    assert.ok(restartedRecord.sequence > recordA.sequence, 'restart must advance the durable signed peer-record sequence');
+
+    const directAfter = await b.need(identityA.nodeId, 'restart-proof', { phase: 'after' });
+    assert.equal(directAfter.transport, 'quic-direct', 'first application request after restart must establish a fresh QUIC session');
+    assert.equal(directAfter.result.phase, 'after-restart');
+    assert.equal(await b.pingPeer(identityA.nodeId), true, 'first discovery request after restart must establish a fresh QUIC session');
+    await eventually(() => b.discovery.get(identityA.nodeId)?.sequence === restartedRecord.sequence, { message: 'restarted_peer_record_not_ingested' });
+  } finally {
+    await Promise.allSettled([a.close(), b.close()]);
+    await rm(root, { recursive: true, force: true });
+  }
+});
