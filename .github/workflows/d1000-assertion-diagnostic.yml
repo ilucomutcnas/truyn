@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - d1000/diagnose-43814a-assertions
+  pull_request: {}
   workflow_dispatch: {}
 
 permissions:
@@ -48,15 +49,11 @@ jobs:
           const lines = text.split(/\r?\n/);
           const hits = [];
           for (let i = 0; i < lines.length; i++) {
-            if (/^(not ok\b)|AssertionError|ERR_ASSERTION/.test(lines[i].trim())) {
-              hits.push(i);
-            }
+            if (/^(not ok\b)|AssertionError|ERR_ASSERTION/.test(lines[i].trim())) hits.push(i);
           }
           const merged = [];
           for (const hit of hits) {
-            const start = Math.max(0, hit - 6);
-            const end = Math.min(lines.length, hit + 24);
-            const block = lines.slice(start, end).join('\n');
+            const block = lines.slice(Math.max(0, hit - 6), Math.min(lines.length, hit + 24)).join('\n');
             if (!merged.includes(block)) merged.push(block);
           }
           fs.writeFileSync('/tmp/failures.txt', merged.join('\n\n===== FAILURE CONTEXT =====\n\n'));
