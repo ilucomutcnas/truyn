@@ -19,6 +19,7 @@ This document prevents architectural ideas and factual implementation status fro
 | Relay/control-plane boundary | `docs/architecture/RELAY_SECURITY.md` |
 | BYOK model | `docs/architecture/BYOK_ARCHITECTURE.md` |
 | Billing/quota/entitlement boundary | `docs/architecture/BILLING_BOUNDARY.md` |
+| A2A/MCP interoperability boundary | `docs/architecture/A2A_MCP_INTEROPERABILITY.md` and `docs/compatibility/A2A_MCP_COMPATIBILITY.md` |
 | Settlement neutrality / external payment adapters | `spec/protocol/v1/economics.md` and `docs/architecture/SETTLEMENT_ADAPTERS.md` |
 | Provider/relay threat model | `docs/architecture/THREAT_MODEL.md` |
 | Public/private information boundary | `docs/architecture/PUBLIC_PRIVATE_BOUNDARY.md` |
@@ -47,7 +48,7 @@ TRUYN documentation distinguishes:
 - **Internet-scale proven** — large real-node/WAN/adversarial evidence exists;
 - **Stable** — compatibility guarantees are declared.
 
-The repository is intentionally mixed maturity. The v0.1 QUIC/Kademlia underlay is implemented and CI-proven; the trust lifecycle has bounded real four-node QUIC/Kademlia evidence; semantic retrieval and provider security have substantial implementation/evidence; large real-node WAN scale, rich commercial/account control planes and stable mainnet remain open.
+The repository is intentionally mixed maturity. The v0.1 QUIC/Kademlia underlay is implemented and CI-proven; the trust lifecycle has bounded real four-node QUIC/Kademlia evidence; semantic retrieval and provider security have substantial implementation/evidence; MCP has bounded executable reference integration; A2A, large real-node WAN scale, rich commercial/account control planes and stable mainnet remain open.
 
 An approved architecture document is not an implementation-complete security claim. Conversely, once a slice is implemented and evidenced, documentation must not continue describing it as purely planned.
 
@@ -192,6 +193,36 @@ Current implementation facts:
 - sponsored activation requires actor-bound signed entitlement verification and an atomic durable usage store;
 - a process-local usage counter is not an acceptable production billing boundary.
 
+### External interoperability: A2A and MCP
+
+A2A and MCP are external protocol edges, not new TRUYN/1 primitives.
+
+The compatibility pipeline is:
+
+```text
+A2A / MCP request
+        ↓
+adapter authentication + version validation
+        ↓
+normalize to TRUYN capability / NEED / RESULT semantics
+        ↓
+normal TRUYN authorization + billing + trust policy
+        ↓
+network routing / execution
+        ↓
+normalize result/status/artifact back to external protocol
+```
+
+External protocol metadata is not authoritative TRUYN ownership. An A2A Agent Card, task ID, MCP client metadata or tool name cannot grant provider access by itself.
+
+The current repository contains bounded MCP reference behavior in both directions: TRUYN-as-MCP server and a configured remote MCP HTTP tool provider. General MCP discovery/import, A2A server/client bridges and the bidirectional A2A↔TRUYN↔MCP interoperability proof remain open.
+
+The intended A2A mapping treats Agent Card skills as compatibility views over authorized TRUYN capabilities, A2A Messages as request input, task/context IDs as adapter correlation state and A2A Artifacts as `RESULT` outputs/artifact references. Private TRUYN offers MUST NOT be leaked merely because an Agent Card endpoint exists.
+
+MCP tools can expose TRUYN operations or back a TRUYN provider. MCP Resources may map to `OBJECT`/`STATE` only when their mutability, visibility and integrity semantics are explicitly safe; the adapter must not assume equivalence.
+
+See `docs/architecture/A2A_MCP_INTEROPERABILITY.md` and `docs/compatibility/A2A_MCP_COMPATIBILITY.md`.
+
 ### Settlement neutrality
 
 TRUYN/1 is not a payment protocol. It does not prescribe a currency, billing provider, blockchain, smart contract or settlement rail.
@@ -224,7 +255,9 @@ Provider ownership remains intact in a market: paid/shared cross-owner execution
 
 A relay may be public while providers remain private. Public reachability is not provider authorization.
 
-Execution-capable HTTP, WebSocket, MCP, SDK and legacy paths MUST preserve equivalent central authorization before provider execution.
+Execution-capable HTTP, WebSocket, MCP, future A2A, SDK and legacy paths MUST preserve equivalent central authorization before provider execution.
+
+External discovery surfaces such as an A2A Agent Card, MCP tool list or future resource list MUST be authorization-aware when they could reveal private provider capability/state.
 
 The reference provider security path is defense in depth: relay filtering plus provider-host access/billing checks.
 
@@ -307,7 +340,7 @@ Public network mode never overrides provider visibility/authorization.
 
 ## Versioning
 
-Software, protocol, wire and storage versions are independent. Current software is `0.1.0-dev`; `TRUYN/1` remains draft. A new software release does not automatically imply a new wire generation.
+Software, TRUYN protocol, wire, storage and external adapter-protocol versions are independent. Current software is `0.1.0-dev`; `TRUYN/1` remains draft. A new software release does not automatically imply a new wire generation, and an A2A/MCP adapter upgrade does not automatically imply a new TRUYN generation.
 
 See `docs/compatibility/`.
 
@@ -319,8 +352,10 @@ Production installer/updater/rollback maturity remains a v0.8/v1.0 gate.
 
 ## Interoperability
 
-TRUYN is model/provider-neutral. Vendor adapters are replaceable edges. MCP, SDKs, HTTP/gRPC/WebSocket gateways and provider-specific adapters connect systems to TRUYN; none defines the network itself.
+TRUYN is model/provider-neutral. Vendor and protocol adapters are replaceable edges. A2A, MCP, SDKs, HTTP/gRPC/WebSocket gateways and provider-specific adapters connect systems to TRUYN; none defines the network itself.
+
+A2A is the target agent-task interoperability edge; MCP is the target model/tool interoperability edge. They may interoperate through TRUYN, but neither is treated as a synonym for TRUYN identity, capability policy, Trustability or settlement.
 
 Settlement adapters follow the same extension philosophy: x402, AP2 and future payment systems are replaceable external edges and do not define the TRUYN core network.
 
-See `docs/compatibility/ADAPTER_COMPATIBILITY.md` for the factual adapter compatibility boundary.
+See `docs/compatibility/ADAPTER_COMPATIBILITY.md`, `docs/compatibility/A2A_MCP_COMPATIBILITY.md` and `docs/architecture/A2A_MCP_INTEROPERABILITY.md` for the factual adapter compatibility boundary.
