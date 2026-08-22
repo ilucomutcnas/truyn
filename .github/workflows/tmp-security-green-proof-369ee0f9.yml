@@ -1,0 +1,87 @@
+name: tmp-security-green-proof-369ee0f9
+
+on:
+  push:
+    branches: [ci/security-green-proof-369ee0f9]
+    paths:
+      - '.github/workflows/tmp-security-green-proof-369ee0f9.yml'
+
+permissions:
+  contents: read
+  actions: read
+  issues: write
+
+env:
+  TARGET_SHA: 369ee0f9c57706aa4b95a328b556f626846e83a0
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Verify exact main CI
+        id: verify
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          chosen=''
+          for attempt in $(seq 1 60); do
+            runs="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs?head_sha=${TARGET_SHA}&event=push&per_page=100")"
+            chosen="$(jq -c --arg sha "$TARGET_SHA" '[.workflow_runs[] | select(.name=="CI" and .head_branch=="main" and .head_sha==$sha)] | sort_by(.created_at) | last // empty' <<<"$runs")"
+            if [[ -n "$chosen" ]]; then
+              status="$(jq -r '.status' <<<"$chosen")"
+              if [[ "$status" == completed ]]; then break; fi
+            fi
+            sleep 5
+          done
+          [[ -n "$chosen" ]]
+          run_id="$(jq -r '.id' <<<"$chosen")"
+          name="$(jq -r '.name' <<<"$chosen")"
+          event="$(jq -r '.event' <<<"$chosen")"
+          branch="$(jq -r '.head_branch' <<<"$chosen")"
+          sha="$(jq -r '.head_sha' <<<"$chosen")"
+          status="$(jq -r '.status' <<<"$chosen")"
+          conclusion="$(jq -r '.conclusion' <<<"$chosen")"
+          [[ "$name" == CI ]]
+          [[ "$event" == push ]]
+          [[ "$branch" == main ]]
+          [[ "$sha" == "$TARGET_SHA" ]]
+          [[ "$status" == completed ]]
+          jobs="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/jobs?per_page=100")"
+          test_job="$(jq -c '[.jobs[] | select(.name=="test")] | last // empty' <<<"$jobs")"
+          [[ -n "$test_job" ]]
+          job_id="$(jq -r '.id' <<<"$test_job")"
+          job_status="$(jq -r '.status' <<<"$test_job")"
+          job_conclusion="$(jq -r '.conclusion' <<<"$test_job")"
+          printf 'run_id=%s\njob_id=%s\nstatus=%s\nconclusion=%s\njob_status=%s\njob_conclusion=%s\n' "$run_id" "$job_id" "$status" "$conclusion" "$job_status" "$job_conclusion" | tee security-green-proof.txt
+          echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+          echo "job_id=$job_id" >> "$GITHUB_OUTPUT"
+          echo "conclusion=$conclusion" >> "$GITHUB_OUTPUT"
+          echo "job_conclusion=$job_conclusion" >> "$GITHUB_OUTPUT"
+          [[ "$conclusion" == success ]]
+          [[ "$job_status" == completed ]]
+          [[ "$job_conclusion" == success ]]
+
+      - name: Record PASS
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ steps.verify.outputs.run_id }}
+          JOB_ID: ${{ steps.verify.outputs.job_id }}
+        shell: bash
+        run: |
+          gh api "repos/${GITHUB_REPOSITORY}/issues" \
+            -f 'title=TRUYN D-100 EVIDENCE MAIN SECURITY-GREEN PASS' \
+            -f "body=main_sha=${TARGET_SHA} ci_run=${RUN_ID} ci_job=${JOB_ID} event=push branch=main status=completed conclusion=success proof_run=${GITHUB_RUN_ID} proof_sha=${GITHUB_SHA}" >/dev/null
+
+      - name: Record FAIL
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          gh api "repos/${GITHUB_REPOSITORY}/issues" \
+            -f 'title=TRUYN D-100 EVIDENCE MAIN SECURITY-GREEN FAIL' \
+            -f "body=main_sha=${TARGET_SHA} proof_run=${GITHUB_RUN_ID} proof_sha=${GITHUB_SHA} status=FAIL" >/dev/null
