@@ -1,0 +1,36 @@
+name: tmp-d100-v16-ci-workflow-state-probe
+
+on:
+  push:
+    branches:
+      - ci/d100-v16-main-security-green-observer-23360cbe
+    paths:
+      - '.github/workflows/tmp-d100-v16-ci-workflow-state-probe.yml'
+
+permissions:
+  actions: read
+  issues: write
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Inspect CI workflow state and repository Actions policy
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          workflow="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/335193474")"
+          repo_policy="$(gh api "repos/${GITHUB_REPOSITORY}/actions/permissions")"
+          selected="$(gh api "repos/${GITHUB_REPOSITORY}/actions/permissions/selected-actions" 2>/dev/null || printf '{}')"
+          body=$(cat <<EOF
+          workflow=$(jq -c '{id,name,path,state,created_at,updated_at}' <<<"$workflow")
+          repository_actions_policy=$(jq -c '.' <<<"$repo_policy")
+          selected_actions=$(jq -c '.' <<<"$selected")
+          stage=ci_workflow_state_probe
+          EOF
+          )
+          gh api "repos/${GITHUB_REPOSITORY}/issues" -f 'title=TRUYN D-100 V16 CI WORKFLOW STATE' -f "body=${body}" >/dev/null
