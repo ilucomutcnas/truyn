@@ -2,7 +2,7 @@
 
 **Status:** canonical factual status index.
 
-**Snapshot date:** 2026-08-17  
+**Snapshot date:** 2026-08-22  
 **Software version:** `0.1.0-dev`  
 **Protocol generation:** `TRUYN/1` draft
 
@@ -45,12 +45,19 @@ Architecture documents define contracts. Benchmark reports prove bounded claims.
 | Owner-funded billing safety | Defined | Implemented | fail-closed tests | production accounting/tenant attribution open |
 | Sponsored billing | Defined | Guard implementation exists | activation requires signed entitlement + durable atomic usage store | production entitlement issuance/store deployment open |
 | Prepaid/subscription billing | Defined | fail-closed placeholder | denies without resolver | entitlement resolver/accounting not implemented |
+| Settlement adapters (x402/AP2) | **Defined** | **Not implemented** | none | deferred v0.9 milestone after higher-priority productionization/operations gates |
 | Origin guard / edge proxy | Defined | Implemented reference controls | security tests/evaluation | deployment-specific direct-origin proof remains operational |
 | Protected-provider M2M guard | Defined | Implemented | regression proven | live token issuance/rotation is deployment-specific |
 | Multi-cloud text/image/video adapters | Defined | Implemented reference paths | smoke/benchmark evidence for available deployments | cloud entitlement/quota can block individual models |
 | Operations documentation | Defined | baseline implemented | this docs layer | production runbooks evolve with testnet/mainnet |
 | Compatibility documentation | Defined | baseline implemented | this docs layer | no stable `TRUYN/1` compatibility promise yet |
 | Mainnet | Defined conceptually | Not productionized | none | requires productionization + stabilization gates |
+
+## Settlement status boundary
+
+TRUYN/1 is explicitly settlement-neutral. The core does not define a currency, payment processor, blockchain, smart contract or settlement rail.
+
+The first planned external adapter targets are x402 (payment/settlement) and AP2 (verifiable agent payment authorization). Their architecture is defined in `docs/architecture/SETTLEMENT_ADAPTERS.md`, but **no adapter implementation, live money movement or production settlement claim exists yet**.
 
 ## Implemented security baseline
 
@@ -67,7 +74,7 @@ The current reference implementation enforces these core invariants:
 9. protected provider M2M proof is transport-only and stripped before the inner relay;
 10. sponsored mode cannot activate without an actor-bound signed entitlement verifier and a durable atomic usage store.
 
-See `SECURITY.md`, `docs/security/`, `AUTHORIZATION_MODEL.md`, `BILLING_BOUNDARY.md` and `RELAY_SECURITY.md`.
+See `SECURITY.md`, `docs/security/`, `AUTHORIZATION_MODEL.md`, `BILLING_BOUNDARY.md`, `SETTLEMENT_ADAPTERS.md` and `RELAY_SECURITY.md`.
 
 ## Evidence discipline
 
@@ -77,7 +84,7 @@ A claim is only promoted to a proven maturity when a durable public benchmark/se
 
 ## Current priority
 
-The primary architecture/engineering priority is **network productionization**, not additional semantic sophistication. Class B real multi-host proof is closed and the signed peer-record lifecycle prerequisite is now CI-proven; the next evidence class remains heterogeneous WAN/reachability:
+The primary architecture/engineering priority is **network productionization**, not settlement implementation or additional semantic sophistication. Class B real multi-host proof is closed and the signed peer-record lifecycle prerequisite is now CI-proven; the next evidence class remains heterogeneous WAN/reachability:
 
 ```text
 bounded working decentralized primitives
@@ -97,6 +104,8 @@ real NAT and relay-failure matrix
 Byzantine / Sybil / eclipse / collusion exercises
         ↓
 stable operational and compatibility contracts
+        ↓
+settlement-adapter implementation milestone
 ```
 
 Until those gates are passed, TRUYN should be described as an advanced experimental/reference intelligence-network implementation, not a production mainnet.
