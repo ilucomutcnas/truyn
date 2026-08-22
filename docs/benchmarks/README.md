@@ -25,6 +25,7 @@ The repository regression suite treats the evidence files below as protected and
 
 ### Measured results
 
+- [`CLASS_D_100_2026-08-22.md`](CLASS_D_100_2026-08-22.md) — accepted Class D-100 V17 resilience proof on immutable tested source `ea1753ab6eb12f2c7361740d98f3d08a067bd7c5`: 100 real processes / identities / QUIC endpoints across four Azure hosts, 100% baseline and healed routing, recovery/convergence p95 32,090 ms, required churn/packet-partition/Byzantine/Sybil/eclipse/collusion coverage, zero safety violations, canonical evaluator PASS, strict terminal PASS, and complete cleanup with zero remaining run resources; explicitly does not claim the later 1,000-real-node or operational stability gates.
 - [`CLASS_C_HETEROGENEOUS_WAN_2026-08-18.md`](CLASS_C_HETEROGENEOUS_WAN_2026-08-18.md) — accepted Class C heterogeneous Azure/GCP WAN/reachability proof: direct cross-cloud QUIC with zero relay calls, real packet-path partition/heal, real Azure NAT source observation, two-layer CGNAT-like outbound path, authenticated relay fallback, outage fail-closed, recovery, and complete ephemeral cleanup; explicitly does not claim carrier-field CGNAT, 100/1,000-node scale or operational closure.
 - [`NETWORK_PRODUCTIONIZATION_AZURE_4HOST_2026-08-17.md`](NETWORK_PRODUCTIONIZATION_AZURE_4HOST_2026-08-17.md) — Class B four-host Azure productionization proof: real public UDP/QUIC direct NEED with zero relay calls, injected partition/heal, 3-of-3 DHT replication and remote read, real holder-process failure, 5,097 ms replacement repair, restart identity/sequence continuity, stale DHT-client invalidation, and complete ephemeral cleanup; explicitly does not claim packet-path WAN partition, NAT/CGNAT, 100/1,000 real-node scale or mainnet readiness.
 - [`V01_CONNECT_GATE_2026-08-17.md`](V01_CONNECT_GATE_2026-08-17.md) — first real lower-network gate: real QUIC/UDP signed NEED transport, authenticated peer sessions, relay-free three-node Kademlia discovery, networked `PING/FIND_NODE/STORE/FIND_VALUE`, composed `TruynNetworkNode`, real UDP STUN exchange, same-QUIC-port hole punching, explicit relay fallback and backpressure.
@@ -45,7 +46,7 @@ The repository regression suite treats the evidence files below as protected and
 
 ### Unaccepted / negative scale evidence
 
-- [`CLASS_D_100_ATTEMPT_2026-08-17.md`](CLASS_D_100_ATTEMPT_2026-08-17.md) — preserved first Class D 100-node launch attempt. No durable accepted run result was available, so this record is explicitly **not a PASS claim**; the 100-node productionization gate remains open until a fresh run satisfies the canonical evaluator and post-cleanup evidence gate.
+- [`CLASS_D_100_ATTEMPT_2026-08-17.md`](CLASS_D_100_ATTEMPT_2026-08-17.md) — preserved first Class D 100-node launch attempt. No durable accepted run result was available for that attempt, so the record remains explicitly **not a PASS claim**. It is retained as negative history and is superseded for the accepted D-100 status only by `CLASS_D_100_2026-08-22.md`.
 
 ### Methodology / planned parity
 
