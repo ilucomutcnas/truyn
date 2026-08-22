@@ -1,0 +1,236 @@
+name: D-1000 immutable preflight 369ee0f9
+
+on:
+  push:
+    branches:
+      - ci/d1000-preflight-369ee0f9
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  actions: read
+  issues: write
+  id-token: write
+
+env:
+  TARGET_SHA: 369ee0f9c57706aa4b95a328b556f626846e83a0
+  LOCATION: eastus2
+  PRIMARY_VM_SIZE: Standard_D4as_v5
+  FALLBACK_VM_SIZE: Standard_D4s_v5
+  HOST_COUNT: '20'
+  NODES_PER_HOST: '50'
+  NODE_COUNT: '1000'
+  REQUIRED_VCPUS: '80'
+
+jobs:
+  immutable-preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout exact immutable source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Verify exact clean source
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          actual="$(git rev-parse HEAD)"
+          test "$actual" = "$TARGET_SHA"
+          test -z "$(git status --porcelain)"
+          echo "testedCommit=$actual"
+
+      - name: Setup Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Full CI parity on exact source
+        env:
+          TRUYN_LOCAL_DEVELOPMENT: '1'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          npm install --ignore-scripts --no-audit --no-fund
+          npm test
+          git diff --check
+          test -z "$(git status --porcelain)"
+
+      - name: Verify D-1000 immutable contract
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          bash -n scripts/class-d-1000-final-acceptance.sh
+          bash -n benchmarks/scale/class-d-azure-1000-provision.sh
+          bash -n benchmarks/scale/class-d-azure-1000-campaign.sh
+          node --check benchmarks/scale/class-d.js
+          node --check benchmarks/scale/class-d-1000-evidence.js
+          grep -Fxq 'HOST_COUNT=20' benchmarks/scale/class-d-azure-1000-provision.sh
+          grep -Fxq 'NODES_PER_HOST=50' benchmarks/scale/class-d-azure-1000-provision.sh
+          grep -Fq 'NODE_COUNT=$((HOST_COUNT * NODES_PER_HOST))' benchmarks/scale/class-d-azure-1000-provision.sh
+          grep -Fq 'class-d-1000-evidence.json' scripts/class-d-1000-final-acceptance.sh
+          grep -Fq 'class-d-1000-evidence.js' scripts/class-d-1000-final-acceptance.sh
+          mkdir -p preflight
+          git ls-files -z | LC_ALL=C sort -z | xargs -0 sha256sum > preflight/source-digests.sha256
+          sha256sum preflight/source-digests.sha256 | awk '{print $1}' > preflight/source-digests.sha256.digest
+
+      - name: Require successful canonical CI for exact SHA
+        id: ci
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          payload="$(gh api --method GET "/repos/${GITHUB_REPOSITORY}/actions/runs?head_sha=${TARGET_SHA}&event=push&per_page=100")"
+          run_id="$(jq -r --arg sha "$TARGET_SHA" '[.workflow_runs[] | select(.name == "CI" and .head_sha == $sha and .status == "completed" and .conclusion == "success")] | sort_by(.run_number) | last | .id // empty' <<<"$payload")"
+          test -n "$run_id"
+          echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+          echo "$payload" | jq --argjson id "$run_id" '[.workflow_runs[] | select(.id == $id) | {id,run_number,status,conclusion,head_sha,html_url}] | first' > preflight/exact-ci.json
+
+      - name: Azure login for read-only capacity preflight
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Prepare-only Azure capacity gate
+        id: azure
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          az account set --subscription "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+          test "$(az group exists --name truyn -o tsv)" = "true"
+          for ns in Microsoft.Compute Microsoft.Network; do
+            test "$(az provider show --namespace "$ns" --query registrationState -o tsv --only-show-errors)" = "Registered"
+          done
+
+          az vm list-skus --location "$LOCATION" --resource-type virtualMachines --all -o json > preflight/skus.json
+          az vm list-usage --location "$LOCATION" -o json > preflight/usage.json
+
+          regional="$(jq -c '[.[] | select(((.name.value // "") | ascii_downcase) == "cores" or ((.name.localizedValue // "") | ascii_downcase | contains("total regional")))] | first // empty' preflight/usage.json)"
+          test -n "$regional"
+          regional_current="$(jq -r '.currentValue' <<<"$regional")"
+          regional_limit="$(jq -r '.limit' <<<"$regional")"
+          regional_available=$((regional_limit - regional_current))
+          test "$regional_available" -ge "$REQUIRED_VCPUS"
+
+          quota_available() {
+            local family="$1"
+            local row
+            row="$(jq -c --arg family "$(tr '[:upper:]' '[:lower:]' <<<"$family")" '[.[] | select(((.name.value // "") | ascii_downcase) == $family)] | first // empty' preflight/usage.json)"
+            if [[ -z "$row" ]]; then echo -1; return; fi
+            local cur lim
+            cur="$(jq -r '.currentValue' <<<"$row")"
+            lim="$(jq -r '.limit' <<<"$row")"
+            echo $((lim-cur))
+          }
+
+          sku_ok() {
+            local size="$1"
+            jq -e --arg size "$size" 'any(.[]; .name == $size and ((.restrictions // []) | length == 0))' preflight/skus.json >/dev/null
+          }
+
+          primary_family_available="$(quota_available standardDASv5Family)"
+          fallback_family_available="$(quota_available standardDSv5Family)"
+          selected=""
+          selected_family_available=-1
+          if sku_ok "$PRIMARY_VM_SIZE" && [[ "$primary_family_available" -ge "$REQUIRED_VCPUS" ]]; then
+            selected="$PRIMARY_VM_SIZE"
+            selected_family_available="$primary_family_available"
+          elif sku_ok "$FALLBACK_VM_SIZE" && [[ "$fallback_family_available" -ge "$REQUIRED_VCPUS" ]]; then
+            selected="$FALLBACK_VM_SIZE"
+            selected_family_available="$fallback_family_available"
+          fi
+          test -n "$selected"
+
+          jq -n \
+            --arg location "$LOCATION" \
+            --arg selectedVmSize "$selected" \
+            --argjson hostCount "$HOST_COUNT" \
+            --argjson nodesPerHost "$NODES_PER_HOST" \
+            --argjson nodeCount "$NODE_COUNT" \
+            --argjson requiredVcpus "$REQUIRED_VCPUS" \
+            --argjson regionalAvailable "$regional_available" \
+            --argjson selectedFamilyAvailable "$selected_family_available" \
+            '{location:$location,selectedVmSize:$selectedVmSize,hostCount:$hostCount,nodesPerHost:$nodesPerHost,nodeCount:$nodeCount,requiredVcpus:$requiredVcpus,regionalVcpusAvailable:$regionalAvailable,selectedFamilyVcpusAvailable:$selectedFamilyAvailable,resourceCreation:false,prepareOnly:true}' \
+            > preflight/azure-capacity-summary.json
+          echo "selected_vm_size=$selected" >> "$GITHUB_OUTPUT"
+          rm -f preflight/skus.json preflight/usage.json
+
+      - name: Build immutable preflight manifest
+        id: manifest
+        shell: bash
+        env:
+          EXACT_CI_RUN_ID: ${{ steps.ci.outputs.run_id }}
+          SELECTED_VM_SIZE: ${{ steps.azure.outputs.selected_vm_size }}
+        run: |
+          set -Eeuo pipefail
+          tree_digest="$(cat preflight/source-digests.sha256.digest)"
+          jq -n \
+            --arg schema 'truyn.class-d1000.immutable-preflight.v1' \
+            --arg testedCommit "$TARGET_SHA" \
+            --arg sourceDigest "$tree_digest" \
+            --arg exactCiRunId "$EXACT_CI_RUN_ID" \
+            --arg preflightRunId "$GITHUB_RUN_ID" \
+            --arg repository "$GITHUB_REPOSITORY" \
+            --arg location "$LOCATION" \
+            --arg vmSize "$SELECTED_VM_SIZE" \
+            --argjson hostCount "$HOST_COUNT" \
+            --argjson nodesPerHost "$NODES_PER_HOST" \
+            --argjson nodeCount "$NODE_COUNT" \
+            '{schema:$schema,testedCommit:$testedCommit,sourceDigest:$sourceDigest,exactCiRunId:$exactCiRunId,preflightRunId:$preflightRunId,repository:$repository,profile:"d1000",hostCount:$hostCount,nodesPerHost:$nodesPerHost,nodeCount:$nodeCount,location:$location,selectedVmSize:$vmSize,prepareOnly:true,resourceCreation:false,canonicalThresholdsModified:false}' \
+            > preflight/preflight-manifest.json
+          sha256sum preflight/preflight-manifest.json | awk '{print $1}' > preflight/preflight-manifest.sha256
+          echo "digest=$(cat preflight/preflight-manifest.sha256)" >> "$GITHUB_OUTPUT"
+
+      - name: Upload immutable preflight evidence
+        id: upload
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: d1000-immutable-preflight-369ee0f9-${{ github.run_id }}
+          path: preflight/
+          if-no-files-found: warn
+          retention-days: 90
+
+      - name: Publish preflight result
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          JOB_STATUS: ${{ job.status }}
+          MANIFEST_DIGEST: ${{ steps.manifest.outputs.digest }}
+          ARTIFACT_ID: ${{ steps.upload.outputs.artifact-id }}
+          ARTIFACT_DIGEST: ${{ steps.upload.outputs.artifact-digest }}
+          EXACT_CI_RUN_ID: ${{ steps.ci.outputs.run_id }}
+          SELECTED_VM_SIZE: ${{ steps.azure.outputs.selected_vm_size }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          if [[ "$JOB_STATUS" == success ]]; then
+            title="D-1000 immutable preflight PASS — 369ee0f9"
+            verdict="PASS"
+          else
+            title="D-1000 immutable preflight FAIL — 369ee0f9"
+            verdict="FAIL"
+          fi
+          body=$(cat <<EOF
+          verdict=${verdict}
+          testedCommit=${TARGET_SHA}
+          profile=d1000
+          topology=20 hosts x 50 nodes = 1000 real nodes
+          prepareOnly=true
+          resourceCreation=false
+          exactCiRunId=${EXACT_CI_RUN_ID}
+          preflightRunId=${GITHUB_RUN_ID}
+          selectedVmSize=${SELECTED_VM_SIZE}
+          manifestSha256=${MANIFEST_DIGEST}
+          artifactId=${ARTIFACT_ID}
+          artifactSha256=${ARTIFACT_DIGEST}
+          canonicalThresholdsModified=false
+          EOF
+          )
+          gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body "$body"
