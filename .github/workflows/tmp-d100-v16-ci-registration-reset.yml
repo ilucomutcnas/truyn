@@ -1,0 +1,50 @@
+name: tmp-d100-v16-ci-registration-reset
+
+on:
+  push:
+    branches:
+      - ci/d100-v16-main-security-green-observer-23360cbe
+    paths:
+      - '.github/workflows/tmp-d100-v16-ci-registration-reset.yml'
+
+permissions:
+  actions: write
+  checks: write
+  issues: write
+  contents: read
+
+jobs:
+  reset:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Reset CI registration and rerequest exact main suite
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WORKFLOW_ID: '335193474'
+          CHECK_SUITE_ID: '88253425149'
+          RUN_ID: '32558383377'
+          TARGET_SHA: '23360cbe86e725f79ef0c6772a51f70825b92aef'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          enable_ci() { gh api -X PUT "repos/${GITHUB_REPOSITORY}/actions/workflows/${WORKFLOW_ID}/enable" >/dev/null 2>&1 || true; }
+          trap enable_ci EXIT
+          before="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${WORKFLOW_ID}" --jq '.state')"
+          test "$before" = 'active'
+          gh api -X PUT "repos/${GITHUB_REPOSITORY}/actions/workflows/${WORKFLOW_ID}/disable" >/dev/null
+          disabled="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${WORKFLOW_ID}" --jq '.state')"
+          test "$disabled" = 'disabled_manually'
+          gh api -X PUT "repos/${GITHUB_REPOSITORY}/actions/workflows/${WORKFLOW_ID}/enable" >/dev/null
+          enabled="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${WORKFLOW_ID}" --jq '.state')"
+          test "$enabled" = 'active'
+          gh api -X POST "repos/${GITHUB_REPOSITORY}/check-suites/${CHECK_SUITE_ID}/rerequest" >/dev/null
+          sleep 12
+          run_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}")"
+          jobs_json="$(gh api -X GET "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}/jobs" -f per_page=100)"
+          state="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${WORKFLOW_ID}" --jq '.state')"
+          test "$state" = 'active'
+          run_summary="$(jq -c '{id,head_sha,head_branch,event,status,conclusion,run_attempt,run_started_at,updated_at}' <<<"$run_json")"
+          jobs_summary="$(jq -c '{total_count,jobs:[.jobs[]|{id,name,status,conclusion}]}' <<<"$jobs_json")"
+          body="target_sha=${TARGET_SHA}\nworkflow_before=${before}\nworkflow_disabled=${disabled}\nworkflow_after=${state}\nrun=${run_summary}\njobs=${jobs_summary}\nstage=ci_registration_reset_rerequest"
+          gh api "repos/${GITHUB_REPOSITORY}/issues" -f 'title=TRUYN D-100 V16 CI REGISTRATION RESET' -f "body=${body}" >/dev/null
