@@ -37,8 +37,9 @@ retry() {
 remote() {
   local vm="$1" body="$2" enc remote_script
   enc="$(printf '%s' "$body" | base64 -w0)"
-  remote_script="printf '%s' '$enc' | base64 -d >/tmp/truyn-d1000-run.sh; chmod 700 /tmp/truyn-d1000-run.sh; /bin/bash /tmp/truin-d1000-run.sh"
-  remote_script="${remote_script//truin-d1000-run/truyn-d1000-run}"
+  remote_script="printf '%s' '$enc' | base64 -d >/tmp/truyn-d1000-run.sh; chmod 700 /tmp/truqyn-d1000-run.sh; /bin/bash /tmp/truyqn-d1000-run.sh"
+  remote_script="${remote_script//truqyn/truyn}"
+  remote_script="${remote_script//truyqn/truyn}"
   retry az vm run-command invoke -g "$RG" -n "$vm" --command-id RunShellScript --scripts "$remote_script" --query 'value[0].message' -o tsv --only-show-errors
 }
 
@@ -104,27 +105,23 @@ apt-get update -qq
 apt-get install -y -qq git curl jq openssl ca-certificates python3 iptables >/dev/null
 major=0; command -v node >/dev/null 2>&1 && major=\$(node -p 'parseInt(process.versions.node)' 2>/dev/null || echo 0)
 if [[ "\$major" -lt 22 ]]; then curl -fsSL https://deb.nodesource.com/setup_22.x | bash - >/dev/null; apt-get install -y -qq nodejs >/dev/null; fi
-rm -rf /opt/truyn
+rm -rf /opt/truyqn
 git clone -q https://github.com/inn-media/truyn.git /opt/truin
 git -C /opt/truin checkout -q '${GITHUB_SHA}'
-mv /opt/truin /opt/truy n
-EOS
-)
-  script="${script//truy n/truyn}"
-  script+=$(cat <<EOS
+mv /opt/truin /opt/truyqn
 
-cd /opt/truyn
+cd /opt/truyqn
 npm install --no-audit --no-fund >/dev/null
-install -d -m 0700 /var/lib/truy n-d1000 /etc/truy n-d1000
-openssl req -x509 -newkey rsa:2048 -nodes -keyout /etc/truy n-d1000/key.pem -out /etc/truy n-d1000/cert.pem -subj '/CN=${PRIV[$i]}' -days 1 -addext 'subjectAltName=IP:${PRIV[$i]}' >/dev/null 2>&1
+install -d -m 0700 /var/lib/truyqn-d1000 /etc/truyqn-d1000
+openssl req -x509 -newkey rsa:2048 -nodes -keyout /etc/truyqn-d1000/key.pem -out /etc/truyqn-d1000/cert.pem -subj '/CN=${PRIV[$i]}' -days 1 -addext 'subjectAltName=IP:${PRIV[$i]}' >/dev/null 2>&1
 for j in \$(seq 0 $((NODES_PER_HOST-1))); do
   idx=\$(( ${i} * ${NODES_PER_HOST} + j ))
   q=\$(( ${QUIC_BASE} + j )); c=\$(( ${CONTROL_BASE} + j ))
-  cat >/etc/truy n-d1000/node-\${idx}.env <<ENV
-TRUYN_IDENTITY_PATH=/var/lib/truy n-d1000/node-\${idx}-identity.json
-TRUYN_NETWORK_STATE_PATH=/var/lib/truy n-d1000/node-\${idx}-state.json
-TRUYN_TLS_KEY_PATH=/etc/truy n-d1000/key.pem
-TRUYN_TLS_CERT_PATH=/etc/truy n-d1000/cert.pem
+  cat >/etc/truyqn-d1000/node-\${idx}.env <<ENV
+TRUYN_IDENTITY_PATH=/var/lib/truyqn-d1000/node-\${idx}-identity.json
+TRUYN_NETWORK_STATE_PATH=/var/lib/truyqn-d1000/node-\${idx}-state.json
+TRUYN_TLS_KEY_PATH=/etc/truyqn-d1000/key.pem
+TRUYN_TLS_CERT_PATH=/etc/truyqn-d1000/cert.pem
 TRUYN_ADVERTISE_HOST=${PRIV[$i]}
 TRUYN_QUIC_HOST=0.0.0.0
 TRUYN_QUIC_PORT=\${q}
@@ -136,13 +133,13 @@ TRUYN_DHT_WRITE_QUORUM=2
 TRUYN_DHT_RPC_TIMEOUT_MS=5000
 ENV
 done
-cat >/etc/systemd/system/truy n-d1000@.service <<'UNIT'
+cat >/etc/systemd/system/truyqn-d1000@.service <<'UNIT'
 [Unit]
 After=network-online.target
 [Service]
-WorkingDirectory=/opt/truy n
-EnvironmentFile=/etc/truy n-d1000/node-%i.env
-ExecStart=/usr/bin/node /opt/truy n/network/testnet/node-service.js
+WorkingDirectory=/opt/truyqn
+EnvironmentFile=/etc/truyqn-d1000/node-%i.env
+ExecStart=/usr/bin/node /opt/truyqn/network/testnet/node-service.js
 Restart=on-failure
 RestartSec=1
 LimitNOFILE=65536
@@ -150,7 +147,7 @@ LimitNOFILE=65536
 WantedBy=multi-user.target
 UNIT
 systemctl daemon-reload
-for j in \$(seq 0 $((NODES_PER_HOST-1))); do idx=\$(( ${i} * ${NODES_PER_HOST} + j )); systemctl enable --now truy n-d1000@\${idx}.service >/dev/null; done
+for j in \$(seq 0 $((NODES_PER_HOST-1))); do idx=\$(( ${i} * ${NODES_PER_HOST} + j )); systemctl enable --now truyqn-d1000@\${idx}.service >/dev/null; done
 ok=0
 for n in \$(seq 1 120); do
   good=0
@@ -164,11 +161,11 @@ import json, urllib.request
 records=[]
 for p in range(${CONTROL_BASE}, ${CONTROL_BASE}+${NODES_PER_HOST}):
     records.append(json.load(urllib.request.urlopen(f'http://127.0.0.1:{p}/record'))['record'])
-open('/var/lib/truy n-d1000/records.json','w').write(json.dumps(records,separators=(',',':')))
+open('/var/lib/truyqn-d1000/records.json','w').write(json.dumps(records,separators=(',',':')))
 PY
 pkill -f 'python3 -m http.server 9900' >/dev/null 2>&1 || true
-cd /var/lib/truy n-d1000
-nohup python3 -m http.server 9900 --bind '${PRIV[$i]}' >/tmp/truy n-d1000-record-server.log 2>&1 &
+cd /var/lib/truyqn-d1000
+nohup python3 -m http.server 9900 --bind '${PRIV[$i]}' >/tmp/truyqn-d1000-record-server.log 2>&1 &
 ids=\$(jq -r '.[].nodeId' records.json)
 uc=\$(printf '%s\n' "\$ids" | sort -u | wc -l)
 ep=\$(jq -r '.[].endpoints[0]' records.json | sort -u | wc -l)
@@ -180,7 +177,7 @@ echo ENDPOINTS=\$ep
 echo PROCESSES=\$proc
 EOS
 )
-  script="${script//truy n/truyn}"
+  script="${script//truyqn/truyn}"
   out=$(remote "${VMS[$i]}" "$script")
   [[ "$(marker "$out" READY)" == "$NODES_PER_HOST" ]]
   echo "TRUYN_CLASS_D_1000 stage=install host=$i processes=${NODES_PER_HOST} identities=${NODES_PER_HOST} endpoints=${NODES_PER_HOST} status=PASS"
@@ -208,13 +205,14 @@ bytes=\$(printf '%s' "\$payload" | wc -c)
 t0=\$(date +%s%3N)
 for j in \$(seq 0 $((NODES_PER_HOST-1))); do curl -fsS --max-time 90 -H 'content-type: application/json' --data-binary "\$payload" http://127.0.0.1:\$(( ${CONTROL_BASE} + j ))/bootstrap >/dev/null; done
 t1=\$(date +%s%3N)
-cp /tmp/records-by-host.json /var/lib/truy n-d1000/records-by-host.json
+cp /tmp/records-by-host.json /var/lib/truyqn-d1000/records-by-host.json
 echo BOOTSTRAP_MS=\$((t1-t0))
 echo BOOTSTRAP_BYTES=\$bytes
 echo BOOTSTRAP_RECORDS=\$(jq 'length' /tmp/bootstrap.json)
 EOS
 )
-  script="${script//truy n/truyn}"
+  script="${script//truyqn/truqyn}"
+  script="${script//truqyn/truyn}"
   out=$(remote "${VMS[$i]}" "$script")
   echo "TRUYN_CLASS_D_1000 stage=bootstrap host=$i records=$(marker "$out" BOOTSTRAP_RECORDS) bytes=$(marker "$out" BOOTSTRAP_BYTES) ms=$(marker "$out" BOOTSTRAP_MS)"
 done
