@@ -1,0 +1,99 @@
+name: tmp-d100-v16-main-security-green-observer
+
+on:
+  push:
+    branches:
+      - ci/d100-v16-main-security-green-observer-23360cbe
+    paths:
+      - '.github/workflows/tmp-d100-v16-main-security-green-observer.yml'
+
+permissions:
+  contents: read
+  actions: write
+  issues: write
+
+env:
+  TARGET_SHA: 23360cbe86e725f79ef0c6772a51f70825b92aef
+
+jobs:
+  verify-main-ci:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Find exact main push CI and request fresh rerun
+        id: rerun
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          runs_json="$(gh api -X GET "repos/${GITHUB_REPOSITORY}/actions/runs" \
+            -f head_sha="$TARGET_SHA" \
+            -f branch='main' \
+            -f event='push' \
+            -f per_page=100)"
+          run_id="$(jq -r --arg sha "$TARGET_SHA" '[.workflow_runs[] | select(.name == "CI" and .event == "push" and .head_branch == "main" and .head_sha == $sha)] | sort_by(.created_at) | last | .id // empty' <<<"$runs_json")"
+          if [[ -z "$run_id" ]]; then
+            echo "No exact main push CI run found for $TARGET_SHA" >&2
+            exit 40
+          fi
+          before_attempt="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}" --jq '.run_attempt')"
+          before_conclusion="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}" --jq '.conclusion')"
+          printf 'found_run_id=%s before_attempt=%s before_conclusion=%s\n' "$run_id" "$before_attempt" "$before_conclusion"
+          test "$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}" --jq '.head_sha')" = "$TARGET_SHA"
+          test "$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}" --jq '.head_branch')" = 'main'
+          test "$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}" --jq '.event')" = 'push'
+          test "$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}" --jq '.name')" = 'CI'
+          gh api -X POST "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/rerun" >/dev/null
+          echo "run_id=$run_id" >>"$GITHUB_OUTPUT"
+          echo "before_attempt=$before_attempt" >>"$GITHUB_OUTPUT"
+
+      - name: Wait for fresh exact-main CI attempt
+        id: result
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ steps.rerun.outputs.run_id }}
+          BEFORE_ATTEMPT: ${{ steps.rerun.outputs.before_attempt }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          target_attempt=$((BEFORE_ATTEMPT + 1))
+          for _ in $(seq 1 90); do
+            run_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}")"
+            attempt="$(jq -r '.run_attempt' <<<"$run_json")"
+            status="$(jq -r '.status' <<<"$run_json")"
+            conclusion="$(jq -r '.conclusion // ""' <<<"$run_json")"
+            if [[ "$attempt" -ge "$target_attempt" && "$status" == 'completed' ]]; then
+              test "$(jq -r '.head_sha' <<<"$run_json")" = "$TARGET_SHA"
+              test "$(jq -r '.head_branch' <<<"$run_json")" = 'main'
+              test "$(jq -r '.event' <<<"$run_json")" = 'push'
+              test "$(jq -r '.name' <<<"$run_json")" = 'CI'
+              test "$conclusion" = 'success'
+              jobs_json="$(gh api -X GET "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}/jobs" -f filter=latest -f per_page=100)"
+              job_id="$(jq -r '.jobs[] | select(.name == "test") | .id' <<<"$jobs_json" | head -n1)"
+              job_conclusion="$(jq -r --argjson id "$job_id" '.jobs[] | select(.id == $id) | .conclusion' <<<"$jobs_json")"
+              test -n "$job_id"
+              test "$job_conclusion" = 'success'
+              echo "attempt=$attempt" >>"$GITHUB_OUTPUT"
+              echo "job_id=$job_id" >>"$GITHUB_OUTPUT"
+              echo "conclusion=$conclusion" >>"$GITHUB_OUTPUT"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "Fresh CI rerun did not complete within bounded observer window" >&2
+          exit 41
+
+      - name: Record immutable security-green marker
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ steps.rerun.outputs.run_id }}
+          ATTEMPT: ${{ steps.result.outputs.attempt }}
+          JOB_ID: ${{ steps.result.outputs.job_id }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          body="tested_sha=${TARGET_SHA}\nbranch=main\nworkflow=CI\nevent=push\nrun_id=${RUN_ID}\nrun_attempt=${ATTEMPT}\njob_id=${JOB_ID}\nconclusion=success\nstage=fresh_main_security_green"
+          gh api "repos/${GITHUB_REPOSITORY}/issues" \
+            -f 'title=TRUYN D-100 V16 FRESH MAIN SECURITY-GREEN' \
+            -f "body=${body}" >/dev/null
