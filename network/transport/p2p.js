@@ -40,6 +40,16 @@ export class DirectFirstP2P {
     this.queue = new ExplicitBackpressureQueue({ maxInFlight, maxQueued });
   }
 
+  #watchConnection(peerNodeId, client) {
+    const closed = () => {
+      const current = this.connections.get(peerNodeId);
+      if (current?.client === client) this.connections.delete(peerNodeId);
+    };
+    if (client?.closedP && typeof client.closedP.then === 'function') {
+      void client.closedP.then(closed, closed);
+    }
+  }
+
   async #discardConnection(peerNodeId) {
     const existing = this.connections.get(peerNodeId);
     this.connections.delete(peerNodeId);
@@ -56,6 +66,7 @@ export class DirectFirstP2P {
     if (existing) await this.#discardConnection(peerRecord.nodeId);
     const client = await this.quic.connect(selected.endpoint);
     this.connections.set(peerRecord.nodeId, { client, binding });
+    this.#watchConnection(peerRecord.nodeId, client);
     return client;
   }
 
