@@ -18,6 +18,7 @@ Human-facing documentation for TRUYN architecture, factual implementation status
 - [Authorization Model](architecture/AUTHORIZATION_MODEL.md) — implemented fail-closed provider authorization baseline and remaining control-plane layers.
 - [Relay Security](architecture/RELAY_SECURITY.md) — public relay, owner control plane, provider backchannel, origin guard, edge proxy and legacy-route rules.
 - [Billing Boundary](architecture/BILLING_BOUNDARY.md) — actual BYOK/owner-funded/sponsored/prepaid/subscription safety semantics.
+- [Settlement Adapter Architecture](architecture/SETTLEMENT_ADAPTERS.md) — settlement-neutral core plus deferred x402/AP2 extension path; architecture only, implementation not started.
 - [BYOK Architecture](architecture/BYOK_ARCHITECTURE.md) — Bring Your Own Intelligence / Provider.
 - [Threat Model](architecture/THREAT_MODEL.md) — provider/relay abuse scenarios and required negative security matrix.
 - [Public / Private Information Boundary](architecture/PUBLIC_PRIVATE_BOUNDARY.md) — public repository versus private operations.
@@ -37,6 +38,14 @@ Human-facing documentation for TRUYN architecture, factual implementation status
 
 - [Multi-Cloud Provider Architecture](architecture/MULTI_CLOUD_PROVIDER_ARCHITECTURE.md) — Google Cloud / Microsoft Azure capability architecture without private deployment identifiers.
 - [Public Edge Domains](architecture/PUBLIC_EDGE_DOMAINS.md) — intentionally public hostname roles and public/control-plane separation.
+
+## Economics and settlement
+
+- [Capability Economy](concepts/CAPABILITY_ECONOMY.md) — price-aware capability routing without a mandatory payment system.
+- [TRUYN/1 Economics](../spec/protocol/v1/economics.md) — protocol-level settlement neutrality.
+- [Settlement Adapter Architecture](architecture/SETTLEMENT_ADAPTERS.md) — planned x402 and AP2 integration boundary.
+
+TRUYN/1 does not prescribe currency, billing provider, blockchain, smart contract or settlement rail. x402/AP2 are optional future adapters, not TRUYN/1 wire dependencies.
 
 ## Operations
 
