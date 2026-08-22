@@ -1,0 +1,38 @@
+name: tmp-d100-v16-actions-policy-write-scope
+
+on:
+  push:
+    branches: [ci/d100-v16-actions-policy-probe-2]
+    paths:
+      - '.github/workflows/tmp-d100-v16-actions-policy-write-scope.yml'
+
+permissions:
+  contents: read
+  actions: write
+  issues: write
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Read Actions policies with actions write scope
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set +e
+          repo_list="$(gh api "repos/${REPO}/actions/policies" 2>&1)"; repo_list_rc=$?
+          repo_get="$(gh api "repos/${REPO}/actions/policies/rulesets" 2>&1)"; repo_get_rc=$?
+          org_list="$(gh api 'orgs/inn-media/actions/policies' 2>&1)"; org_list_rc=$?
+          body=$(cat <<EOF
+          repo_list_rc=${repo_list_rc}
+          repo_list=${repo_list}
+          repo_get_rc=${repo_get_rc}
+          repo_get=${repo_get}
+          org_list_rc=${org_list_rc}
+          org_list=${org_list}
+          stage=actions_policy_write_scope_probe
+          EOF
+          )
+          gh api "repos/${REPO}/issues" -f 'title=TRUYN D-100 V16 ACTIONS POLICY WRITE-SCOPE PROBE' -f "body=${body}" >/dev/null
