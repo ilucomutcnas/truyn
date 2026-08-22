@@ -1,0 +1,41 @@
+name: tmp-d100-v16-actions-policy-endpoints
+
+on:
+  push:
+    branches: [ci/d100-v16-actions-policy-probe-2]
+    paths:
+      - '.github/workflows/tmp-d100-v16-actions-policy-endpoints.yml'
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Probe preview endpoint candidates read-only
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set +e
+          endpoints=(
+            "repos/${REPO}/actions/policies"
+            "repos/${REPO}/actions/policies/rulesets"
+            "repositories/1334540181/actions/policies"
+            "repositories/1334540181/actions/policies/rulesets"
+            "orgs/inn-media/actions/policies"
+            "orgs/inn-media/actions/policies/rulesets"
+            "organizations/313293342/actions/policies"
+            "organizations/313293342/actions/policies/rulesets"
+          )
+          out=''
+          for ep in "${endpoints[@]}"; do
+            resp="$(gh api "$ep" 2>&1)"
+            rc=$?
+            compact="$(printf '%s' "$resp" | tr '\n' ' ' | head -c 1200)"
+            out+="endpoint=${ep} rc=${rc} response=${compact}"$'\n'
+          done
+          gh api "repos/${REPO}/issues" -f 'title=TRUYN D-100 V16 ACTIONS POLICY ENDPOINT PROBE' -f "body=${out}" >/dev/null
