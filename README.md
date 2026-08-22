@@ -8,7 +8,7 @@ TRUYN is an open-source project for **agent-to-agent communication, decentralize
 
 No new cables. No new hardware Internet. A new network contract.
 
-[Manifesto](MANIFESTO.md) · [Whitepaper](WHITEPAPER.md) · [Architecture](STRUCTURE.md) · [Security](SECURITY.md) · [Provider ownership](docs/architecture/PROVIDER_OWNERSHIP.md) · [BYOK](docs/getting-started/BYOK.md) · [Protocol](spec/protocol/v1/README.md) · [Roadmap](ROADMAP.md) · [Apache-2.0 License](LICENSE)
+[Manifesto](MANIFESTO.md) · [Whitepaper](WHITEPAPER.md) · [Architecture](STRUCTURE.md) · [A2A/MCP](docs/architecture/A2A_MCP_INTEROPERABILITY.md) · [Security](SECURITY.md) · [Provider ownership](docs/architecture/PROVIDER_OWNERSHIP.md) · [BYOK](docs/getting-started/BYOK.md) · [Protocol](spec/protocol/v1/README.md) · [Roadmap](ROADMAP.md) · [Apache-2.0 License](LICENSE)
 
 ---
 
@@ -86,6 +86,7 @@ Read:
 - [Relay Security](docs/architecture/RELAY_SECURITY.md)
 - [Billing Boundary](docs/architecture/BILLING_BOUNDARY.md)
 - [BYOK Architecture](docs/architecture/BYOK_ARCHITECTURE.md)
+- [A2A / MCP Interoperability](docs/architecture/A2A_MCP_INTEROPERABILITY.md)
 - [Threat Model](docs/architecture/THREAT_MODEL.md)
 - [Public / Private Information Boundary](docs/architecture/PUBLIC_PRIVATE_BOUNDARY.md)
 
@@ -154,6 +155,8 @@ TRUYN/1 separates **conceptual objects**, **wire primitives**, and **composed ve
 Provider ownership/visibility/billing policy is an authorization layer around capability execution. It does not make requester-supplied ownership claims authoritative and does not require adding credentials to protocol messages.
 
 `CHALLENGE`, `VERIFY`, and `DISPUTE` are **TRUYN/1 behaviors**, not additional top-level wire primitives. They are composed from `NEED`, `CLAIM`, `ATTEST`, evidence references and `TRUST_RECEIPT`. This keeps the wire vocabulary small while retaining active verification.
+
+A2A Agent Cards/Tasks/Artifacts and MCP Tools/Resources are also external adapter objects, not new TRUYN/1 wire primitives.
 
 ---
 
@@ -244,12 +247,38 @@ Public reachability in `testnet` or `mainnet` does not grant access to private p
 
 ## Any agent should be able to join
 
-**TRUYN is vendor-neutral by design.** Any system able to expose or consume an MCP adapter, SDK, local/remote API, gateway or native TRUYN client should be able to participate.
+**TRUYN is vendor-neutral by design.** Any system able to expose or consume an A2A/MCP adapter, SDK, local/remote API, gateway or native TRUYN client should be able to participate.
+
+A2A and MCP play different edge roles:
+
+```text
+A2A  → agent discovery + task/artifact interoperability
+MCP  → model/tool/resource interoperability
+TRUYN → identity + capability routing + authorization + provenance + trust across the network
+```
+
+They are complementary, not replacements for TRUYN.
+
+### Current factual bridge status
+
+| Interoperability surface | Current state |
+|---|---|
+| TRUYN as MCP server (stdio / loopback HTTP) | **Implemented bounded reference path** |
+| Configured remote MCP HTTP tool as TRUYN provider | **Implemented bounded reference path** |
+| General MCP discovery/import | **Not implemented yet** |
+| TRUYN as A2A Agent Card/task server | **Defined, not implemented** |
+| Remote A2A agent as TRUYN provider | **Defined, not implemented** |
+| A2A→TRUYN→MCP round trip | **Not implemented / not proven** |
+| MCP→TRUYN→A2A round trip | **Not implemented / not proven** |
+
+The roadmap now treats this as an explicit v0.5 **A2A / MCP Interoperability Bridge Gate** rather than a vague adapter aspiration.
 
 Target ecosystems include, but are not limited to:
 
 | Ecosystem | Intended interoperability surface |
 |---|---|
+| **A2A** | Agent Card discovery, Messages, Tasks, Artifacts and asynchronous agent interaction through adapters |
+| **MCP** | TRUYN tools for MCP clients; selected MCP tools/resources imported through adapters |
 | **OpenAI** | ChatGPT, Codex, API/agent systems |
 | **Anthropic** | Claude, Claude Code, Anthropic-based agents |
 | **Google** | Gemini, Gemini CLI/Code Assist, Vertex AI agents |
@@ -266,7 +295,9 @@ Target ecosystems include, but are not limited to:
 
 The names above describe intended interoperability, not endorsement, partnership or a claim that every adapter is already implemented.
 
-> **MCP can connect an agent to TRUYN. TRUYN connects intelligence to intelligence.**
+> **A2A can bring agent task semantics to TRUYN. MCP can bring tool semantics to TRUYN. TRUYN connects intelligence to intelligence.**
+
+See [A2A / MCP Interoperability Architecture](docs/architecture/A2A_MCP_INTEROPERABILITY.md) and [Compatibility Matrix](docs/compatibility/A2A_MCP_COMPATIBILITY.md).
 
 ---
 
@@ -304,11 +335,11 @@ A future capability market is an explicit entitlement system. It does not weaken
 
 TRUYN is an **experimental architecture and implementation project**. The repository contains a working MVP relay/node/adapter path, protocol drafts, provider integrations, security gates, local demos and reproducible tests.
 
-The current reference implementation demonstrates signed identity, capability discovery, authorization-aware routing, signed results, private provider requester allowlists, provider-host access control, fail-closed billing modes, explicit public-network configuration gates, and a first official verified BYOK CLI flow.
+The current reference implementation demonstrates signed identity, capability discovery, authorization-aware routing, signed results, private provider requester allowlists, provider-host access control, fail-closed billing modes, explicit public-network configuration gates, a first official verified BYOK CLI flow and bounded MCP interoperability paths.
 
-This does **not** mean the entire future security/control plane is finished. Rich account/tenant ownership, durable distributed quota/accounting, prepaid/subscription entitlement resolution, OS credential-store integration, production origin/perimeter hardening and the future stable mainnet remain additional work.
+This does **not** mean the entire future security/control/interoperability plane is finished. A2A support, generalized current MCP interoperability, bidirectional A2A↔TRUYN↔MCP proof, rich account/tenant ownership, durable distributed quota/accounting, prepaid/subscription entitlement resolution, OS credential-store integration, production origin/perimeter hardening and the future stable mainnet remain additional work.
 
-No document or public endpoint should be interpreted as permission to consume TRUYN-operated provider accounts.
+No document or public A2A/MCP endpoint should be interpreted as permission to consume TRUYN-operated provider accounts.
 
 ---
 
@@ -316,7 +347,7 @@ No document or public endpoint should be interpreted as permission to consume TR
 
 **Read it. Challenge it. Fork it. Implement it. Break it. Improve it.**
 
-Useful contributions include protocol design, networking implementation, trust algorithms, adversarial testing, cryptography, discovery/NAT traversal, agent adapters, provider authorization, BYOK UX, compute sandboxing, SDKs, benchmarks, simulations, documentation and independent academic critique.
+Useful contributions include protocol design, networking implementation, trust algorithms, adversarial testing, cryptography, discovery/NAT traversal, A2A/MCP bridges, agent adapters, provider authorization, BYOK UX, compute sandboxing, SDKs, benchmarks, simulations, documentation and independent academic critique.
 
 TRUYN is licensed under the **Apache License 2.0 (`Apache-2.0`)**. See [`LICENSE`](LICENSE).
 
@@ -327,6 +358,8 @@ TRUYN is licensed under the **Apache License 2.0 (`Apache-2.0`)**. See [`LICENSE
 - [Manifesto](MANIFESTO.md) — why TRUYN should exist.
 - [Whitepaper](WHITEPAPER.md) — academic rationale, formulas, threat model and research basis.
 - [Architecture Contract](docs/architecture/ARCHITECTURE_CONTRACT.md) — canonical mapping of concepts to implementation owners.
+- [A2A / MCP Interoperability](docs/architecture/A2A_MCP_INTEROPERABILITY.md) — external protocol bridge architecture and implementation gate.
+- [A2A / MCP Compatibility](docs/compatibility/A2A_MCP_COMPATIBILITY.md) — factual current support/version matrix.
 - [Provider Ownership](docs/architecture/PROVIDER_OWNERSHIP.md) — who owns provider capacity and who may use it.
 - [Authorization Model](docs/architecture/AUTHORIZATION_MODEL.md) — fail-closed server-side provider authorization.
 - [Relay Security](docs/architecture/RELAY_SECURITY.md) — public relay vs private provider/control-plane boundaries.
