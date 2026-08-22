@@ -1,0 +1,50 @@
+name: tmp-d100-v16-main-run-log-probe
+
+on:
+  push:
+    branches:
+      - ci/d100-v16-main-security-green-observer-23360cbe
+    paths:
+      - '.github/workflows/tmp-d100-v16-main-run-log-probe.yml'
+
+permissions:
+  actions: read
+  issues: write
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Download and inspect exact main run logs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: '32558383377'
+        shell: bash
+        run: |
+          set +e
+          rm -rf /tmp/runlogs /tmp/runlogs.zip /tmp/result.txt
+          mkdir -p /tmp/runlogs
+          gh api -H 'Accept: application/vnd.github+json' "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}/logs" > /tmp/runlogs.zip 2>/tmp/api.err
+          rc=$?
+          size=0
+          [[ -f /tmp/runlogs.zip ]] && size="$(wc -c </tmp/runlogs.zip)"
+          printf 'api_rc=%s\nzip_bytes=%s\n' "$rc" "$size" >/tmp/result.txt
+          if [[ "$rc" -eq 0 && "$size" -gt 0 ]]; then
+            unzip -l /tmp/runlogs.zip >>/tmp/result.txt 2>&1
+            unzip -q /tmp/runlogs.zip -d /tmp/runlogs >>/tmp/result.txt 2>&1
+            find /tmp/runlogs -type f -maxdepth 4 -print >>/tmp/result.txt
+            for f in $(find /tmp/runlogs -type f -maxdepth 4 | head -n 20); do
+              printf '\n--- %s ---\n' "$f" >>/tmp/result.txt
+              head -c 8000 "$f" >>/tmp/result.txt
+              printf '\n' >>/tmp/result.txt
+            done
+          else
+            printf 'api_stderr=' >>/tmp/result.txt
+            tr '\n' ' ' </tmp/api.err | head -c 3000 >>/tmp/result.txt
+            printf '\n' >>/tmp/result.txt
+          fi
+          body="$(head -c 30000 /tmp/result.txt)\nstage=main_ci_zero_job_log_probe"
+          gh api "repos/${GITHUB_REPOSITORY}/issues" -f 'title=TRUYN D-100 V16 MAIN CI RUN LOG PROBE' -f "body=${body}" >/dev/null
+          exit 0
