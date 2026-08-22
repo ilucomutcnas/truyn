@@ -27,6 +27,16 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
+      - name: Publish run marker
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          gh issue create --repo "$GITHUB_REPOSITORY" \
+            --title "D-1000 immutable preflight RUNNING — 369ee0f9" \
+            --body "testedCommit=${TARGET_SHA}\npreflightRunId=${GITHUB_RUN_ID}\norchestrationCommit=${GITHUB_SHA}\nprepareOnly=true\nresourceCreation=false"
+
       - name: Checkout exact immutable source
         uses: actions/checkout@v4
         with:
