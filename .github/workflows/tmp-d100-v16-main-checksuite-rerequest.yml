@@ -1,0 +1,43 @@
+name: tmp-d100-v16-main-checksuite-rerequest
+
+on:
+  push:
+    branches: [ci/d100-v16-actions-policy-probe-2]
+    paths:
+      - '.github/workflows/tmp-d100-v16-main-checksuite-rerequest.yml'
+
+permissions:
+  actions: write
+  checks: write
+  contents: read
+  issues: write
+
+jobs:
+  rerequest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Rerequest exact-main CI check suite after actor allow-list repair
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          CHECK_SUITE_ID: '88253425149'
+          RUN_ID: '32558383377'
+        shell: bash
+        run: |
+          set +e
+          before="$(gh api "repos/${REPO}/actions/runs/${RUN_ID}" --jq '[.status,.conclusion,.run_attempt,.head_branch,.head_sha,.event] | @tsv' 2>&1)"
+          rr="$(gh api -X POST "repos/${REPO}/check-suites/${CHECK_SUITE_ID}/rerequest" 2>&1)"; rr_rc=$?
+          sleep 5
+          after="$(gh api "repos/${REPO}/actions/runs/${RUN_ID}" --jq '[.status,.conclusion,.run_attempt,.head_branch,.head_sha,.event] | @tsv' 2>&1)"
+          jobs="$(gh api "repos/${REPO}/actions/runs/${RUN_ID}/jobs" --jq '{total_count:.total_count,jobs:[.jobs[]|{id,name,status,conclusion}]}' 2>&1)"
+          body=$(cat <<EOF
+          before=${before}
+          rerequest_rc=${rr_rc}
+          rerequest=${rr}
+          after=${after}
+          jobs=${jobs}
+          stage=main_checksuite_rerequest_after_policy
+          EOF
+          )
+          gh api "repos/${REPO}/issues" -f 'title=TRUYN D-100 V16 MAIN CHECKSUITE REREQUEST' -f "body=${body}" >/dev/null
