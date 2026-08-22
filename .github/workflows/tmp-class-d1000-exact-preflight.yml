@@ -3,7 +3,7 @@ name: TMP Class D-1000 exact immutable preflight
 on:
   push:
     branches:
-      - ops/d1000-369ee0f9-exact-preflight
+      - ops/d1000-d4d1f699-exact-preflight
 
 permissions:
   contents: read
@@ -11,7 +11,9 @@ permissions:
   issues: write
 
 env:
-  TARGET_SHA: 369ee0f9c57706aa4b95a328b556f626846e83a0
+  TARGET_SHA: d4d1f69908442ba14ff2c1f3f5f57904c33edac4
+  TARGET_PARENT: 369ee0f9c57706aa4b95a328b556f626846e83a0
+  SECURITY_GREEN_RUN: '32590457214'
   TARGET_RG: truyn
   TARGET_LOCATION: eastus2
 
@@ -20,7 +22,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - name: Checkout exact target source
+      - name: Checkout exact migrated source
         uses: actions/checkout@v4
         with:
           ref: ${{ env.TARGET_SHA }}
@@ -31,7 +33,7 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Full canonical CI on exact target
+      - name: Full canonical CI on exact source
         id: full_ci
         continue-on-error: true
         env:
@@ -42,56 +44,76 @@ jobs:
           {
             echo "target_sha=${TARGET_SHA}"
             echo "checked_out_sha=$(git rev-parse HEAD)"
+            echo "target_parent=$(git show -s --format=%P HEAD)"
             test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+            test "$(git show -s --format=%P HEAD)" = "$TARGET_PARENT"
             npm install --ignore-scripts --no-audit --no-fund
             npm test
             git diff --check
           } 2>&1 | tee full-ci.log
 
-      - name: Require canonical CI PASS
-        if: steps.full_ci.outcome != 'success'
+      - name: Prepare-only hardened D-1000 harness
+        id: prepare
+        if: steps.full_ci.outcome == 'success'
+        continue-on-error: true
+        env:
+          TRUYN_CLASS_D1000_PREPARE_ONLY: '1'
         shell: bash
-        run: exit 1
+        run: |
+          set -Eeuo pipefail
+          exec > >(tee preflight.log) 2>&1
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          test "$(git show -s --format=%P HEAD)" = "$TARGET_PARENT"
+          bash scripts/class-d-1000-final-acceptance.sh | tee prepared-harness.log
+          grep -Fq 'TRUYN_CLASS_D1000_PREPARED_HARNESS=PASS safetyContract=v2 remoteDht=target-side-quic paths=canonical' prepared-harness.log
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { CLASS_D_1000_THRESHOLDS as t } from './benchmarks/scale/class-d.js';
+          assert.deepEqual(t, {
+            nodeCount: 1000,
+            minimumHostCount: 20,
+            baselineRoutingSuccess: 0.99,
+            healedRoutingSuccess: 0.99,
+            convergenceP95Ms: 180000,
+            recoveryP95Ms: 180000,
+            acknowledgedWriteLossMax: 0,
+            invalidSignedStateAcceptedMax: 0,
+            staleRevokedReceiptAcceptedMax: 0,
+            unauthorizedProviderExecutionMax: 0,
+            remainingResourcesMax: 0
+          });
+          NODE
+          grep -qx 'HOST_COUNT=20' benchmarks/scale/class-d-azure-1000-provision.sh
+          grep -qx 'NODES_PER_HOST=50' benchmarks/scale/class-d-azure-1000-provision.sh
+          echo 'prepare_only=true'
+          echo 'resource_writes=0'
 
-      - name: Azure login
+      - name: Azure login for read-only capacity preflight
+        id: azure_login
+        if: steps.full_ci.outcome == 'success' && steps.prepare.outcome == 'success'
+        continue-on-error: true
         uses: azure/login@v2
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Prepare-only immutable Azure preflight
-        id: prepare
+      - name: Read-only Azure capacity and clean-prefix gate
+        id: capacity
+        if: steps.azure_login.outcome == 'success'
+        continue-on-error: true
         shell: bash
         run: |
           set -Eeuo pipefail
-          exec > >(tee preflight.log) 2>&1
-          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
-          bash -n scripts/class-d-1000-final-acceptance.sh
-          bash -n benchmarks/scale/class-d-azure-1000-provision.sh
-          bash -n benchmarks/scale/class-d-azure-1000-campaign.sh
-          node --check benchmarks/scale/class-d-1000-evidence.js
-          node --check benchmarks/scale/class-d.js
-
-          grep -q 'nodeCount = 1000' benchmarks/scale/class-d.js
-          grep -q 'minimumHostCount = 10' benchmarks/scale/class-d.js
-          grep -q 'routingSuccess = 0.99' benchmarks/scale/class-d.js
-          grep -q 'convergenceP95Ms = 180_000' benchmarks/scale/class-d.js
-          grep -q 'recoveryP95Ms = 180_000' benchmarks/scale/class-d.js
-          grep -qx 'HOST_COUNT=20' benchmarks/scale/class-d-azure-1000-provision.sh
-          grep -qx 'NODES_PER_HOST=50' benchmarks/scale/class-d-azure-1000-provision.sh
-          grep -Fq "git -C /opt/truin checkout -q '${TARGET_SHA}'" <(sed "s/\\${GITHUB_SHA}/${TARGET_SHA}/g" benchmarks/scale/class-d-azure-1000-provision.sh)
-
+          exec > >(tee azure-capacity.log) 2>&1
           test "$(az group exists -n "$TARGET_RG" -o tsv)" = true
           for ns in Microsoft.Network Microsoft.Compute; do
             test "$(az provider show --namespace "$ns" --query registrationState -o tsv --only-show-errors)" = Registered
           done
-
           usage_json="$(az vm list-usage --location "$TARGET_LOCATION" -o json --only-show-errors)"
           sku_json="$(az vm list-skus --location "$TARGET_LOCATION" --resource-type virtualMachines --all -o json --only-show-errors)"
           regional_available="$(jq -r '[.[] | select((.name.value // "") == "cores" or (.name.localizedValue // "") == "Total Regional vCPUs") | ((.limit // 0)-(.currentValue // 0))] | max // -1' <<<"$usage_json")"
           test "$regional_available" -ge 80
-
           selected=''
           for size in Standard_D4as_v5 Standard_D4s_v5; do
             unrestricted="$(jq -r --arg size "$size" '[.[] | select(.name == $size and ((.restrictions // []) | length == 0))] | length' <<<"$sku_json")"
@@ -99,41 +121,53 @@ jobs:
             family="$(jq -r --arg size "$size" '[.[] | select(.name == $size and ((.restrictions // []) | length == 0))][0].family // empty' <<<"$sku_json")"
             vcpus="$(jq -r --arg size "$size" '[.[] | select(.name == $size and ((.restrictions // []) | length == 0))][0].capabilities[]? | select(.name == "vCPUs") | .value' <<<"$sku_json" | head -1)"
             test -n "$family"
-            test "$vcpus" -ge 4
+            test "${vcpus:-0}" -ge 4
             family_available="$(jq -r --arg family "$family" '[.[] | select((.name.value // "") == $family) | ((.limit // 0)-(.currentValue // 0))] | max // -1' <<<"$usage_json")"
             if test "$family_available" -ge 80; then selected="$size|$family|$family_available"; break; fi
           done
           test -n "$selected"
           IFS='|' read -r selected_size selected_family family_available <<<"$selected"
-
           prefix="truyn-d1000-${GITHUB_RUN_ID}"
           existing="$(az resource list -g "$TARGET_RG" --query "[?starts_with(name, '${prefix}')].name" -o tsv --only-show-errors | wc -l | tr -d ' ')"
           test "$existing" = 0
+          {
+            echo "selected_vm_size=${selected_size}"
+            echo "selected_vm_family=${selected_family}"
+            echo "regional_vcpus_available=${regional_available}"
+            echo "selected_family_vcpus_available=${family_available}"
+            echo 'required_vcpus=80'
+            echo 'remaining_resources_for_run_prefix=0'
+            echo 'resource_writes=0'
+          } | tee capacity-values.txt
 
+      - name: Build immutable preflight manifest
+        id: manifest
+        if: always()
+        shell: bash
+        run: |
+          set -Eeuo pipefail
           tree_digest="$(git archive "$TARGET_SHA" | sha256sum | awk '{print $1}')"
           {
-            echo 'status=PASS'
-            echo 'mode=prepare-only'
             echo "tested_commit=${TARGET_SHA}"
+            echo "source_parent=${TARGET_PARENT}"
             echo "source_tree_sha256=${tree_digest}"
+            echo "security_green_run=${SECURITY_GREEN_RUN}"
             echo "workflow_run_id=${GITHUB_RUN_ID}"
             echo "orchestration_sha=${GITHUB_SHA}"
+            echo "full_ci=${{ steps.full_ci.outcome }}"
+            echo "prepare_only=${{ steps.prepare.outcome }}"
+            echo "azure_login=${{ steps.azure_login.outcome }}"
+            echo "capacity=${{ steps.capacity.outcome }}"
             echo "resource_group=${TARGET_RG}"
             echo "location=${TARGET_LOCATION}"
             echo 'host_count=20'
             echo 'nodes_per_host=50'
             echo 'node_count=1000'
-            echo 'required_vcpus=80'
-            echo "regional_vcpus_available=${regional_available}"
-            echo "selected_vm_size=${selected_size}"
-            echo "selected_vm_family=${selected_family}"
-            echo "selected_family_vcpus_available=${family_available}"
             echo 'resource_writes=0'
-            echo 'remaining_resources_for_run_prefix=0'
-            sha256sum scripts/class-d-1000-final-acceptance.sh benchmarks/scale/class-d.js benchmarks/scale/class-d-1000-evidence.js benchmarks/scale/class-d-azure-1000-provision.sh benchmarks/scale/class-d-azure-1000-campaign.sh
+            cat capacity-values.txt 2>/dev/null || true
+            sha256sum scripts/class-d-1000-final-acceptance.sh scripts/class-d-1000-strict-acceptance.sh benchmarks/scale/class-d.js benchmarks/scale/class-d-1000-evidence.js benchmarks/scale/class-d-1000-remote-dht-probe.js benchmarks/scale/class-d-1000-safety-probes.js benchmarks/scale/class-d-azure-1000-provision.sh benchmarks/scale/class-d-azure-1000-campaign.sh
           } > class-d-1000-preflight-manifest.txt
           sha256sum class-d-1000-preflight-manifest.txt > class-d-1000-preflight-manifest.sha256
-          echo "TRUYN_CLASS_D_1000_PREPARE_ONLY status=PASS target=${TARGET_SHA} hosts=20 nodes=1000 vm_size=${selected_size} resource_writes=0"
 
       - name: Upload exact preflight evidence
         id: artifact
@@ -142,10 +176,13 @@ jobs:
         with:
           name: truyn-class-d1000-exact-preflight-${{ github.run_id }}
           retention-days: 90
-          if-no-files-found: warn
+          if-no-files-found: error
           path: |
             full-ci.log
             preflight.log
+            prepared-harness.log
+            azure-capacity.log
+            capacity-values.txt
             class-d-1000-preflight-manifest.txt
             class-d-1000-preflight-manifest.sha256
 
@@ -155,13 +192,15 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           FULL_CI: ${{ steps.full_ci.outcome }}
           PREPARE: ${{ steps.prepare.outcome }}
+          AZURE_LOGIN: ${{ steps.azure_login.outcome }}
+          CAPACITY: ${{ steps.capacity.outcome }}
           ARTIFACT_ID: ${{ steps.artifact.outputs.artifact-id }}
           ARTIFACT_DIGEST: ${{ steps.artifact.outputs.artifact-digest }}
         shell: bash
         run: |
           set -Eeuo pipefail
           result=FAIL
-          if test "$FULL_CI" = success && test "$PREPARE" = success && test -n "$ARTIFACT_ID" && test -n "$ARTIFACT_DIGEST"; then result=PASS; fi
-          body="result=${result}\ntested_commit=${TARGET_SHA}\norchestration_sha=${GITHUB_SHA}\nworkflow_run_id=${GITHUB_RUN_ID}\nfull_ci=${FULL_CI}\nprepare_only=${PREPARE:-not-run}\nartifact_id=${ARTIFACT_ID:-missing}\nartifact_digest=${ARTIFACT_DIGEST:-missing}\nartifact_name=truyn-class-d1000-exact-preflight-${GITHUB_RUN_ID}\nhosts=20\nnodes=1000\nresource_writes=0"
+          if test "$FULL_CI" = success && test "$PREPARE" = success && test "$AZURE_LOGIN" = success && test "$CAPACITY" = success && test -n "$ARTIFACT_ID" && test -n "$ARTIFACT_DIGEST"; then result=PASS; fi
+          body="result=${result}\ntested_commit=${TARGET_SHA}\nsource_parent=${TARGET_PARENT}\nsecurity_green_run=${SECURITY_GREEN_RUN}\norchestration_sha=${GITHUB_SHA}\nworkflow_run_id=${GITHUB_RUN_ID}\nfull_ci=${FULL_CI}\nprepare_only=${PREPARE:-not-run}\nazure_login=${AZURE_LOGIN:-not-run}\ncapacity=${CAPACITY:-not-run}\nartifact_id=${ARTIFACT_ID:-missing}\nartifact_digest=${ARTIFACT_DIGEST:-missing}\nartifact_name=truyn-class-d1000-exact-preflight-${GITHUB_RUN_ID}\nhosts=20\nnodes=1000\nresource_writes=0"
           gh api "repos/${GITHUB_REPOSITORY}/issues" -f "title=TRUYN CLASS D-1000 EXACT PREFLIGHT ${result} ${TARGET_SHA} run ${GITHUB_RUN_ID}" -f "body=${body}" >/dev/null
           test "$result" = PASS
