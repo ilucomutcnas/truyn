@@ -9,6 +9,7 @@ on:
 
 permissions:
   contents: read
+  issues: write
 
 jobs:
   immutable-preflight:
@@ -108,3 +109,12 @@ jobs:
             class-d-1000-preflight.txt
             class-d-1000-preflight-manifest.txt
             class-d-1000-preflight-sha256.txt
+
+      - name: Record immutable preflight PASS
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          body="run=${GITHUB_RUN_ID} workflow_sha=${GITHUB_SHA} source_sha=${SOURCE_SHA} source_parent=${SOURCE_PARENT} security_green_run=${SECURITY_GREEN_RUN} artifact=truyn-class-d1000-preflight-${GITHUB_RUN_ID} result=PASS"
+          gh api "repos/${GITHUB_REPOSITORY}/issues" -f "title=TRUYN D1000 PREFLIGHT PASS ${GITHUB_RUN_ID}" -f "body=${body}" >/dev/null
