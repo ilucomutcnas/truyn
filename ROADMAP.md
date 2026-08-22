@@ -4,6 +4,8 @@ This roadmap describes intended engineering milestones and factual maturity. Pro
 
 The implementation has not evolved strictly in version order: semantic, provider, Trustability and benchmark layers advanced faster than the physical peer-network underlay. As of 2026-08-17, v0.1 Connect is implemented as a real QUIC/Kademlia/P2P/NAT reference underlay, while several later roadmap slices already have bounded implementations/evidence. The immediate engineering priority is network failure/churn durability and real multi-host scale rather than additional semantic sophistication.
 
+Developer experience is now an explicit implementation track: TRUYN requires first-party SDKs for JavaScript/TypeScript, Python, Go, Java and C#/.NET plus a signed TRUYN Agent Descriptor for low-friction discovery/onboarding. The architecture can be implemented in parallel with network productionization, but stable SDK compatibility cannot be claimed before the underlying protocol/interface contracts are stabilized.
+
 ## Maturity scale
 
 Every substantial subsystem should be described with an explicit maturity state:
@@ -34,6 +36,7 @@ Canonical status matrix: `docs/architecture/IMPLEMENTATION_STATUS.md`.
 | Settlement adapters | **Defined only; implementation intentionally not started. Settlement-neutral core; first targets x402 + AP2** |
 | Trustability v1/v2 | Implemented + CI/benchmark proven; bounded real-network trust slice proven |
 | Multi-cloud text/image/video providers | Implemented reference adapter paths; individual deployment availability varies |
+| SDK / developer experience | **Defined architecture; repository scaffolding only. Required first-party targets: JavaScript/TypeScript, Python, Go, Java, C#/.NET. Agent Descriptor draft defined; runtime SDK/descriptor implementation open** |
 | Network productionization | **In progress — Class B closed; Class C heterogeneous WAN/reachability remains next** |
 | Operations / compatibility / separate security docs | Documentation baseline implemented in current synchronization |
 | Mainnet | Not productionized / not stable |
@@ -130,7 +133,7 @@ Still open and required:
 
 Class B is durable evidence. The signed peer-record lifecycle is a later CI-proven productionization prerequisite. Neither fact closes Class C heterogeneous WAN/reachability or Class D scale/adversarial gates.
 
-This gate is deliberately prioritized ahead of further semantic-router feature expansion and ahead of settlement-adapter implementation.
+This gate is deliberately prioritized ahead of further semantic-router feature expansion and ahead of settlement-adapter implementation. SDK/DX implementation may proceed as an interoperability workstream in parallel, but it must not be used to imply network productionization.
 
 ## v0.2 — Verify — **SUBSTANTIALLY IMPLEMENTED / SCALE GATE OPEN**
 
@@ -171,9 +174,9 @@ Original milestone scope:
 
 Current factual state: multiple-provider routing paths, authorization-before-dispatch, provider-host security/billing gates, semantic routing and provider usage/latency metadata are implemented reference slices. General `COMPUTE` sandboxing, resource isolation, complete compute-near-data execution and durable commercial attribution remain incomplete.
 
-## v0.5 — Interoperate — **PARTIAL / ACTIVE**
+## v0.5 — Interoperate & Developer Experience — **PARTIAL / ACTIVE**
 
-Original milestone scope:
+Original interoperability scope:
 
 - MCP adapter
 - Initial OpenAI/Codex, Claude, Gemini, Grok, Perplexity and local-model adapters
@@ -182,7 +185,78 @@ Original milestone scope:
 - User-facing BYOK setup for common providers
 - Secure local/provider-runtime credential storage contract
 
-Current factual state: MCP, OpenAI/OpenAI-compatible, Anthropic, Azure OpenAI, Vertex Gemini, custom HTTP and additional project reference provider paths exist; BYOK CLI setup exists for supported profiles; multi-cloud text/image/video reference adapters are present. Broad ecosystem certification and stable public SDK compatibility remain open.
+Developer-experience scope is now explicit:
+
+- [x] define first-party SDK architecture and common semantic surface;
+- [x] define draft TRUYN Agent Descriptor for low-friction participant discovery/onboarding;
+- [x] reserve/scaffold required language directories;
+- [ ] TypeScript/JavaScript SDK implementation + npm package;
+- [ ] Python SDK implementation + PyPI package;
+- [ ] shared language-independent SDK conformance fixtures/harness;
+- [ ] Go SDK implementation + Go module;
+- [ ] Java SDK implementation + Maven-compatible publication;
+- [ ] C#/.NET SDK implementation + NuGet package;
+- [ ] Agent Descriptor serving/discovery + signature/expiry verification in the node/gateway/SDK path;
+- [ ] cross-language examples for descriptor → discovery → `NEED` → `RESULT`;
+- [ ] CI matrix proving the same authorization/privacy/compatibility semantics in all five first-party SDKs;
+- [ ] package/release provenance and compatibility declarations.
+
+Current factual state: MCP, OpenAI/OpenAI-compatible, Anthropic, Azure OpenAI, Vertex Gemini, custom HTTP and additional project reference provider paths exist; BYOK CLI setup exists for supported profiles; multi-cloud text/image/video reference adapters are present. The `sdk/` tree is still scaffolding/documentation rather than production client libraries. Broad ecosystem certification, Agent Descriptor runtime support and stable public SDK compatibility remain open.
+
+Architecture:
+
+- `docs/architecture/SDK_DEVELOPER_EXPERIENCE.md`
+- `spec/protocol/v1/agent-descriptor.md`
+- `docs/compatibility/SDK_COMPATIBILITY.md`
+
+## Developer Experience Gate — **REQUIRED PRE-v1 IMPLEMENTATION TRACK**
+
+This gate makes developer onboarding a measurable product requirement rather than a documentation aspiration.
+
+### DX-0 — Contract and scaffolding — **DEFINED**
+
+- [x] five required first-party language targets fixed: JavaScript/TypeScript, Python, Go, Java, C#/.NET;
+- [x] Rust explicitly classified as optional secondary track;
+- [x] common SDK semantic surface defined;
+- [x] TRUYN Agent Descriptor draft defined;
+- [x] SDK compatibility/conformance policy defined;
+- [x] language documentation scaffolds created.
+
+### DX-1 — Reference SDK pair — **OPEN**
+
+- [ ] TypeScript/JavaScript SDK;
+- [ ] Python SDK;
+- [ ] shared golden fixtures;
+- [ ] Agent Descriptor parser/verifier;
+- [ ] identity + authorized discovery + `OFFER`/`NEED`/`RESULT`/`REVOKE` core path;
+- [ ] deadline/cancellation/error/artifact handling;
+- [ ] runnable local-node examples.
+
+### DX-2 — Enterprise/runtime language parity — **OPEN**
+
+- [ ] Go SDK;
+- [ ] Java SDK;
+- [ ] C#/.NET SDK;
+- [ ] equivalent conformance against DX-1 fixtures;
+- [ ] idiomatic async/cancellation/streaming behavior.
+
+### DX-3 — Distribution and onboarding — **OPEN**
+
+- [ ] npm/PyPI/Go/Maven/NuGet publication;
+- [ ] tagged/reproducible SDK release process;
+- [ ] SDK compatibility matrix;
+- [ ] copy-paste quickstarts and sample applications;
+- [ ] CI matrix across all five first-party languages.
+
+### DX-4 — Stable SDK gate — **OPEN**
+
+Before v1 stable:
+
+- [ ] all five required first-party SDKs pass the shared conformance suite against stable `TRUYN/1`;
+- [ ] Agent Descriptor semantics/version are stabilized;
+- [ ] private capability non-disclosure and unauthorized-provider zero-execution are SDK release gates;
+- [ ] compatibility/deprecation policy is stable and documented;
+- [ ] published package versions are traceable to tagged source.
 
 ## v0.6 — Resist & Scale Trust — **IMPLEMENTED SLICES / LARGE REAL-NETWORK GATE OPEN**
 
@@ -258,7 +332,10 @@ Architecture: `docs/architecture/SETTLEMENT_ADAPTERS.md`.
 - Production-grade upgrade/rollback contract
 - Explicitly stable settlement-neutral extension boundary; settlement adapters remain optional/versioned independently
 - Public mainnet bootstrap
-- Documented SDKs and compatibility policy
+- Stable TRUYN Agent Descriptor discovery/versioning contract
+- Published and documented first-party SDKs for JavaScript/TypeScript, Python, Go, Java and C#/.NET
+- Shared SDK conformance suite green across all five first-party languages
+- Stable SDK compatibility/deprecation policy
 
 ## Post-v1 research track — Capability Economy
 
@@ -268,6 +345,28 @@ Architecture: `docs/architecture/SETTLEMENT_ADAPTERS.md`.
 - Resource accounting and receipts
 - Explicit provider-owner entitlements for cross-owner execution
 - No mandatory blockchain or single payment rail
+
+## Current execution order
+
+The network productionization gate remains the primary infrastructure priority. Developer experience is a required productization/interoperability track and can proceed in parallel where it does not depend on stable protocol choices.
+
+The intended high-level order is:
+
+```text
+Class C heterogeneous WAN/reachability
+        ↓
+100 real nodes / 1,000 real nodes + adversarial scale
+        ↓
+operational + compatibility stabilization
+        ↓
+DX-1/DX-2/DX-3 completed and conformance-green
+        ↓
+TRUYN/1 + Agent Descriptor + SDK compatibility stabilization
+        ↓
+optional settlement-adapter implementation / capability-economy expansion
+```
+
+This ordering does not prohibit early SDK implementation. It prevents early package availability from being confused with a stable protocol/mainnet claim.
 
 ## Versioning rule
 
