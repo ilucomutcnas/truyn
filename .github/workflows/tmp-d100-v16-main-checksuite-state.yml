@@ -1,0 +1,41 @@
+name: tmp-d100-v16-main-checksuite-state
+
+on:
+  push:
+    branches: [ci/d100-v16-actions-policy-probe-2]
+    paths:
+      - '.github/workflows/tmp-d100-v16-main-checksuite-state.yml'
+
+permissions:
+  actions: read
+  checks: read
+  contents: read
+  issues: write
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Inspect exact-main CI check suite and run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          CHECK_SUITE_ID: '88253425149'
+          RUN_ID: '32558383377'
+        shell: bash
+        run: |
+          set +e
+          suite="$(gh api "repos/${REPO}/check-suites/${CHECK_SUITE_ID}" 2>&1)"; suite_rc=$?
+          runs="$(gh api "repos/${REPO}/check-suites/${CHECK_SUITE_ID}/check-runs" 2>&1)"; runs_rc=$?
+          arun="$(gh api "repos/${REPO}/actions/runs/${RUN_ID}" --jq '{status,conclusion,run_attempt,head_branch,head_sha,event,created_at,updated_at,run_started_at}' 2>&1)"; arun_rc=$?
+          body=$(cat <<EOF
+          suite_rc=${suite_rc}
+          suite=${suite}
+          check_runs_rc=${runs_rc}
+          check_runs=${runs}
+          action_run_rc=${arun_rc}
+          action_run=${arun}
+          stage=main_checksuite_state
+          EOF
+          )
+          gh api "repos/${REPO}/issues" -f 'title=TRUYN D-100 V16 MAIN CHECKSUITE STATE' -f "body=${body}" >/dev/null
