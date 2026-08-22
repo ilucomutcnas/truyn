@@ -4,6 +4,18 @@ All notable factual repository changes should be recorded here without publishin
 
 ## Unreleased
 
+### A2A / MCP interoperability architecture — 2026-08-22
+
+- Added `docs/architecture/A2A_MCP_INTEROPERABILITY.md` as the canonical external agent/tool protocol bridge architecture.
+- Added `docs/compatibility/A2A_MCP_COMPATIBILITY.md` with a factual maturity/version-support matrix.
+- Corrected interoperability status: the repository already has bounded executable MCP server/provider paths; A2A and the general bidirectional A2A↔TRUYN↔MCP bridge remain unimplemented.
+- Added an explicit v0.5 A2A/MCP Interoperability Bridge Gate to `ROADMAP.md`, including MCP conformance closure, A2A server/client adapters, bidirectional round-trip proof, artifact/asynchronous-task coverage and negative security evidence.
+- Defined A2A Agent Card skill → authorized TRUYN capability/OFFER projection, A2A Message → `NEED`, task/context IDs → adapter correlation state and A2A Artifact → `RESULT`/artifact-reference mapping without adding new TRUYN/1 wire primitives.
+- Defined MCP Tools/Resources as adapter-level compatibility objects; general MCP discovery/import remains a future implementation step.
+- Made A2A/MCP versions independent compatibility dimensions so external protocol upgrades do not force a TRUYN protocol generation unless core network semantics change.
+- Synchronized root README, architecture contract, implementation status, repository structure, adapter docs, compatibility docs and MVP interoperability guide with the new boundary.
+- Preserved security invariants: external protocol authentication does not replace TRUYN provider authorization, billing responsibility, Trustability or settlement; public Agent Cards/MCP discovery must not leak private owner-only/BYOK providers.
+
 ### Roadmap / status / documentation synchronization — 2026-08-17
 
 - Added `docs/architecture/IMPLEMENTATION_STATUS.md` as the canonical factual maturity matrix separating Defined, Implemented, CI-proven, bounded real-testnet, Productionized, Internet-scale and Stable states.
