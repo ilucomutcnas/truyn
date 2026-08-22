@@ -1,0 +1,61 @@
+name: tmp-d100-v16-main-run-ui-annotation-probe
+
+on:
+  push:
+    branches:
+      - ci/d100-v16-main-security-green-observer-23360cbe
+    paths:
+      - '.github/workflows/tmp-d100-v16-main-run-ui-annotation-probe.yml'
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Read public Actions run UI annotation
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: 'https://github.com/inn-media/truyn/actions/runs/32558383377'
+        shell: bash
+        run: |
+          set +e
+          curl -fsSL -H 'User-Agent: truyn-ci-diagnostic' "$RUN_URL" -o /tmp/run.html
+          curl_rc=$?
+          bytes=0
+          [[ -f /tmp/run.html ]] && bytes="$(wc -c </tmp/run.html)"
+          annotation=""
+          if [[ "$curl_rc" -eq 0 ]]; then
+            annotation="$(python - <<'PY'
+          from pathlib import Path
+          import html,re
+          s=Path('/tmp/run.html').read_text(errors='replace')
+          patterns=[
+              r'annotation-message[^>]*>(.*?)</',
+              r'flash-error[^>]*>(.*?)</',
+              r'"message"\s*:\s*"([^"]*not allowed[^"]*)"',
+              r'"message"\s*:\s*"([^"]*workflow[^"]*invalid[^"]*)"',
+          ]
+          out=[]
+          for p in patterns:
+              for m in re.finditer(p,s,re.I|re.S):
+                  x=re.sub(r'<[^>]+>',' ',m.group(1))
+                  x=html.unescape(re.sub(r'\s+',' ',x)).strip()
+                  if x and x not in out: out.append(x)
+          for needle in ['not allowed','startup failure','workflow is not valid','Invalid workflow file','permissions']:
+              i=s.lower().find(needle.lower())
+              if i>=0:
+                  x=html.unescape(re.sub(r'<[^>]+>',' ',s[max(0,i-800):i+2400]))
+                  x=re.sub(r'\s+',' ',x).strip()
+                  if x and x not in out: out.append(x)
+          print('\n---\n'.join(out)[:12000])
+          PY
+          )"
+          fi
+          compact="$(printf '%s' "$annotation" | head -c 12000)"
+          body="run_id=32558383377\ncurl_rc=${curl_rc}\nhtml_bytes=${bytes}\nannotation=${compact}\nstage=main_ci_startup_ui_annotation_probe"
+          gh api "repos/${GITHUB_REPOSITORY}/issues" -f 'title=TRUYN D-100 V16 MAIN CI UI ANNOTATION' -f "body=${body}" >/dev/null
+          exit 0
