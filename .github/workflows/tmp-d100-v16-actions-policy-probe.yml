@@ -1,0 +1,50 @@
+name: tmp-d100-v16-actions-policy-probe
+
+on:
+  push:
+    branches: [ci/d100-v16-actions-policy-probe-2]
+    paths:
+      - '.github/workflows/tmp-d100-v16-actions-policy-probe.yml'
+
+permissions:
+  contents: read
+  actions: read
+  issues: write
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Probe Actions runs and org rulesets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          TARGET_SHA: 23360cbe86e725f79ef0c6772a51f70825b92aef
+          SAME_TREE_SHA: 53ebaaf8acb375ae0837ae87e10b734e172547f7
+        shell: bash
+        run: |
+          set +e
+          target_runs="$(gh api "repos/${REPO}/actions/runs?head_sha=${TARGET_SHA}&per_page=20" --jq '.workflow_runs[] | [.id,.name,.head_branch,.head_sha,.event,.status,.conclusion,.run_attempt] | @tsv' 2>&1)"
+          target_rc=$?
+          same_tree_runs="$(gh api "repos/${REPO}/actions/runs?head_sha=${SAME_TREE_SHA}&per_page=20" --jq '.workflow_runs[] | [.id,.name,.head_branch,.head_sha,.event,.status,.conclusion,.run_attempt] | @tsv' 2>&1)"
+          same_tree_rc=$?
+          org_rulesets="$(gh api 'orgs/inn-media/rulesets?per_page=100' 2>&1)"
+          org_rulesets_rc=$?
+          repo_rulesets="$(gh api "repos/${REPO}/rulesets?includes_parents=true&per_page=100" 2>&1)"
+          repo_rulesets_rc=$?
+          body=$(cat <<EOF
+          target_sha=${TARGET_SHA}
+          target_runs_rc=${target_rc}
+          target_runs=${target_runs}
+          same_tree_sha=${SAME_TREE_SHA}
+          same_tree_runs_rc=${same_tree_rc}
+          same_tree_runs=${same_tree_runs}
+          org_rulesets_rc=${org_rulesets_rc}
+          org_rulesets=${org_rulesets}
+          repo_rulesets_rc=${repo_rulesets_rc}
+          repo_rulesets=${repo_rulesets}
+          stage=actions_policy_probe_2
+          EOF
+          )
+          gh api "repos/${REPO}/issues" -f 'title=TRUYN D-100 V16 ACTIONS POLICY PROBE 2' -f "body=${body}" >/dev/null
+          exit 0
