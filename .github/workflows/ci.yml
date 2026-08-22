@@ -20,18 +20,7 @@ jobs:
         with:
           node-version: '22'
       - run: npm install --ignore-scripts --no-audit --no-fund
-      - name: Run npm test and capture TAP
-        shell: bash
-        run: |
-          set -o pipefail
-          npm test 2>&1 | tee tap.log
+      - run: npm test
         env:
           TRUYN_LOCAL_DEVELOPMENT: '1'
-      - name: Upload TAP diagnostic
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: tap-diagnostic-${{ github.run_id }}-${{ github.run_attempt }}
-          path: tap.log
-          if-no-files-found: error
       - run: git diff --check
