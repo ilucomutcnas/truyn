@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - ci/d1000-preflight-369ee0f9
+  pull_request:
+    branches:
+      - main
   workflow_dispatch: {}
 
 permissions:
