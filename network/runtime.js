@@ -206,6 +206,7 @@ export class TruynNetworkNode {
     this.closing = false;
     await this.hydrateState();
     await this.workInbox?.load();
+    const recoveryPeers = this.discovery.snapshot();
     const endpoint = await this.quic.start();
     const advertisedHost = this.advertiseHost || (endpoint.host === '0.0.0.0' ? '127.0.0.1' : endpoint.host);
     this.sequence += 1;
@@ -215,6 +216,19 @@ export class TruynNetworkNode {
     await this.persistState();
     await this.recoverAcceptedWork();
     this.peerRecordLifecycle.lastSequence = this.localPeerRecord.sequence;
+
+    // A durable restart mints a strictly newer signed peer record. Publish it to every
+    // still-valid peer recovered from durable routing state before startup completes.
+    // This is a control-plane re-registration, not an application-envelope retry:
+    // receivers invalidate stale outbound QUIC clients on the newer recordId, so their
+    // first post-restart application request establishes a fresh authenticated session.
+    if (recoveryPeers.length > 0) {
+      await this.announcePeerRecord(this.localPeerRecord, {
+        peers: recoveryPeers,
+        fanout: recoveryPeers.length
+      });
+    }
+
     this.#schedulePeerRecordRenewal();
     return structuredClone(this.localPeerRecord);
   }
