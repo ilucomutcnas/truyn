@@ -1,0 +1,32 @@
+name: tmp-d100-v16-main-ci-id-probe-2
+
+on:
+  push:
+    branches:
+      - ci/d100-v16-main-security-green-observer-23360cbe
+    paths:
+      - '.github/workflows/tmp-d100-v16-main-ci-id-probe-2.yml'
+
+permissions:
+  actions: read
+  issues: write
+  contents: read
+
+env:
+  TARGET_SHA: 23360cbe86e725f79ef0c6772a51f70825b92aef
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Record latest exact main CI identity
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          runs_json="$(gh api -X GET "repos/${GITHUB_REPOSITORY}/actions/runs" -f head_sha="$TARGET_SHA" -f branch='main' -f event='push' -f per_page=100)"
+          list="$(jq -c --arg sha "$TARGET_SHA" '[.workflow_runs[] | select(.name == "CI" and .event == "push" and .head_branch == "main" and .head_sha == $sha) | {id,created_at,updated_at,run_attempt,status,conclusion}] | sort_by(.created_at)' <<<"$runs_json")"
+          body="tested_sha=${TARGET_SHA}\nruns=${list}\nstage=main_ci_identity_probe_after_noop_ref"
+          gh api "repos/${GITHUB_REPOSITORY}/issues" -f 'title=TRUYN D-100 V16 MAIN CI AFTER NOOP REF' -f "body=${body}" >/dev/null
