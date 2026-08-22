@@ -318,7 +318,7 @@ No document or public endpoint should be interpreted as permission to consume TR
 
 Useful contributions include protocol design, networking implementation, trust algorithms, adversarial testing, cryptography, discovery/NAT traversal, agent adapters, provider authorization, BYOK UX, compute sandboxing, SDKs, benchmarks, simulations, documentation and independent academic critique.
 
-TRUYN is licensed under the **Apache License 2.0 (`Apache-2.0`)**, the same license family used by the A2A Protocol. Apache 2.0 permits broad open-source and commercial use and includes an explicit contributor patent grant in **Section 3**, subject to the complete terms in [`LICENSE`](LICENSE).
+TRUYN is licensed under the **Apache License 2.0 (`Apache-2.0`)**. See [`LICENSE`](LICENSE).
 
 ---
 
