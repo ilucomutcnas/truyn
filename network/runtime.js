@@ -45,6 +45,8 @@ export class TruynNetworkNode {
     this.peerRecordPublishFanout = publishFanout;
     this.peerRecordRenewTimer = null;
     this.peerRecordRenewalInFlight = null;
+    this.peerRecordRecoveryRetryTimer = null;
+    this.peerRecordRecoveryRetryDelaysMs = [1_000, 3_000, 10_000];
     this.peerRecordLifecycle = {
       autoRenew: this.peerRecordAutoRenew,
       ttlMs: this.peerRecordTtlMs,
@@ -158,6 +160,47 @@ export class TruynNetworkNode {
     this.peerRecordRenewTimer = null;
   }
 
+  #clearPeerRecordRecoveryRetryTimer() {
+    if (!this.peerRecordRecoveryRetryTimer) return;
+    clearTimeout(this.peerRecordRecoveryRetryTimer);
+    this.peerRecordRecoveryRetryTimer = null;
+  }
+
+  #schedulePeerRecordRecoveryRetries(record, recoveryPeers, failedNodeIds, attempt = 0) {
+    this.#clearPeerRecordRecoveryRetryTimer();
+    if (!this.started || this.closing || this.localPeerRecord?.recordId !== record?.recordId) return;
+    if (attempt >= this.peerRecordRecoveryRetryDelaysMs.length) return;
+
+    const pendingNodeIds = new Set(failedNodeIds || []);
+    const peers = recoveryPeers.filter((peer) => pendingNodeIds.has(peer?.nodeId));
+    if (peers.length === 0) return;
+
+    const recordId = record.recordId;
+    const delayMs = this.peerRecordRecoveryRetryDelaysMs[attempt];
+    this.peerRecordRecoveryRetryTimer = setTimeout(() => {
+      this.peerRecordRecoveryRetryTimer = null;
+      if (!this.started || this.closing || this.localPeerRecord?.recordId !== recordId) return;
+      void this.announcePeerRecord(record, { peers, fanout: peers.length })
+        .then((result) => {
+          if (result.failed === 0) {
+            this.peerRecordLifecycle.lastError = null;
+            return;
+          }
+          this.#schedulePeerRecordRecoveryRetries(record, recoveryPeers, result.failedNodeIds, attempt + 1);
+        })
+        .catch((error) => {
+          if (!this.started || this.closing || this.localPeerRecord?.recordId !== recordId) return;
+          this.peerRecordLifecycle.lastError = {
+            at: new Date().toISOString(),
+            code: error?.code || null,
+            message: error?.message || String(error)
+          };
+          this.#schedulePeerRecordRecoveryRetries(record, recoveryPeers, peers.map((peer) => peer.nodeId), attempt + 1);
+        });
+    }, delayMs);
+    this.peerRecordRecoveryRetryTimer.unref?.();
+  }
+
   #schedulePeerRecordRenewal() {
     this.#clearPeerRecordRenewTimer();
     if (!this.started || this.closing || !this.peerRecordAutoRenew || !this.localPeerRecord) return;
@@ -206,6 +249,7 @@ export class TruynNetworkNode {
     this.closing = false;
     await this.hydrateState();
     await this.workInbox?.load();
+    const recoveryPeers = this.discovery.snapshot();
     const endpoint = await this.quic.start();
     const advertisedHost = this.advertiseHost || (endpoint.host === '0.0.0.0' ? '127.0.0.1' : endpoint.host);
     this.sequence += 1;
@@ -215,12 +259,33 @@ export class TruynNetworkNode {
     await this.persistState();
     await this.recoverAcceptedWork();
     this.peerRecordLifecycle.lastSequence = this.localPeerRecord.sequence;
+
+    // A durable restart mints a strictly newer signed peer record. Publish it to every
+    // still-valid peer recovered from durable routing state before startup completes.
+    // This is a control-plane re-registration, not an application-envelope retry:
+    // receivers invalidate stale outbound QUIC clients on the newer recordId, so their
+    // first post-restart application request establishes a fresh authenticated session.
+    if (recoveryPeers.length > 0) {
+      const announcement = await this.announcePeerRecord(this.localPeerRecord, {
+        peers: recoveryPeers,
+        fanout: recoveryPeers.length
+      });
+      if (announcement.failed > 0) {
+        this.#schedulePeerRecordRecoveryRetries(
+          this.localPeerRecord,
+          recoveryPeers,
+          announcement.failedNodeIds
+        );
+      }
+    }
+
     this.#schedulePeerRecordRenewal();
     return structuredClone(this.localPeerRecord);
   }
 
   refreshPeerRecord({ nat = this.nat, capabilities = this.capabilities, persist = true } = {}) {
     if (!this.started) throw new Error('network node is not started');
+    this.#clearPeerRecordRecoveryRetryTimer();
     this.nat = nat;
     this.capabilities = [...new Set(capabilities)];
     const endpoint = this.localPeerRecord.endpoints[0];
@@ -342,6 +407,7 @@ export class TruynNetworkNode {
     if (!this.started && !this.closing) return;
     this.closing = true;
     this.#clearPeerRecordRenewTimer();
+    this.#clearPeerRecordRecoveryRetryTimer();
     if (this.peerRecordRenewalInFlight) {
       try { await this.peerRecordRenewalInFlight; } catch { /* renewal failure must not prevent shutdown */ }
     }

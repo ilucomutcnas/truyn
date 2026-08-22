@@ -114,3 +114,114 @@ test('productionization: PING piggyback repairs a missed proactive renewal annou
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test('productionization: durable restart re-registers before first application traffic and invalidates stale clients', { timeout: 25_000 }, async () => {
+  const root = await mkdtemp(join(tmpdir(), 'truyn-peer-restart-reregister-'));
+  const tls = await generateTls(root);
+  const identityA = createIdentity();
+  const statePathA = join(root, 'a-state.json');
+  let a = new TruynNetworkNode({ identity: identityA, host: '127.0.0.1', tls, statePath: statePathA, peerRecordAutoRenew: false });
+  const b = new TruynNetworkNode({ identity: createIdentity(), host: '127.0.0.1', tls, statePath: join(root, 'b-state.json'), peerRecordAutoRenew: false });
+  try {
+    const [recordA, recordB] = await Promise.all([a.start(), b.start()]);
+    a.bootstrap([recordB]);
+    b.bootstrap([recordA]);
+    await a.persistState();
+    a.onEnvelope(async (message) => ({ ok: true, type: message.type, phase: 'before-restart' }));
+
+    const directBefore = await b.need(identityA.nodeId, 'restart-proof', { phase: 'before' });
+    assert.equal(directBefore.transport, 'quic-direct');
+    assert.equal(await b.pingPeer(identityA.nodeId), true);
+    assert.equal(b.router.connections.has(identityA.nodeId), true, 'direct cache must be populated before shutdown');
+    assert.equal(b.rpc.clients.has(identityA.nodeId), true, 'discovery cache must be populated before shutdown');
+
+    const endpoint = new URL(recordA.endpoints[0]);
+    const restartPort = Number(endpoint.port);
+    await a.close();
+
+    a = new TruynNetworkNode({ identity: identityA, host: '127.0.0.1', port: restartPort, tls, statePath: statePathA, peerRecordAutoRenew: false });
+    const restartedRecord = await a.start();
+    assert.ok(restartedRecord.sequence > recordA.sequence, 'restart must advance the durable signed peer-record sequence');
+
+    const registered = await eventually(() => {
+      const current = b.discovery.get(identityA.nodeId);
+      return current?.sequence === restartedRecord.sequence ? current : null;
+    }, { message: 'restart_record_not_proactively_registered' });
+    assert.equal(registered.recordId, restartedRecord.recordId);
+    await eventually(
+      () => !b.router.connections.has(identityA.nodeId) && !b.rpc.clients.has(identityA.nodeId),
+      { message: 'new_restart_record_did_not_invalidate_stale_clients' }
+    );
+    const lifecycle = a.peerRecordLifecycleSnapshot();
+    assert.ok(lifecycle.lastAnnouncement?.attempted >= 1, 'restart must attempt control-plane re-registration');
+    assert.ok(lifecycle.lastAnnouncement?.delivered >= 1, 'restart must deliver its new signed record to a recovered peer');
+
+    a.onEnvelope(async (message) => ({ ok: true, type: message.type, phase: 'after-restart' }));
+    const directAfter = await b.need(identityA.nodeId, 'restart-proof', { phase: 'after' });
+    assert.equal(directAfter.transport, 'quic-direct', 'first application request after re-registration must establish a fresh QUIC session');
+    assert.equal(directAfter.result.phase, 'after-restart');
+    assert.equal(await b.pingPeer(identityA.nodeId), true, 'first discovery request after re-registration must use a fresh QUIC session');
+  } finally {
+    await Promise.allSettled([a.close(), b.close()]);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('productionization: durable restart retries only failed peer registrations and cancels pending retry on close', { timeout: 15_000 }, async () => {
+  const root = await mkdtemp(join(tmpdir(), 'truyn-peer-restart-retry-'));
+  const tls = await generateTls(root);
+  const identity = createIdentity();
+  const statePath = join(root, 'node-state.json');
+  const stableIdentity = createIdentity();
+  const flakyIdentity = createIdentity();
+  const stable = createPeerRecord({ identity: stableIdentity, endpoints: ['quic://127.0.0.1:65528'], ttlMs: 60_000 });
+  const flaky = createPeerRecord({ identity: flakyIdentity, endpoints: ['quic://127.0.0.1:65529'], ttlMs: 60_000 });
+  let node = new TruynNetworkNode({ identity, host: '127.0.0.1', tls, statePath, peerRecordAutoRenew: false });
+  try {
+    await node.start();
+    node.bootstrap([stable, flaky]);
+    await node.persistState();
+    await node.close();
+
+    node = new TruynNetworkNode({ identity, host: '127.0.0.1', tls, statePath, peerRecordAutoRenew: false });
+    const attempts = new Map();
+    node.rpc.announce = async (peer, record) => {
+      const count = (attempts.get(peer.nodeId) || 0) + 1;
+      attempts.set(peer.nodeId, count);
+      if (peer.nodeId === flakyIdentity.nodeId && count === 1) throw new Error('simulated_peer_temporarily_unavailable');
+      return { accepted: true, nodeId: record.nodeId, sequence: record.sequence };
+    };
+    await node.start();
+    const initial = node.peerRecordLifecycleSnapshot().lastAnnouncement;
+    assert.equal(initial.attempted, 2);
+    assert.equal(initial.delivered, 1);
+    assert.equal(initial.failed, 1);
+    assert.deepEqual(initial.failedNodeIds, [flakyIdentity.nodeId]);
+
+    const repaired = await eventually(() => {
+      const lifecycle = node.peerRecordLifecycleSnapshot();
+      return attempts.get(flakyIdentity.nodeId) === 2 && lifecycle.lastAnnouncement?.failed === 0 ? lifecycle.lastAnnouncement : null;
+    }, { timeoutMs: 4_000, message: 'failed_peer_not_retried' });
+    assert.equal(attempts.get(stableIdentity.nodeId), 1, 'already-delivered peer must not be retried');
+    assert.equal(attempts.get(flakyIdentity.nodeId), 2, 'failed peer must receive exactly the first bounded retry');
+    assert.equal(repaired.attempted, 1);
+    assert.equal(repaired.delivered, 1);
+    assert.equal(repaired.failed, 0);
+
+    await node.close();
+    node = new TruynNetworkNode({ identity, host: '127.0.0.1', tls, statePath, peerRecordAutoRenew: false });
+    let cancelledAttempts = 0;
+    node.rpc.announce = async () => {
+      cancelledAttempts += 1;
+      throw new Error('simulated_peer_still_unavailable');
+    };
+    await node.start();
+    assert.equal(cancelledAttempts, 2, 'restart must make one initial attempt per recovered peer');
+    await node.close();
+    await sleep(1_200);
+    assert.equal(cancelledAttempts, 2, 'close must cancel the pending control-plane retry');
+  } finally {
+    await node.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});

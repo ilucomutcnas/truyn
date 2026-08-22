@@ -46,6 +46,16 @@ export class QuicDiscoveryRpc {
     this.clients = new Map();
   }
 
+  #watchClient(nodeId, client) {
+    const closed = () => {
+      const current = this.clients.get(nodeId);
+      if (current?.client === client) this.clients.delete(nodeId);
+    };
+    if (client?.closedP && typeof client.closedP.then === 'function') {
+      void client.closedP.then(closed, closed);
+    }
+  }
+
   async client(peer) {
     const selected = selectedEndpoint(peer);
     if (!selected) throw new Error('discovery_peer_has_no_quic_endpoint');
@@ -55,6 +65,7 @@ export class QuicDiscoveryRpc {
     if (existing) this.forget(peer.nodeId);
     const client = await this.quic.connect(selected.endpoint);
     this.clients.set(peer.nodeId, { client, binding });
+    this.#watchClient(peer.nodeId, client);
     return client;
   }
 
