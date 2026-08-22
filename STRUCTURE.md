@@ -2,7 +2,7 @@
 
 TRUYN is a **single evolving codebase**. Software releases are tracked with Git tags/releases, while compatibility-sensitive network contracts coexist in versioned directories.
 
-The repository deliberately separates versioning dimensions:
+The repository deliberately separates versioning and authority dimensions:
 
 ```text
 Software release      0.1.0-dev, v1.0.0, v2.3.1, ...
@@ -11,6 +11,7 @@ Wire schema           proto/v1, proto/v2, ...
 Local storage/config  migrated independently
 External adapters     A2A / MCP versions negotiated independently
 SDK packages          versioned independently within declared TRUYN compatibility
+Governance             RFC/extension/decision rules evolve under GOVERNANCE.md
 ```
 
 A newer node may support multiple protocol generations simultaneously. We do **not** copy the entire repository into `v1/`, `v2/`, `v3/`.
@@ -21,10 +22,12 @@ A newer node may support multiple protocol generations simultaneously. We do **n
 - `MANIFESTO.md` — values and direction.
 - `WHITEPAPER.md` — academic and engineering rationale.
 - `STRUCTURE.md` — repository ownership and versioning model.
-- `ROADMAP.md` — staged implementation/maturity sequence.
+- `ROADMAP.md` — staged implementation/maturity sequence, including governance maturity.
+- `GOVERNANCE.md` — canonical project governance, roles, bootstrap stewardship, TSC target and maturity model.
+- `MAINTAINERS.md` — factual current governance-role roster.
 - `LICENSE` — Apache License 2.0 (`Apache-2.0`).
 - `SECURITY.md` — security reporting, provider/relay security baseline and repository boundary.
-- `CONTRIBUTING.md` — contribution principles.
+- `CONTRIBUTING.md` — contribution principles plus entry points into normative governance.
 - `CHANGELOG.md` — factual repository/release changes.
 - `VERSION` — current software development version.
 
@@ -34,19 +37,23 @@ Different documents have different jobs:
 
 1. `spec/protocol/<generation>/` — **normative protocol semantics**.
 2. `proto/<generation>/` — **machine-readable wire schema** implementing normative semantics.
-3. `docs/architecture/ARCHITECTURE_CONTRACT.md` — subsystem ownership and cross-document mapping.
-4. `docs/architecture/IMPLEMENTATION_STATUS.md` — canonical factual maturity/status.
-5. subsystem architecture documents — current implementation contracts + target boundaries, including interoperability and SDK/developer experience.
-6. `docs/benchmarks/` — durable measured evidence.
-7. `WHITEPAPER.md` — scientific rationale/models/research basis.
-8. `README.md` — human-facing summary; must not redefine protocol behavior.
-9. `ROADMAP.md` — sequencing/maturity; must not silently redefine protocol semantics.
+3. `GOVERNANCE.md` + `docs/governance/` — **how normative project decisions, RFCs and official extensions are allowed to change the standard**.
+4. `docs/architecture/ARCHITECTURE_CONTRACT.md` — subsystem ownership and cross-document mapping.
+5. `docs/architecture/IMPLEMENTATION_STATUS.md` — canonical factual maturity/status.
+6. subsystem architecture documents — current implementation contracts + target boundaries, including governance, interoperability and SDK/developer experience.
+7. `docs/benchmarks/` — durable measured evidence.
+8. `WHITEPAPER.md` — scientific rationale/models/research basis.
+9. `README.md` — human-facing summary; must not redefine protocol behavior or governance maturity.
+10. `ROADMAP.md` — sequencing/maturity; must not silently redefine protocol semantics or claim organizational states that do not exist.
 
 If these disagree, the inconsistency must be corrected rather than treated as a feature.
 
+Governance controls the **process for changing** normative sources. It does not replace `spec/` as the source of protocol semantics.
+
 ## Main architecture directories
 
-- `docs/` — architecture, concepts, setup, operations, security, Trustability, compatibility, developer onboarding, decisions and evidence.
+- `docs/` — architecture, concepts, setup, operations, security, Trustability, compatibility, governance, developer onboarding, decisions and evidence.
+- `docs/governance/` — RFC lifecycle, extension tiers, decision classes/quorum/conflict rules and governance documentation index.
 - `spec/` — normative protocol specifications, versioned by protocol generation. `spec/protocol/v1/agent-descriptor.md` owns the draft TRUYN Agent Descriptor semantics without creating a new top-level envelope kind.
 - `proto/` — machine-readable wire schemas.
 - `core/` — protocol-independent domain logic: identity, capability, intent, claims, content-addressed objects, provenance, trust, state, routing policy and crypto.
@@ -77,33 +84,35 @@ If these disagree, the inconsistency must be corrected rather than treated as a 
 - `examples/` — runnable interoperability/use-case examples; future SDK examples should demonstrate the same semantic flow across languages; no live private secrets/topology.
 - `scripts/` — development/testing/benchmark/release helpers, including future schema/codegen/conformance generation where appropriate.
 - `migrations/` — explicit config/storage/protocol migration tooling target.
-- `.github/` — CI and temporary bounded operational workflows; permanent public workflows must respect the repository security boundary. Future SDK CI must cover all required first-party languages.
+- `.github/` — CI and temporary bounded operational workflows; permanent public workflows must respect the repository security boundary. Future SDK CI must cover all required first-party languages. GitHub permissions/CODEOWNERS are implementation controls and do not by themselves define project governance roles.
 
 ## Documentation tree
 
 ```text
 docs/
-├── architecture/     canonical architecture + implementation status + A2A/MCP + SDK/DX contracts
+├── architecture/     canonical architecture + implementation status + governance + A2A/MCP + SDK/DX contracts
 ├── benchmarks/       append-only sanitized evidence ledger
 ├── compatibility/    software/protocol/node/adapter/A2A/MCP/SDK compatibility
 ├── concepts/         explanatory concepts
-├── decisions/        ADR-style decisions
+├── decisions/        ADR-style implementation/architecture decisions
+├── governance/       RFC + extension + decision-process governance
 ├── getting-started/  user setup/BYOK/MVP/SDK onboarding guidance
 ├── operations/       node/testnet/billing operational contracts
 ├── security/         security architecture status + operational security
 └── trustability/     claim/trust lifecycle architecture
 ```
 
-`operations`, `security` and `compatibility` are no longer placeholders; they contain explicit current baselines.
+`operations`, `security`, `compatibility` and `governance` are explicit documentation layers.
 
 ## Public architecture documents
 
-Canonical provider/network/security/status/interoperability/developer documents include:
+Canonical provider/network/security/status/interoperability/developer/governance documents include:
 
 ```text
 docs/architecture/
 ├── ARCHITECTURE_CONTRACT.md
 ├── IMPLEMENTATION_STATUS.md
+├── GOVERNANCE_ARCHITECTURE.md
 ├── A2A_MCP_INTEROPERABILITY.md
 ├── SDK_DEVELOPER_EXPERIENCE.md
 ├── NETWORK_UNDERLAY_V01.md
@@ -122,6 +131,17 @@ docs/architecture/
 ├── DISTRIBUTED_SEMANTIC_RETRIEVAL.md
 ├── DECENTRALIZED_PLACEMENT_BYZANTINE_RETRIEVAL.md
 └── KADEMLIA_QUIC_TRUST_TESTNET.md
+```
+
+Governance contracts:
+
+```text
+GOVERNANCE.md
+MAINTAINERS.md
+docs/governance/README.md
+docs/governance/RFC_PROCESS.md
+docs/governance/EXTENSIONS.md
+docs/governance/DECISION_PROCESS.md
 ```
 
 Developer-facing SDK/DX contracts:
@@ -165,6 +185,23 @@ Normative provider-policy target:
 spec/protocol/v1/provider-policy.md
 ```
 
+## Governance ownership
+
+TRUYN deliberately separates:
+
+```text
+protocol/spec governance
+repository/reference implementation maintenance
+TRUYN-operated infrastructure
+commercial products/services
+```
+
+A company may fund code or operate infrastructure without gaining a permanent right to define the protocol. A repository collaborator is not automatically a Maintainer/TSC member. A future TSC controls normative project decisions but does not control third-party products or private provider accounts.
+
+Current factual state is bootstrap governance with InnMedia as Founding Steward. The public governance contracts are defined (G1), while external maintainers, a multi-organization TSC and neutral legal stewardship remain future organizational gates.
+
+Official extension namespace use is governed by `docs/governance/EXTENSIONS.md`; Community Extensions remain permissionless in third-party namespaces.
+
 ## Adapter protocol ownership
 
 A2A and MCP are **external adapter protocols**, not normative TRUYN/1 vocabulary.
@@ -187,11 +224,13 @@ The native TRUYN Agent Descriptor is not the A2A Agent Card. They belong to diff
 
 ## Public repository vs private operations
 
-The public repository owns protocol/architecture, generic adapters, generic deployment patterns, SDK contracts/implementations, tests, conformance fixtures, examples and reproducible sanitized public benchmarks.
+The public repository owns protocol/architecture, governance contracts, generic adapters, generic deployment patterns, SDK contracts/implementations, tests, conformance fixtures, examples and reproducible sanitized public benchmarks.
 
 Credentials, private keys, private cloud identity/topology, privileged allowlists, private origins/backchannels, exact production quotas/cost ceilings, billing/credit information and sensitive incident/customer data belong to protected operational systems.
 
 Public Agent Descriptors and public A2A Agent Cards must follow the same boundary: only intentionally public interfaces/capabilities may appear in an unauthenticated view. Remote A2A/MCP bearer tokens, API keys, private endpoints and privileged discovery credentials remain adapter/runtime secrets.
+
+Public governance does not require disclosure of active vulnerability details or secrets. Security embargoes may delay disclosure, but material permanent normative changes receive a public record after safe disclosure.
 
 Security must remain correct even if the public architecture and SDK/adapter implementation are fully known.
 
@@ -315,4 +354,4 @@ Network mode affects reachability/compatibility; it never grants access to a pri
 
 ## Current maturity
 
-Current software is `0.1.0-dev`; `TRUYN/1` remains draft. The v0.1 underlay is implemented/CI-proven and bounded real QUIC/Kademlia trust-network evidence exists. MCP has bounded executable reference paths; A2A and the general bidirectional A2A↔TRUYN↔MCP bridge remain implementation/evidence work. The SDK/DX architecture and Agent Descriptor draft are defined, but the required first-party SDK packages and descriptor runtime path remain implementation work. Stable mainnet, production commercial tenancy/accounting, large real-node WAN scale and stable updater/compatibility contracts remain future gates.
+Current software is `0.1.0-dev`; `TRUYN/1` remains draft. The v0.1 underlay is implemented/CI-proven and bounded real QUIC/Kademlia trust-network evidence exists. MCP has bounded executable reference paths; A2A and the general bidirectional A2A↔TRUYN↔MCP bridge remain implementation/evidence work. The SDK/DX architecture and Agent Descriptor draft are defined, but the required first-party SDK packages and descriptor runtime path remain implementation work. Governance contracts/RFC/extension tiers are now defined at G1, but actual governance remains bootstrap/single-steward: external maintainers, a multi-organization TSC and neutral legal stewardship are not yet facts. Stable mainnet, production commercial tenancy/accounting, large real-node WAN scale and stable updater/compatibility contracts remain future gates.
