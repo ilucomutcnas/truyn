@@ -4,6 +4,20 @@ All notable factual repository changes should be recorded here without publishin
 
 ## Unreleased
 
+### SDK / developer experience architecture — 2026-08-22
+
+- Made SDK/developer experience an explicit architecture and roadmap implementation track rather than a generic future `Public SDK surface` item.
+- Fixed the required first-party SDK targets as JavaScript/TypeScript, Python, Go, Java and C#/.NET; retained Rust as an optional additional track rather than a substitute for those five.
+- Added `docs/architecture/SDK_DEVELOPER_EXPERIENCE.md` with common SDK semantics, package/distribution targets, security invariants, shared conformance requirements and DX-0…DX-4 implementation gates.
+- Added draft `spec/protocol/v1/agent-descriptor.md` defining the **TRUYN Agent Descriptor** as signed, expiry-bound bootstrap/self-description metadata rather than a new top-level TRUYN envelope kind.
+- Reserved `/.well-known/truyn-agent.json` as the target public HTTP discovery location for intentionally public participants while preserving native/direct/registry discovery options.
+- Kept the Agent Descriptor distinct from dynamic `OFFER`: Descriptor advertises identity/protocol/interfaces/intentionally visible capability classes; `OFFER` remains dynamic availability/conditions and neither grants provider authorization by itself.
+- Added public/scoped Descriptor privacy requirements so private providers/capabilities, credentials, private topology and privileged allowlists cannot leak through onboarding metadata.
+- Added SDK scaffolding documentation under `sdk/typescript`, `sdk/python`, `sdk/go`, `sdk/java`, `sdk/dotnet` and `sdk/rust`, with Java and .NET now represented explicitly in the repository structure.
+- Added `docs/getting-started/SDK_QUICKSTART.md` with target cross-language onboarding examples and `docs/compatibility/SDK_COMPATIBILITY.md` with protocol/descriptor/SDK versioning and stable-v1 parity requirements.
+- Updated README, architecture contract, implementation status, repository structure, compatibility, interoperability guidance and contributing rules to make SDK/Descriptor maturity and security boundaries explicit.
+- Stable v1 now requires all five first-party SDKs to pass a shared conformance/security suite against stable TRUYN/1 and a stabilized Agent Descriptor contract.
+
 ### Roadmap / status / documentation synchronization — 2026-08-17
 
 - Added `docs/architecture/IMPLEMENTATION_STATUS.md` as the canonical factual maturity matrix separating Defined, Implemented, CI-proven, bounded real-testnet, Productionized, Internet-scale and Stable states.
