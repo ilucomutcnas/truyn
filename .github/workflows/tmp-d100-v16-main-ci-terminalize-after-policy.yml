@@ -1,0 +1,56 @@
+name: tmp-d100-v16-main-ci-terminalize-after-policy
+
+on:
+  push:
+    branches: [ci/d100-v16-actions-policy-probe-2]
+    paths:
+      - '.github/workflows/tmp-d100-v16-main-ci-terminalize-after-policy.yml'
+
+permissions:
+  actions: write
+  contents: read
+  issues: write
+
+jobs:
+  terminalize:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Terminalize stale exact-main CI rerun after actor allow-list repair
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: '32558383377'
+        shell: bash
+        run: |
+          set +e
+          before="$(gh api "repos/${REPO}/actions/runs/${RUN_ID}" --jq '[.status,.conclusion,.run_attempt,.head_branch,.head_sha,.event] | @tsv' 2>&1)"
+          cancel="$(gh api -X POST "repos/${REPO}/actions/runs/${RUN_ID}/cancel" 2>&1)"; cancel_rc=$?
+          state=''
+          for i in $(seq 1 20); do
+            state="$(gh api "repos/${REPO}/actions/runs/${RUN_ID}" --jq '[.status,.conclusion,.run_attempt] | @tsv' 2>&1)"
+            [[ "$state" == completed$'\t'* ]] && break
+            sleep 3
+          done
+          force='NOT_NEEDED'; force_rc=0
+          if [[ "$state" != completed$'\t'* ]]; then
+            force="$(gh api -X POST "repos/${REPO}/actions/runs/${RUN_ID}/force-cancel" 2>&1)"; force_rc=$?
+            for i in $(seq 1 20); do
+              state="$(gh api "repos/${REPO}/actions/runs/${RUN_ID}" --jq '[.status,.conclusion,.run_attempt] | @tsv' 2>&1)"
+              [[ "$state" == completed$'\t'* ]] && break
+              sleep 3
+            done
+          fi
+          jobs="$(gh api "repos/${REPO}/actions/runs/${RUN_ID}/jobs" --jq '{total_count:.total_count,jobs:[.jobs[]|{id,name,status,conclusion}]}' 2>&1)"
+          body=$(cat <<EOF
+          before=${before}
+          cancel_rc=${cancel_rc}
+          cancel=${cancel}
+          force_rc=${force_rc}
+          force=${force}
+          final_state=${state}
+          jobs=${jobs}
+          stage=main_ci_terminalize_after_policy
+          EOF
+          )
+          gh api "repos/${REPO}/issues" -f 'title=TRUYN D-100 V16 MAIN CI TERMINALIZE AFTER POLICY' -f "body=${body}" >/dev/null
