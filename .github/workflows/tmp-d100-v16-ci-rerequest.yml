@@ -18,16 +18,19 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Rerequest exact main CI check suite
+      - name: Bounded rerequest exact main CI check suite
         env:
           GH_TOKEN: ${{ github.token }}
           CHECK_SUITE_ID: '88253425149'
+          RUN_ID: '32558383377'
         shell: bash
         run: |
-          set +e
-          response="$(gh api -X POST "repos/${GITHUB_REPOSITORY}/check-suites/${CHECK_SUITE_ID}/rerequest" 2>&1)"
-          rc=$?
-          compact="$(printf '%s' "$response" | tr '\n' ' ' | head -c 3000)"
-          body="check_suite_id=${CHECK_SUITE_ID}\nrc=${rc}\nresponse=${compact}\nstage=main_ci_check_suite_rerequest"
-          gh api "repos/${GITHUB_REPOSITORY}/issues" -f 'title=TRUYN D-100 V16 MAIN CI REREQUEST' -f "body=${body}" >/dev/null
-          exit 0
+          set -Eeuo pipefail
+          gh api -X POST "repos/${GITHUB_REPOSITORY}/check-suites/${CHECK_SUITE_ID}/rerequest" >/dev/null
+          sleep 8
+          run_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}")"
+          jobs_json="$(gh api -X GET "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}/jobs" -f per_page=100)"
+          summary="$(jq -c '{id,head_sha,head_branch,event,status,conclusion,run_attempt,run_started_at,updated_at}' <<<"$run_json")"
+          jobs="$(jq -c '{total_count,jobs:[.jobs[]|{id,name,status,conclusion}]}' <<<"$jobs_json")"
+          body="run=${summary}\njobs=${jobs}\nstage=main_ci_bounded_rerequest_2"
+          gh api "repos/${GITHUB_REPOSITORY}/issues" -f 'title=TRUYN D-100 V16 MAIN CI REREQUEST 2' -f "body=${body}" >/dev/null
