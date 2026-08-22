@@ -1,0 +1,33 @@
+name: tmp-d100-v16-ci-rerequest
+
+on:
+  push:
+    branches:
+      - ci/d100-v16-main-security-green-observer-23360cbe
+    paths:
+      - '.github/workflows/tmp-d100-v16-ci-rerequest.yml'
+
+permissions:
+  actions: write
+  checks: write
+  issues: write
+  contents: read
+
+jobs:
+  rerequest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Rerequest exact main CI check suite
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CHECK_SUITE_ID: '88253425149'
+        shell: bash
+        run: |
+          set +e
+          response="$(gh api -X POST "repos/${GITHUB_REPOSITORY}/check-suites/${CHECK_SUITE_ID}/rerequest" 2>&1)"
+          rc=$?
+          compact="$(printf '%s' "$response" | tr '\n' ' ' | head -c 3000)"
+          body="check_suite_id=${CHECK_SUITE_ID}\nrc=${rc}\nresponse=${compact}\nstage=main_ci_check_suite_rerequest"
+          gh api "repos/${GITHUB_REPOSITORY}/issues" -f 'title=TRUYN D-100 V16 MAIN CI REREQUEST' -f "body=${body}" >/dev/null
+          exit 0
