@@ -1,0 +1,214 @@
+name: tmp-class-d1000-main-oidc-preflight
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/tmp-class-d1000-main-oidc-preflight.yml'
+
+permissions:
+  contents: read
+  actions: read
+  id-token: write
+  issues: write
+
+concurrency:
+  group: class-d1000-main-oidc-preflight-single-shot
+  cancel-in-progress: false
+
+env:
+  TESTED_COMMIT: d4d1f69908442ba14ff2c1f3f5f57904c33edac4
+  TESTED_PARENT: 369ee0f9c57706aa4b95a328b556f626846e83a0
+  SECURITY_GREEN_RUN: '32590457214'
+  TARGET_RG: truyn
+  TARGET_LOCATION: eastus2
+  REQUIRED_VCPUS: '80'
+
+jobs:
+  immutable-preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Enforce authorized one-shot orchestration
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$GITHUB_EVENT_NAME" = push
+          test "$GITHUB_REF" = refs/heads/main
+          test "$GITHUB_RUN_ATTEMPT" = 1
+
+      - name: Checkout exact migrated D-1000 source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TESTED_COMMIT }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Verify exact source tuple and full CI
+        id: full_ci
+        env:
+          TRUYN_LOCAL_DEVELOPMENT: '1'
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          exec > >(tee full-ci.log) 2>&1
+          test "$(git rev-parse HEAD)" = "$TESTED_COMMIT"
+          test "$(git show -s --format=%P HEAD)" = "$TESTED_PARENT"
+          run_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${SECURITY_GREEN_RUN}")"
+          test "$(jq -r '.head_sha' <<<"$run_json")" = "$TESTED_COMMIT"
+          test "$(jq -r '.name' <<<"$run_json")" = CI
+          test "$(jq -r '.status' <<<"$run_json")" = completed
+          test "$(jq -r '.conclusion' <<<"$run_json")" = success
+          npm install --ignore-scripts --no-audit --no-fund
+          npm test
+          git diff --check
+
+      - name: Immutable D-1000 prepare-only gate
+        id: prepare
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          exec > >(tee preflight.log) 2>&1
+          test "$(git rev-parse HEAD)" = "$TESTED_COMMIT"
+          test "$(git show -s --format=%P HEAD)" = "$TESTED_PARENT"
+          for f in benchmarks/scale/class-d-azure-1000-provision.sh benchmarks/scale/class-d-azure-1000-campaign.sh scripts/class-d-1000-final-acceptance.sh scripts/class-d-1000-strict-acceptance.sh; do bash -n "$f"; done
+          for f in benchmarks/scale/class-d-1000-evidence.js benchmarks/scale/class-d-1000-remote-dht-probe.js benchmarks/scale/class-d-1000-safety-probes.js benchmarks/scale/evaluate-class-d-1000-evidence.js benchmarks/scale/render-class-d-1000-report.js benchmarks/scale/verify-class-d-1000-terminal.js; do node --check "$f"; done
+          TRUYN_CLASS_D1000_PREPARE_ONLY=1 bash scripts/class-d-1000-final-acceptance.sh | tee prepared-harness.log
+          grep -Fq 'TRUYN_CLASS_D1000_PREPARED_HARNESS=PASS safetyContract=v2 remoteDht=target-side-quic paths=canonical' prepared-harness.log
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { CLASS_D_1000_THRESHOLDS as t } from './benchmarks/scale/class-d.js';
+          assert.deepEqual(t, {
+            nodeCount: 1000,
+            minimumHostCount: 20,
+            baselineRoutingSuccess: 0.99,
+            healedRoutingSuccess: 0.99,
+            convergenceP95Ms: 180000,
+            recoveryP95Ms: 180000,
+            acknowledgedWriteLossMax: 0,
+            invalidSignedStateAcceptedMax: 0,
+            staleRevokedReceiptAcceptedMax: 0,
+            unauthorizedProviderExecutionMax: 0,
+            remainingResourcesMax: 0
+          });
+          NODE
+          grep -qx 'HOST_COUNT=20' benchmarks/scale/class-d-azure-1000-provision.sh
+          grep -qx 'NODES_PER_HOST=50' benchmarks/scale/class-d-azure-1000-provision.sh
+          printf 'prepare_only=true\nresource_writes=0\n' | tee prepare-status.txt
+
+      - name: Azure login via authorized main OIDC
+        id: azure_login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Read-only Azure readiness and capacity gate
+        id: capacity
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          exec > >(tee azure-capacity.log) 2>&1
+          test "$(az group exists -n "$TARGET_RG" -o tsv)" = true
+          for ns in Microsoft.Network Microsoft.Compute; do
+            test "$(az provider show --namespace "$ns" --query registrationState -o tsv --only-show-errors)" = Registered
+          done
+
+          usage_json="$(az vm list-usage --location "$TARGET_LOCATION" -o json --only-show-errors)"
+          sku_json="$(az vm list-skus --location "$TARGET_LOCATION" --resource-type virtualMachines --all -o json --only-show-errors)"
+
+          regional_available="$(jq -r '[.[] | select((.name.value // "") == "cores" or (.name.localizedValue // "") == "Total Regional vCPUs") | ((.limit // 0)-(.currentValue // 0))] | max // -1' <<<"$usage_json")"
+          test "$regional_available" -ge "$REQUIRED_VCPUS"
+
+          selected=''
+          for size in Standard_D4as_v5 Standard_D4s_v5; do
+            row="$(jq -c --arg size "$size" '[.[] | select(.name == $size and ((.restrictions // []) | length == 0))][0] // empty' <<<"$sku_json")"
+            test -n "$row" || continue
+            family="$(jq -r '.family // empty' <<<"$row")"
+            vcpus="$(jq -r '[.capabilities[]? | select(.name == "vCPUs") | (.value|tonumber)] | first // 0' <<<"$row")"
+            test -n "$family" || continue
+            test "$vcpus" -ge 4 || continue
+            family_available="$(jq -r --arg family "$family" '[.[] | select((.name.value // "") == $family) | ((.limit // 0)-(.currentValue // 0))] | max // -1' <<<"$usage_json")"
+            if test "$family_available" -ge "$REQUIRED_VCPUS"; then
+              selected="$size|$family|$family_available"
+              break
+            fi
+          done
+          test -n "$selected"
+          IFS='|' read -r selected_size selected_family family_available <<<"$selected"
+
+          existing_d1000="$(az resource list -g "$TARGET_RG" --query "[?starts_with(name, 'truyn-d1000-')].name" -o tsv --only-show-errors | sed '/^$/d' | wc -l | tr -d ' ')"
+          test "$existing_d1000" = 0
+
+          {
+            echo "selected_vm_size=${selected_size}"
+            echo "selected_vm_family=${selected_family}"
+            echo "regional_vcpus_available=${regional_available}"
+            echo "selected_family_vcpus_available=${family_available}"
+            echo "required_vcpus=${REQUIRED_VCPUS}"
+            echo 'host_count=20'
+            echo 'nodes_per_host=50'
+            echo 'node_count=1000'
+            echo 'existing_d1000_resources=0'
+            echo 'resource_writes=0'
+          } | tee capacity-values.txt
+
+      - name: Build immutable preflight manifest
+        id: manifest
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          tree_digest="$(git archive "$TESTED_COMMIT" | sha256sum | awk '{print $1}')"
+          {
+            echo 'result=PASS'
+            echo "tested_commit=${TESTED_COMMIT}"
+            echo "tested_parent=${TESTED_PARENT}"
+            echo "source_tree_sha256=${tree_digest}"
+            echo "security_green_run=${SECURITY_GREEN_RUN}"
+            echo "launcher_commit=${GITHUB_SHA}"
+            echo "workflow_run_id=${GITHUB_RUN_ID}"
+            echo 'full_ci=success'
+            echo 'prepare_only=success'
+            echo 'azure_login=success'
+            echo 'capacity=success'
+            echo 'resource_writes=0'
+            cat capacity-values.txt
+            sha256sum scripts/class-d-1000-final-acceptance.sh scripts/class-d-1000-strict-acceptance.sh benchmarks/scale/class-d.js benchmarks/scale/class-d-1000-evidence.js benchmarks/scale/class-d-1000-remote-dht-probe.js benchmarks/scale/class-d-1000-safety-probes.js benchmarks/scale/class-d-azure-1000-provision.sh benchmarks/scale/class-d-azure-1000-campaign.sh
+          } > class-d-1000-preflight-manifest.txt
+          sha256sum class-d-1000-preflight-manifest.txt > class-d-1000-preflight-manifest.sha256
+
+      - name: Upload immutable preflight artifact
+        id: artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: truyn-class-d1000-preflight-${{ github.run_id }}
+          retention-days: 90
+          if-no-files-found: error
+          path: |
+            full-ci.log
+            preflight.log
+            prepared-harness.log
+            prepare-status.txt
+            azure-capacity.log
+            capacity-values.txt
+            class-d-1000-preflight-manifest.txt
+            class-d-1000-preflight-manifest.sha256
+
+      - name: Record terminal immutable preflight PASS
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_ID: ${{ steps.artifact.outputs.artifact-id }}
+          ARTIFACT_DIGEST: ${{ steps.artifact.outputs.artifact-digest }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -n "$ARTIFACT_ID"
+          test -n "$ARTIFACT_DIGEST"
+          body="result=PASS\ntested_commit=${TESTED_COMMIT}\ntested_parent=${TESTED_PARENT}\nsecurity_green_run=${SECURITY_GREEN_RUN}\nlauncher_commit=${GITHUB_SHA}\nworkflow_run_id=${GITHUB_RUN_ID}\nfull_ci=success\nprepare_only=success\nazure_login=success\ncapacity=success\nartifact_id=${ARTIFACT_ID}\nartifact_digest=${ARTIFACT_DIGEST}\nartifact_name=truyn-class-d1000-preflight-${GITHUB_RUN_ID}\nhosts=20\nnodes_per_host=50\nnodes=1000\nresource_writes=0"
+          gh api "repos/${GITHUB_REPOSITORY}/issues" -f "title=TRUYN CLASS D-1000 IMMUTABLE PREFLIGHT PASS ${TESTED_COMMIT} run ${GITHUB_RUN_ID}" -f "body=${body}" >/dev/null
