@@ -1,0 +1,110 @@
+name: tmp-d1000-preflight-d4d1f699
+
+on:
+  push:
+    branches:
+      - d1000/preflight-d4d1f699
+    paths:
+      - '.github/workflows/tmp-d1000-preflight-d4d1f699.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  immutable-preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      SOURCE_SHA: d4d1f69908442ba14ff2c1f3f5f57904c33edac4
+      SOURCE_PARENT: 369ee0f9c57706aa4b95a328b556f626846e83a0
+      SECURITY_GREEN_RUN: '32590457214'
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@v4
+        with:
+          ref: d4d1f69908442ba14ff2c1f3f5f57904c33edac4
+          persist-credentials: false
+          fetch-depth: 1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Verify immutable source tuple
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test "$(git show -s --format=%P HEAD)" = "$SOURCE_PARENT"
+
+      - name: Full CI replay
+        env:
+          TRUYN_LOCAL_DEVELOPMENT: '1'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          npm install --ignore-scripts --no-audit --no-fund
+          npm test
+          git diff --check
+
+      - name: D-1000 immutable prepare-only gate
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          for f in \
+            benchmarks/scale/class-d-azure-1000-provision.sh \
+            benchmarks/scale/class-d-azure-1000-campaign.sh \
+            scripts/class-d-1000-final-acceptance.sh \
+            scripts/class-d-1000-strict-acceptance.sh; do
+            bash -n "$f"
+          done
+          for f in \
+            benchmarks/scale/class-d-1000-evidence.js \
+            benchmarks/scale/class-d-1000-remote-dht-probe.js \
+            benchmarks/scale/class-d-1000-safety-probes.js \
+            benchmarks/scale/evaluate-class-d-1000-evidence.js \
+            benchmarks/scale/render-class-d-1000-report.js \
+            benchmarks/scale/verify-class-d-1000-terminal.js; do
+            node --check "$f"
+          done
+          TRUYN_CLASS_D1000_PREPARE_ONLY=1 bash scripts/class-d-1000-final-acceptance.sh | tee class-d-1000-preflight.txt
+          grep -q 'nodeCount: 1000' benchmarks/scale/class-d.js
+          grep -q 'minimumHostCount: 20' benchmarks/scale/class-d.js
+          grep -q 'baselineRoutingSuccess: 0.99' benchmarks/scale/class-d.js
+          grep -q 'healedRoutingSuccess: 0.99' benchmarks/scale/class-d.js
+          grep -q 'convergenceP95Ms: 180_000' benchmarks/scale/class-d.js
+          grep -q 'recoveryP95Ms: 180_000' benchmarks/scale/class-d.js
+          grep -q 'acknowledgedWriteLossMax: 0' benchmarks/scale/class-d.js
+          grep -q 'invalidSignedStateAcceptedMax: 0' benchmarks/scale/class-d.js
+          grep -q 'staleRevokedReceiptAcceptedMax: 0' benchmarks/scale/class-d.js
+          grep -q 'unauthorizedProviderExecutionMax: 0' benchmarks/scale/class-d.js
+          grep -q 'remainingResourcesMax: 0' benchmarks/scale/class-d.js
+          grep -q 'TRUYN_CLASS_D1000_PREPARED_HARNESS=PASS safetyContract=v2 remoteDht=target-side-quic paths=canonical' class-d-1000-preflight.txt
+
+      - name: Build immutable preflight manifest
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          {
+            printf 'source_sha=%s\n' "$SOURCE_SHA"
+            printf 'source_parent=%s\n' "$SOURCE_PARENT"
+            printf 'security_green_run=%s\n' "$SECURITY_GREEN_RUN"
+            printf 'preflight_workflow_sha=%s\n' "$GITHUB_SHA"
+            printf 'preflight_run_id=%s\n' "$GITHUB_RUN_ID"
+            printf 'host_count=20\n'
+            printf 'node_count=1000\n'
+            printf 'prepare_only=true\n'
+            printf 'safety_contract=v2\n'
+          } > class-d-1000-preflight-manifest.txt
+          sha256sum class-d-1000-preflight.txt class-d-1000-preflight-manifest.txt > class-d-1000-preflight-sha256.txt
+
+      - name: Upload immutable preflight artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: truyn-class-d1000-preflight-${{ github.run_id }}
+          retention-days: 90
+          if-no-files-found: error
+          path: |
+            class-d-1000-preflight.txt
+            class-d-1000-preflight-manifest.txt
+            class-d-1000-preflight-sha256.txt
