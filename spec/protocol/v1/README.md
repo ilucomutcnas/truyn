@@ -39,6 +39,16 @@ Core invariants:
 
 The current MVP does not yet implement every provider-policy requirement in the draft target.
 
+## Settlement neutrality
+
+TRUYN/1 supports cost-aware capability routing but does **not** define a payment system.
+
+The protocol does not prescribe a currency, billing provider, blockchain, smart contract or settlement rail. Payment credentials and financial finality remain outside the core protocol.
+
+Future paid cross-owner execution is planned through optional settlement adapters. The first target integrations are **x402** for machine-native payment/settlement and **AP2** for verifiable agent payment authorization. They may be composed, but neither becomes a required TRUYN/1 wire primitive.
+
+See `economics.md` for the protocol boundary and `docs/architecture/SETTLEMENT_ADAPTERS.md` for the non-normative integration plan.
+
 ## Composed behaviors
 
 `CHALLENGE`, `VERIFY` and `DISPUTE` are protocol behaviors composed from `NEED`, `CLAIM`, `ATTEST`, evidence references and `TRUST_RECEIPT`. They are deliberately not new envelope kinds in TRUYN/1.
@@ -62,10 +72,12 @@ hard request constraints
       ↓
 routing rank
       ↓
+optional external settlement authorization/adapter gate when policy requires it
+      ↓
 dispatch
 ```
 
-Trustability, price or latency cannot make an unauthorized provider eligible.
+Trustability, price, payment proof or latency cannot make an unauthorized provider eligible.
 
 ## Trust model
 
@@ -75,7 +87,7 @@ Trustability is evaluated for a specific claim/request context, not as one unive
 Trust(claim, requester, purpose, domain, time, policy)
 ```
 
-Trustability and authorization are distinct: a trusted provider may still be unavailable to a requester because ownership policy denies access.
+Trustability and authorization are distinct: a trusted provider may still be unavailable to a requester because ownership policy denies access. Payment/settlement is a third independent concern: a successful payment does not establish result truth or provider authorization.
 
 ## Security
 

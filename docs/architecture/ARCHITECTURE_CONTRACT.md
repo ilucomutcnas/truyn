@@ -19,6 +19,7 @@ This document prevents architectural ideas and factual implementation status fro
 | Relay/control-plane boundary | `docs/architecture/RELAY_SECURITY.md` |
 | BYOK model | `docs/architecture/BYOK_ARCHITECTURE.md` |
 | Billing/quota/entitlement boundary | `docs/architecture/BILLING_BOUNDARY.md` |
+| Settlement neutrality / external payment adapters | `spec/protocol/v1/economics.md` and `docs/architecture/SETTLEMENT_ADAPTERS.md` |
 | Provider/relay threat model | `docs/architecture/THREAT_MODEL.md` |
 | Public/private information boundary | `docs/architecture/PUBLIC_PRIVATE_BOUNDARY.md` |
 | Public multi-cloud provider architecture | `docs/architecture/MULTI_CLOUD_PROVIDER_ARCHITECTURE.md` |
@@ -156,6 +157,8 @@ hard request constraints
         ↓
 ranking
         ↓
+settlement adapter when required by paid cross-owner policy
+        ↓
 dispatch
         ↓
 provider-host authorization/billing recheck where applicable
@@ -163,7 +166,7 @@ provider-host authorization/billing recheck where applicable
 execution
 ```
 
-A candidate that fails authorization MUST NOT be recoverable by a high trust score, low price or excellent latency.
+A candidate that fails authorization MUST NOT be recoverable by a high trust score, low price, successful payment or excellent latency.
 
 A useful verification rule is based on expected value of information:
 
@@ -189,10 +192,33 @@ Current implementation facts:
 - sponsored activation requires actor-bound signed entitlement verification and an atomic durable usage store;
 - a process-local usage counter is not an acceptable production billing boundary.
 
+### Settlement neutrality
+
+TRUYN/1 is not a payment protocol. It does not prescribe a currency, billing provider, blockchain, smart contract or settlement rail.
+
+The core may carry price/cost constraints for routing and non-secret billing classification for authorization/accountability. Movement of money, payment credentials, financial finality and processor/chain-specific semantics remain outside the core network.
+
+Paid cross-owner execution is planned through optional settlement adapters. The first target integrations are:
+
+- **x402** for machine-native payment requirement, verification and settlement flows;
+- **AP2** for verifiable agent payment authorization through mandates and receipts.
+
+AP2 and x402 may be composed: AP2 can prove the agent's authority to transact while x402 can provide the concrete payment/settlement path. Neither is mandatory and neither becomes a new TRUYN/1 wire primitive.
+
+Trustability, provider authorization and settlement remain independent gates:
+
+```text
+trusted ≠ authorized
+paid ≠ trusted
+paid ≠ provider-authorized
+```
+
+See `docs/architecture/SETTLEMENT_ADAPTERS.md`.
+
 ### Capability economy
 Cost-aware routing is part of the core request model; mandatory settlement is not. A future capability market can add payment/settlement adapters without making TRUYN dependent on a blockchain, currency or provider.
 
-Provider ownership remains intact in a market: paid/shared cross-owner execution requires an explicit contract/entitlement.
+Provider ownership remains intact in a market: paid/shared cross-owner execution requires an explicit contract/entitlement and, when required by policy, successful external payment authorization/settlement handling.
 
 ## Relay and control-plane contract
 
@@ -294,5 +320,7 @@ Production installer/updater/rollback maturity remains a v0.8/v1.0 gate.
 ## Interoperability
 
 TRUYN is model/provider-neutral. Vendor adapters are replaceable edges. MCP, SDKs, HTTP/gRPC/WebSocket gateways and provider-specific adapters connect systems to TRUYN; none defines the network itself.
+
+Settlement adapters follow the same extension philosophy: x402, AP2 and future payment systems are replaceable external edges and do not define the TRUYN core network.
 
 See `docs/compatibility/ADAPTER_COMPATIBILITY.md` for the factual adapter compatibility boundary.
