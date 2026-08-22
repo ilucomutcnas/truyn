@@ -31,6 +31,7 @@ Canonical status matrix: `docs/architecture/IMPLEMENTATION_STATUS.md`.
 | Semantic retrieval/index/distributed retrieval | Implemented + extensive CI/benchmark evidence |
 | Provider ownership/authorization/BYOK | Implemented reference baseline |
 | Billing safety | BYOK/owner-funded implemented; sponsored guard implemented but requires external durable store/issuer; prepaid/subscription fail closed |
+| A2A/MCP interoperability | **MCP bounded reference paths implemented/CI-covered; A2A and bidirectional A2A↔TRUYN↔MCP bridge defined only** |
 | Settlement adapters | **Defined only; implementation intentionally not started. Settlement-neutral core; first targets x402 + AP2** |
 | Trustability v1/v2 | Implemented + CI/benchmark proven; bounded real-network trust slice proven |
 | Multi-cloud text/image/video providers | Implemented reference adapter paths; individual deployment availability varies |
@@ -58,7 +59,7 @@ The repository already contains an executable MVP/reference implementation and c
 14. origin proof is expiry-bound and rotation-capable;
 15. sponsored mode cannot activate without actor-bound signed entitlement verification and an atomic durable usage store.
 
-This baseline is not a claim that rich account/organization tenancy, commercial entitlement issuance, deployed durable accounting, settlement adapters, full cloud perimeter proof or mainnet security operations are complete.
+This baseline is not a claim that rich account/organization tenancy, commercial entitlement issuance, deployed durable accounting, full A2A/MCP interoperability, settlement adapters, full cloud perimeter proof or mainnet security operations are complete.
 
 See:
 
@@ -66,6 +67,7 @@ See:
 - `docs/architecture/AUTHORIZATION_MODEL.md`
 - `docs/architecture/RELAY_SECURITY.md`
 - `docs/architecture/BILLING_BOUNDARY.md`
+- `docs/architecture/A2A_MCP_INTEROPERABILITY.md`
 - `docs/architecture/SETTLEMENT_ADAPTERS.md`
 - `docs/architecture/BYOK_ARCHITECTURE.md`
 - `docs/architecture/THREAT_MODEL.md`
@@ -130,7 +132,7 @@ Still open and required:
 
 Class B is durable evidence. The signed peer-record lifecycle is a later CI-proven productionization prerequisite. Neither fact closes Class C heterogeneous WAN/reachability or Class D scale/adversarial gates.
 
-This gate is deliberately prioritized ahead of further semantic-router feature expansion and ahead of settlement-adapter implementation.
+This gate is deliberately prioritized ahead of further semantic-router feature expansion and ahead of settlement-adapter implementation. Bounded interoperability work may proceed independently, but it does not replace the network productionization evidence gate.
 
 ## v0.2 — Verify — **SUBSTANTIALLY IMPLEMENTED / SCALE GATE OPEN**
 
@@ -176,13 +178,38 @@ Current factual state: multiple-provider routing paths, authorization-before-dis
 Original milestone scope:
 
 - MCP adapter
+- A2A interoperability edge
 - Initial OpenAI/Codex, Claude, Gemini, Grok, Perplexity and local-model adapters
 - Provider adapter contract for Copilot, Amazon Q, Cursor, Windsurf, Mistral, DeepSeek, Qwen, Cohere, NVIDIA and future systems
 - Public SDK surface
 - User-facing BYOK setup for common providers
 - Secure local/provider-runtime credential storage contract
 
-Current factual state: MCP, OpenAI/OpenAI-compatible, Anthropic, Azure OpenAI, Vertex Gemini, custom HTTP and additional project reference provider paths exist; BYOK CLI setup exists for supported profiles; multi-cloud text/image/video reference adapters are present. Broad ecosystem certification and stable public SDK compatibility remain open.
+Current factual state: MCP, OpenAI/OpenAI-compatible, Anthropic, Azure OpenAI, Vertex Gemini, custom HTTP and additional project reference provider paths exist; BYOK CLI setup exists for supported profiles; multi-cloud text/image/video reference adapters are present. The MCP edge is more mature than the roadmap previously stated: TRUYN-as-MCP stdio/loopback HTTP and a configured remote MCP HTTP tool provider have executable reference code, with bounded adapter tests. **A2A is not implemented yet, and there is no proven general A2A↔TRUYN↔MCP bridge.** Broad ecosystem certification and stable public SDK compatibility remain open.
+
+### A2A / MCP Interoperability Bridge Gate
+
+Architecture: `docs/architecture/A2A_MCP_INTEROPERABILITY.md`.  
+Factual compatibility matrix: `docs/compatibility/A2A_MCP_COMPATIBILITY.md`.
+
+Implementation sequence:
+
+- [x] TRUYN-as-MCP server reference over stdio;
+- [x] loopback MCP HTTP bridge exposing `truyn_identity`, `truyn_find`, `truyn_offer`, `truyn_need`, `truyn_poll`, `truyn_result`;
+- [x] configured remote MCP HTTP tool provider reference;
+- [ ] close conformance for the selected current MCP `2026-07-28` feature/transport subset, including explicit version/security failure cases and current stateless metadata rules;
+- [ ] implement general MCP discovery/import for an explicitly selected authorized tool set;
+- [ ] implement A2A server facade with authorized Agent Card projection, Send Message/Task handling and Artifact result projection;
+- [ ] implement A2A client/provider adapter that validates a remote Agent Card and exposes explicitly selected skills as TRUYN `OFFER`s;
+- [ ] preserve remote A2A/MCP credentials inside adapter/runtime secret boundaries;
+- [ ] prove A2A→TRUYN→MCP real round trip;
+- [ ] prove MCP→TRUYN→A2A real round trip;
+- [ ] prove structured/text and referenced file/artifact integrity/provenance across translation;
+- [ ] prove at least one asynchronous A2A task lifecycle;
+- [ ] negative-test that A2A Agent Card and MCP discovery cannot expose or execute unauthorized private providers;
+- [ ] publish exact-version compatibility matrix and durable sanitized interoperability evidence.
+
+The gate is deliberately adapter-level. A2A Agent Cards, Tasks/Artifacts and MCP Tools/Resources do not become new `TRUYN/1` wire primitives merely because bridges support them.
 
 ## v0.6 — Resist & Scale Trust — **IMPLEMENTED SLICES / LARGE REAL-NETWORK GATE OPEN**
 
@@ -202,6 +229,7 @@ Current factual state: provenance/independence, active trust lifecycle, receipts
 - [x] Token, latency, request-body, semantic, trust and infrastructure-scale benchmark work exists
 - [x] Reproducible public reports are preserved under `docs/benchmarks/`
 - [x] Provider-security negative evidence is published without exposing private topology where safe
+- [ ] A2A/MCP interoperability evidence after the bridge gate is implemented
 - [ ] 100/1,000 simultaneously running **real** network-node evidence
 - [ ] large real-WAN adversarial distributions
 
@@ -256,6 +284,7 @@ Architecture: `docs/architecture/SETTLEMENT_ADAPTERS.md`.
 - Stable `local` / `testnet` / `mainnet` semantics
 - Production-grade authorization/tenant/BYOK boundary
 - Production-grade upgrade/rollback contract
+- Explicitly stable external interoperability-adapter boundary for A2A/MCP with tested version policy
 - Explicitly stable settlement-neutral extension boundary; settlement adapters remain optional/versioned independently
 - Public mainnet bootstrap
 - Documented SDKs and compatibility policy
@@ -271,4 +300,4 @@ Architecture: `docs/architecture/SETTLEMENT_ADAPTERS.md`.
 
 ## Versioning rule
 
-Software releases (`v0.1.0`, `v1.0.0`) and network protocol generations (`TRUYN/1`, `TRUYN/2`) are deliberately separate. A newer node may support multiple protocol generations simultaneously. Current software remains `0.1.0-dev`; `TRUYN/1` remains draft until explicitly stabilized.
+Software releases (`v0.1.0`, `v1.0.0`) and network protocol generations (`TRUYN/1`, `TRUYN/2`) are deliberately separate. A newer node may support multiple protocol generations simultaneously. Current software remains `0.1.0-dev`; `TRUYN/1` remains draft until explicitly stabilized. External A2A/MCP versions are a third independent compatibility dimension owned by adapters and evidence matrices.
