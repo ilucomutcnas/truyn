@@ -2,6 +2,12 @@
 
 TRUYN is an open infrastructure project. Contributions are welcome across protocol design, distributed systems, networking, cryptography, trustability, provider authorization, BYOK, agent interoperability, SDKs, benchmarks, documentation, and adversarial testing.
 
+## License for contributions
+
+TRUYN is licensed under the **Apache License 2.0**. Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in TRUYN is submitted under the Apache License 2.0, consistent with Section 5 of the License.
+
+Apache License 2.0 includes the explicit contributor patent grant in Section 3, subject to the terms and termination condition stated there. See [`LICENSE`](LICENSE) for the complete controlling terms.
+
 ## Principles
 
 - Keep the network vendor-neutral.

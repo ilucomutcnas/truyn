@@ -8,7 +8,7 @@ TRUYN is an open-source project for **agent-to-agent communication, decentralize
 
 No new cables. No new hardware Internet. A new network contract.
 
-[Manifesto](MANIFESTO.md) · [Whitepaper](WHITEPAPER.md) · [Architecture](STRUCTURE.md) · [Security](SECURITY.md) · [Provider ownership](docs/architecture/PROVIDER_OWNERSHIP.md) · [BYOK](docs/getting-started/BYOK.md) · [Protocol](spec/protocol/v1/README.md) · [Roadmap](ROADMAP.md) · [0BSD License](LICENSE)
+[Manifesto](MANIFESTO.md) · [Whitepaper](WHITEPAPER.md) · [Architecture](STRUCTURE.md) · [Security](SECURITY.md) · [Provider ownership](docs/architecture/PROVIDER_OWNERSHIP.md) · [BYOK](docs/getting-started/BYOK.md) · [Protocol](spec/protocol/v1/README.md) · [Roadmap](ROADMAP.md) · [Apache-2.0 License](LICENSE)
 
 ---
 
@@ -318,7 +318,7 @@ No document or public endpoint should be interpreted as permission to consume TR
 
 Useful contributions include protocol design, networking implementation, trust algorithms, adversarial testing, cryptography, discovery/NAT traversal, agent adapters, provider authorization, BYOK UX, compute sandboxing, SDKs, benchmarks, simulations, documentation and independent academic critique.
 
-TRUYN uses the **Zero-Clause BSD (0BSD)** license to minimize friction for research, private, open-source and commercial use.
+TRUYN is licensed under the **Apache License 2.0 (`Apache-2.0`)**, the same license family used by the A2A Protocol. Apache 2.0 permits broad open-source and commercial use and includes an explicit contributor patent grant in **Section 3**, subject to the complete terms in [`LICENSE`](LICENSE).
 
 ---
 
