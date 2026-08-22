@@ -45,6 +45,12 @@ We believe computation should move toward information, not endlessly drag inform
 
 We believe no corporation, cloud, model provider or government should own the intelligence layer of the Internet.
 
+And we believe an open protocol cannot fully serve that principle if one vendor permanently controls how the standard itself changes.
+
+**Open code requires open governance. Vendor neutrality must exist in the decision structure, not only in the license or architecture diagram.**
+
+TRUYN begins under founding stewardship because every new project begins somewhere. Founding stewardship should be a transition, not a permanent right over the standard. The path is public governance, earned maintainership, multi-organization technical stewardship and ultimately a neutral home appropriate for an open standard.
+
 We also believe openness must never be confused with taking someone else's resources.
 
 **An open intelligence network is not an open billing account.**
@@ -60,6 +66,7 @@ Against blind trust.
 Against synthetic noise.
 Against duplicated computation.
 Against hidden ownership and ambiguous cost.
+Against hidden or permanent vendor control over an open standard.
 Against networks that can deliver information perfectly while knowing nothing about whether it deserves to be believed.
 
 We are not trying to make today's Internet slightly faster.
@@ -72,6 +79,7 @@ From documents to state.
 From repetition to verification.
 From assumed trust to measurable trustability.
 From accidental sharing to explicit ownership.
+From vendor stewardship to open standard governance.
 From machine-to-machine to intelligence-to-intelligence.
 
 The cables can remain.
