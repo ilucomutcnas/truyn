@@ -1,6 +1,6 @@
 # TRUYN Billing Boundary
 
-**Status:** implemented fail-closed reference billing safety boundary plus owner-runtime startup lock; production commercial entitlement issuance, durable accounting/reconciliation and rich tenant billing remain future work.
+**Status:** implemented fail-closed reference billing safety boundary plus owner-runtime startup lock; production commercial entitlement issuance, durable accounting/reconciliation, settlement adapters and rich tenant billing remain future work.
 
 ## Principle
 
@@ -9,6 +9,8 @@ Before TRUYN causes a chargeable provider operation, it must be possible to answ
 > **Who is authorized to cause this call, and who is responsible for its cost?**
 
 If billing responsibility is ambiguous, execution fails closed.
+
+This billing-safety boundary is intentionally distinct from **settlement**. TRUYN can determine who may cause a chargeable call and who bears its cost without prescribing how money is transferred between parties.
 
 ## Implemented reference gate
 
@@ -166,6 +168,8 @@ upstream provider call
 
 A relay or adapter MUST NOT optimistically call an upstream provider and decide authorization afterward.
 
+Future paid cross-owner execution adds an external settlement-adapter gate only **after provider eligibility/billing responsibility are resolved**. Payment proof must never be used to bypass provider authorization.
+
 ## Usage attribution
 
 Provider RESULT/runtime metadata may carry non-secret billing classification such as:
@@ -198,6 +202,7 @@ Not all providers expose token counters. Media providers may use jobs, seconds, 
 The repository does not yet claim completion of:
 
 - rich account/organization billing ownership;
+- x402, AP2 or any other settlement/payment adapter implementation;
 - payment processor integration as a protocol requirement;
 - prepaid balance reconciliation;
 - subscription lifecycle/reconciliation;
@@ -205,6 +210,23 @@ The repository does not yet claim completion of:
 - deployed distributed durable sponsored-usage store;
 - provider-native actual-usage reconciliation/invoicing;
 - marketplace settlement administration.
+
+## Settlement boundary
+
+Settlement remains outside TRUYN/1.
+
+TRUYN does not define a proprietary currency, wallet, payment processor, blockchain, smart contract or financial-finality rule. Deployments may use different external systems without changing the core network protocol.
+
+The first planned external adapters are:
+
+- **x402** — machine-native payment requirement, verification and settlement;
+- **AP2** — verifiable agent payment authorization through mandates and receipts.
+
+These can be composed. AP2 can establish that an agent is authorized to transact while x402 can provide a concrete settlement flow. Neither adapter changes the rule that provider authorization is evaluated first.
+
+Settlement-specific secrets and credentials remain outside TRUYN envelopes. Where an auditable link is needed, TRUYN may retain an opaque external receipt/reference or digest bound to the transaction.
+
+See `docs/architecture/SETTLEMENT_ADAPTERS.md`.
 
 ## Gross vs net cost
 
@@ -224,6 +246,6 @@ The current reference implementation requires BYOK providers to remain private a
 
 ## Marketplace compatibility
 
-Future capability-market settlement can sit on top of this boundary. The invariant remains unchanged: a participant does not obtain another party's paid upstream capacity merely by discovering a capability.
+Future capability-market settlement can sit on top of this boundary through external settlement adapters. The invariant remains unchanged: a participant does not obtain another party's paid upstream capacity merely by discovering a capability or presenting payment metadata.
 
 See `docs/operations/BILLING_OPERATIONS.md` for operational fail-closed rules.
