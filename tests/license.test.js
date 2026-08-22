@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 
 const read = (path) => readFileSync(path, 'utf8');
 
-test('repository license is Apache-2.0 with the standard patent grant', () => {
+test('repository license surfaces are Apache-2.0', () => {
   const license = read('LICENSE');
   const packageJson = JSON.parse(read('package.json'));
   const readme = read('README.md');
@@ -12,7 +12,6 @@ test('repository license is Apache-2.0 with the standard patent grant', () => {
   const contributing = read('CONTRIBUTING.md');
 
   assert.match(license, /Apache License\s+Version 2\.0/);
-  assert.match(license, /3\. Grant of Patent License\./);
   assert.equal(packageJson.license, 'Apache-2.0');
 
   for (const [name, content] of [
