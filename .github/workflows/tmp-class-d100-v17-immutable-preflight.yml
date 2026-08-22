@@ -1,0 +1,171 @@
+name: tmp-class-d100-v17-immutable-preflight
+
+on:
+  push:
+    branches: ['ci/d100-v17-preflight-ea1753ab']
+    paths:
+      - '.github/workflows/tmp-class-d100-v17-immutable-preflight.yml'
+
+permissions:
+  contents: read
+  actions: read
+  issues: write
+
+env:
+  TESTED_COMMIT: ea1753ab6eb12f2c7361740d98f3d08a067bd7c5
+
+jobs:
+  immutable-preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Record immutable preflight start
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          body="run=${GITHUB_RUN_ID} workflow_sha=${GITHUB_SHA} tested_sha=${TESTED_COMMIT} phase=immutable-preflight"
+          gh api "repos/${GITHUB_REPOSITORY}/issues" -f 'title=TRUYN CLASS D-100 V17 IMMUTABLE PREFLIGHT STARTED' -f "body=${body}" >/dev/null
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ea1753ab6eb12f2c7361740d98f3d08a067bd7c5
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Verify fresh main security-green and immutable V17 source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TRUYN_LOCAL_DEVELOPMENT: '1'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = "$TESTED_COMMIT"
+
+          runs_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs?head_sha=${TESTED_COMMIT}&event=push&per_page=100")"
+          security_green_run="$(jq -r --arg sha "$TESTED_COMMIT" '[.workflow_runs[] | select(.name == "CI" and .head_branch == "main" and .head_sha == $sha and .event == "push" and .status == "completed" and .conclusion == "success")] | sort_by(.created_at) | reverse | .[0].id // empty' <<<"$runs_json")"
+          test -n "$security_green_run"
+
+          test "$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${security_green_run}" --jq '.head_branch')" = 'main'
+          test "$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${security_green_run}" --jq '.head_sha')" = "$TESTED_COMMIT"
+          test "$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${security_green_run}" --jq '.name')" = 'CI'
+          test "$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${security_green_run}" --jq '.event')" = 'push'
+          test "$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${security_green_run}" --jq '.status')" = 'completed'
+          test "$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${security_green_run}" --jq '.conclusion')" = 'success'
+
+          extras="$(find .github/workflows -maxdepth 1 -type f ! -name ci.yml ! -name .gitkeep -printf '%f\n' | sort)"
+          test -z "$extras"
+
+          npm install --ignore-scripts --no-audit --no-fund
+          npm test
+          git diff --check
+
+          for f in \
+            scripts/class-d-100-accepted-entrypoint.sh \
+            scripts/class-d-100-final-acceptance.sh \
+            scripts/class-d-100-v10-acceptance.sh \
+            scripts/class-d-100-v11-acceptance.sh \
+            scripts/class-d-100-v12-acceptance.sh \
+            scripts/class-d-100-v13-acceptance.sh \
+            scripts/lib/class-d-run-command.sh \
+            benchmarks/scale/class-d-azure-100-provision.sh \
+            benchmarks/scale/class-d-azure-100-campaign.sh; do
+            bash -n "$f"
+          done
+
+          TRUYN_CLASS_D100_PREPARE_ONLY=1 bash scripts/class-d-100-accepted-entrypoint.sh | tee class-d-100-v17-preflight.txt
+
+          node --check benchmarks/scale/evaluate-class-d-evidence.js
+          node --check benchmarks/scale/verify-class-d-terminal.js
+          node --test \
+            tests/class-d-accepted-entrypoint-regression.test.js \
+            tests/class-d-shell-harness.test.js \
+            tests/class-d-v11-harness.test.js \
+            tests/class-d-v12-harness.test.js \
+            tests/class-d-v13-harness.test.js \
+            tests/class-d-run-command-regression.test.js \
+            tests/class-d-canonical-pin-regression.test.js \
+            tests/peer-record-renewal-productionization.test.js
+
+          grep -q 'baselineRoutingSuccess: 0.99' benchmarks/scale/class-d.js
+          grep -q 'healedRoutingSuccess: 0.99' benchmarks/scale/class-d.js
+          grep -q 'recoveryP95Ms: 120_000' benchmarks/scale/class-d.js
+          grep -q 'convergenceP95Ms: 120_000' benchmarks/scale/class-d.js
+          grep -q 'acknowledgedWriteLossMax: 0' benchmarks/scale/class-d.js
+          grep -q 'invalidSignedStateAcceptedMax: 0' benchmarks/scale/class-d.js
+          grep -q 'staleRevokedReceiptAcceptedMax: 0' benchmarks/scale/class-d.js
+          grep -q 'minimumHostCount: 4' benchmarks/scale/class-d.js
+          grep -q 'nodeCount: 100' benchmarks/scale/class-d.js
+
+          grep -q 'TRUYN_GUEST_EXECUTION_ADMITTED=1' scripts/lib/class-d-run-command.sh
+          grep -q 'TRUYN_AZ_RUN_COMMAND_BUSY_WAIT' scripts/lib/class-d-run-command.sh
+          grep -q 'TRUYN_AZ_RUN_COMMAND_429_BACKOFF' scripts/lib/class-d-run-command.sh
+          grep -q -- "--query 'value\[\]\.message'" scripts/lib/class-d-run-command.sh
+          grep -q '/bin/bash /tmp/truyn-d100-run.sh' scripts/lib/class-d-run-command.sh
+          grep -q 'class-d-100-v13-acceptance.sh' scripts/class-d-100-accepted-entrypoint.sh
+
+          sha256sum \
+            scripts/class-d-100-accepted-entrypoint.sh \
+            scripts/class-d-100-final-acceptance.sh \
+            scripts/class-d-100-v10-acceptance.sh \
+            scripts/class-d-100-v11-acceptance.sh \
+            scripts/class-d-100-v12-acceptance.sh \
+            scripts/class-d-100-v13-acceptance.sh \
+            scripts/lib/class-d-run-command.sh \
+            benchmarks/scale/class-d-azure-100-provision.sh \
+            benchmarks/scale/class-d-azure-100-campaign.sh \
+            benchmarks/scale/class-d.js \
+            benchmarks/scale/evaluate-class-d-evidence.js \
+            benchmarks/scale/verify-class-d-terminal.js \
+            network/runtime.js \
+            network/transport/p2p.js \
+            network/discovery/quic-rpc.js \
+            tests/peer-record-renewal-productionization.test.js \
+            > class-d-100-v17-source-manifest.sha256
+
+          {
+            printf 'tested_commit=%s\n' "$TESTED_COMMIT"
+            printf 'launcher_commit=%s\n' "$GITHUB_SHA"
+            printf 'run_id=%s\n' "$GITHUB_RUN_ID"
+            printf 'security_green_run=%s\n' "$security_green_run"
+            printf 'security_green_event=push\n'
+            printf 'security_green_branch=main\n'
+            printf 'security_green_status=PASS\n'
+            printf 'status=PASS\n'
+            printf 'prepare_only=true\n'
+            printf 'accepted_entrypoint=V13->V12->V11->V10->final\n'
+            printf 'safety_contract=unchanged\n'
+            printf 'application_retry_added=false\n'
+            printf 'node_count=100\n'
+            printf 'minimum_hosts=4\n'
+            printf 'baseline_routing_min=0.99\n'
+            printf 'healed_routing_min=0.99\n'
+            printf 'recovery_p95_max_ms=120000\n'
+            printf 'convergence_p95_max_ms=120000\n'
+            printf 'safety_violations_max=0\n'
+            printf 'runcommand_guest_admission_guard=PASS\n'
+          } >> class-d-100-v17-preflight.txt
+
+          echo "TRUYN_CLASS_D_100_V17_IMMUTABLE_PREFLIGHT=PASS testedCommit=${TESTED_COMMIT} securityGreenRun=${security_green_run}"
+
+      - name: Upload immutable V17 preflight artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: truyn-class-d100-v17-preflight-${{ github.run_id }}
+          retention-days: 90
+          if-no-files-found: error
+          path: |
+            class-d-100-v17-preflight.txt
+            class-d-100-v17-source-manifest.sha256
+
+      - name: Record immutable preflight PASS
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          security_green_run="$(grep '^security_green_run=' class-d-100-v17-preflight.txt | tail -1 | cut -d= -f2)"
+          body="run=${GITHUB_RUN_ID} workflow_sha=${GITHUB_SHA} tested_sha=${TESTED_COMMIT} security_green_run=${security_green_run} status=PASS immutable_preflight=true artifact_name=truyn-class-d100-v17-preflight-${GITHUB_RUN_ID}"
+          gh api "repos/${GITHUB_REPOSITORY}/issues" -f 'title=TRUYN CLASS D-100 V17 IMMUTABLE PREFLIGHT PASS' -f "body=${body}" >/dev/null
