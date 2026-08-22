@@ -166,3 +166,62 @@ test('productionization: durable restart re-registers before first application t
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test('productionization: durable restart retries only failed peer registrations and cancels pending retry on close', { timeout: 15_000 }, async () => {
+  const root = await mkdtemp(join(tmpdir(), 'truyn-peer-restart-retry-'));
+  const tls = await generateTls(root);
+  const identity = createIdentity();
+  const statePath = join(root, 'node-state.json');
+  const stableIdentity = createIdentity();
+  const flakyIdentity = createIdentity();
+  const stable = createPeerRecord({ identity: stableIdentity, endpoints: ['quic://127.0.0.1:65528'], ttlMs: 60_000 });
+  const flaky = createPeerRecord({ identity: flakyIdentity, endpoints: ['quic://127.0.0.1:65529'], ttlMs: 60_000 });
+  let node = new TruynNetworkNode({ identity, host: '127.0.0.1', tls, statePath, peerRecordAutoRenew: false });
+  try {
+    await node.start();
+    node.bootstrap([stable, flaky]);
+    await node.persistState();
+    await node.close();
+
+    node = new TruynNetworkNode({ identity, host: '127.0.0.1', tls, statePath, peerRecordAutoRenew: false });
+    const attempts = new Map();
+    node.rpc.announce = async (peer, record) => {
+      const count = (attempts.get(peer.nodeId) || 0) + 1;
+      attempts.set(peer.nodeId, count);
+      if (peer.nodeId === flakyIdentity.nodeId && count === 1) throw new Error('simulated_peer_temporarily_unavailable');
+      return { accepted: true, nodeId: record.nodeId, sequence: record.sequence };
+    };
+    await node.start();
+    const initial = node.peerRecordLifecycleSnapshot().lastAnnouncement;
+    assert.equal(initial.attempted, 2);
+    assert.equal(initial.delivered, 1);
+    assert.equal(initial.failed, 1);
+    assert.deepEqual(initial.failedNodeIds, [flakyIdentity.nodeId]);
+
+    const repaired = await eventually(() => {
+      const lifecycle = node.peerRecordLifecycleSnapshot();
+      return attempts.get(flakyIdentity.nodeId) === 2 && lifecycle.lastAnnouncement?.failed === 0 ? lifecycle.lastAnnouncement : null;
+    }, { timeoutMs: 4_000, message: 'failed_peer_not_retried' });
+    assert.equal(attempts.get(stableIdentity.nodeId), 1, 'already-delivered peer must not be retried');
+    assert.equal(attempts.get(flakyIdentity.nodeId), 2, 'failed peer must receive exactly the first bounded retry');
+    assert.equal(repaired.attempted, 1);
+    assert.equal(repaired.delivered, 1);
+    assert.equal(repaired.failed, 0);
+
+    await node.close();
+    node = new TruynNetworkNode({ identity, host: '127.0.0.1', tls, statePath, peerRecordAutoRenew: false });
+    let cancelledAttempts = 0;
+    node.rpc.announce = async () => {
+      cancelledAttempts += 1;
+      throw new Error('simulated_peer_still_unavailable');
+    };
+    await node.start();
+    assert.equal(cancelledAttempts, 2, 'restart must make one initial attempt per recovered peer');
+    await node.close();
+    await sleep(1_200);
+    assert.equal(cancelledAttempts, 2, 'close must cancel the pending control-plane retry');
+  } finally {
+    await node.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
