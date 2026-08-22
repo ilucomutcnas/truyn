@@ -45,6 +45,9 @@ Architecture documents define contracts. Benchmark reports prove bounded claims.
 | Owner-funded billing safety | Defined | Implemented | fail-closed tests | production accounting/tenant attribution open |
 | Sponsored billing | Defined | Guard implementation exists | activation requires signed entitlement + durable atomic usage store | production entitlement issuance/store deployment open |
 | Prepaid/subscription billing | Defined | fail-closed placeholder | denies without resolver | entitlement resolver/accounting not implemented |
+| MCP interoperability edge | Defined | **Implemented bounded reference server + configured remote-tool path** | adapter tests cover tools/header path | full current MCP conformance/general discovery-import not yet proven |
+| A2A interoperability edge | **Defined** | **Not implemented** | none | Agent Card + task/artifact server/client bridges required |
+| A2A↔TRUYN↔MCP bridge | **Defined** | **Not implemented** | none | bidirectional cross-protocol proof + security matrix required |
 | Settlement adapters (x402/AP2) | **Defined** | **Not implemented** | none | deferred v0.9 milestone after higher-priority productionization/operations gates |
 | TRUYN Agent Descriptor | **Defined draft** | **Not implemented as a served/discovered runtime contract** | none | implement well-known/native discovery, signature/expiry validation and scoped visibility |
 | First-party SDK program | **Defined** | **Scaffolding/documentation only** | no cross-language SDK conformance evidence | implement TS/Python reference pair, then Go/Java/.NET parity and package publication |
@@ -52,8 +55,32 @@ Architecture documents define contracts. Benchmark reports prove bounded claims.
 | Protected-provider M2M guard | Defined | Implemented | regression proven | live token issuance/rotation is deployment-specific |
 | Multi-cloud text/image/video adapters | Defined | Implemented reference paths | smoke/benchmark evidence for available deployments | cloud entitlement/quota can block individual models |
 | Operations documentation | Defined | baseline implemented | this docs layer | production runbooks evolve with testnet/mainnet |
-| Compatibility documentation | Defined | baseline implemented | this docs layer | no stable `TRUYN/1` or SDK compatibility promise yet |
+| Compatibility documentation | Defined | baseline implemented | this docs layer | no stable `TRUYN/1`, A2A/MCP or SDK compatibility promise yet |
 | Mainnet | Defined conceptually | Not productionized | none | requires productionization + stabilization gates |
+
+## A2A / MCP interoperability status boundary
+
+The repository already contains working bounded MCP integration code, so the factual status is **not** “MCP planned only.”
+
+Implemented today:
+
+- TRUYN-as-MCP server over stdio;
+- loopback MCP HTTP bridge exposing `truyn_identity`, `truyn_find`, `truyn_offer`, `truyn_need`, `truyn_poll`, `truyn_result`;
+- configured remote MCP HTTP tool provider path;
+- bounded adapter tests for MCP discovery/tool execution and modern HTTP routing headers.
+
+Not implemented/proven today:
+
+- complete current MCP feature/conformance closure;
+- general MCP tool/resource discovery/import;
+- any A2A Agent Card/server task bridge;
+- any A2A client/provider adapter;
+- A2A→TRUYN→MCP or MCP→TRUYN→A2A real round-trip evidence;
+- cross-protocol negative security evidence.
+
+The architecture is defined in `A2A_MCP_INTEROPERABILITY.md`; the factual version/support matrix is `../compatibility/A2A_MCP_COMPATIBILITY.md`.
+
+A2A/MCP transport authentication never substitutes for TRUYN provider authorization, billing responsibility or Trustability.
 
 ## Developer Experience status boundary
 
@@ -113,9 +140,9 @@ The current reference implementation enforces these core invariants:
 9. protected provider M2M proof is transport-only and stripped before the inner relay;
 10. sponsored mode cannot activate without an actor-bound signed entitlement verifier and a durable atomic usage store.
 
-Future SDK/Agent Descriptor implementations must preserve these invariants. An SDK or descriptor must never turn public metadata into private-provider authorization.
+Future SDK/Agent Descriptor and A2A/MCP implementations must preserve these invariants. An SDK, descriptor, Agent Card, MCP tool list or external protocol credential must never turn public metadata into private-provider authorization.
 
-See `SECURITY.md`, `docs/security/`, `AUTHORIZATION_MODEL.md`, `BILLING_BOUNDARY.md`, `SETTLEMENT_ADAPTERS.md`, `SDK_DEVELOPER_EXPERIENCE.md` and `RELAY_SECURITY.md`.
+See `SECURITY.md`, `docs/security/`, `AUTHORIZATION_MODEL.md`, `BILLING_BOUNDARY.md`, `A2A_MCP_INTEROPERABILITY.md`, `SETTLEMENT_ADAPTERS.md`, `SDK_DEVELOPER_EXPERIENCE.md` and `RELAY_SECURITY.md`.
 
 ## Evidence discipline
 
@@ -125,11 +152,13 @@ A claim is only promoted to a proven maturity when a durable public benchmark/se
 
 SDK maturity follows the same rule: package publication or a compiling language client is not enough. Cross-language conformance/security evidence is required before promoting SDK parity/stability claims.
 
+A2A/MCP maturity follows the same rule: separate adapter files are not enough. Bidirectional cross-protocol execution, exact-version compatibility and negative provider-security evidence are required before claiming a completed bridge.
+
 ## Current priority
 
 The primary architecture/engineering priority is **network productionization**. Class B real multi-host proof is closed and the signed peer-record lifecycle prerequisite is now CI-proven; the next evidence class remains heterogeneous WAN/reachability.
 
-SDK/developer experience is now a required pre-v1 implementation track that may proceed in parallel where it does not depend on unstable protocol decisions. It does not supersede the network productionization gate and must not be used to imply mainnet maturity.
+SDK/developer experience and bounded A2A/MCP interoperability are required pre-v1 productization/interoperability tracks that may proceed in parallel where they do not depend on unstable protocol decisions. They do not supersede the network productionization gate and must not be used to imply mainnet maturity.
 
 ```text
 bounded working decentralized primitives
@@ -150,9 +179,11 @@ Byzantine / Sybil / eclipse / collusion exercises
         ↓
 stable operational and compatibility contracts
         ↓
+A2A/MCP bridge + negative interoperability evidence
+        ↓
 SDK DX-1/DX-2/DX-3 completion + five-language conformance
         ↓
-TRUYN/1 + Agent Descriptor + SDK compatibility stabilization
+TRUYN/1 + A2A/MCP adapter boundary + Agent Descriptor + SDK compatibility stabilization
         ↓
 settlement-adapter implementation milestone
 ```

@@ -19,6 +19,7 @@ This document prevents architectural ideas and factual implementation status fro
 | Relay/control-plane boundary | `docs/architecture/RELAY_SECURITY.md` |
 | BYOK model | `docs/architecture/BYOK_ARCHITECTURE.md` |
 | Billing/quota/entitlement boundary | `docs/architecture/BILLING_BOUNDARY.md` |
+| A2A/MCP interoperability boundary | `docs/architecture/A2A_MCP_INTEROPERABILITY.md` and `docs/compatibility/A2A_MCP_COMPATIBILITY.md` |
 | Settlement neutrality / external payment adapters | `spec/protocol/v1/economics.md` and `docs/architecture/SETTLEMENT_ADAPTERS.md` |
 | SDK / developer experience architecture | `docs/architecture/SDK_DEVELOPER_EXPERIENCE.md` and `sdk/README.md` |
 | TRUYN Agent Descriptor | `spec/protocol/v1/agent-descriptor.md` |
@@ -50,7 +51,7 @@ TRUYN documentation distinguishes:
 - **Internet-scale proven** — large real-node/WAN/adversarial evidence exists;
 - **Stable** — compatibility guarantees are declared.
 
-The repository is intentionally mixed maturity. The v0.1 QUIC/Kademlia underlay is implemented and CI-proven; the trust lifecycle has bounded real four-node QUIC/Kademlia evidence; semantic retrieval and provider security have substantial implementation/evidence; large real-node WAN scale, rich commercial/account control planes and stable mainnet remain open.
+The repository is intentionally mixed maturity. The v0.1 QUIC/Kademlia underlay is implemented and CI-proven; the trust lifecycle has bounded real four-node QUIC/Kademlia evidence; semantic retrieval and provider security have substantial implementation/evidence; MCP has bounded executable reference integration; A2A, large real-node WAN scale, rich commercial/account control planes and stable mainnet remain open.
 
 The SDK/DX architecture and Agent Descriptor are **Defined**, but the five required first-party SDK packages and Agent Descriptor runtime serving/discovery path are not yet implementation-complete.
 
@@ -96,6 +97,8 @@ OFFER            = dynamic capability availability/conditions
 A descriptor never grants provider authorization and MUST NOT expose a private provider/capability that provider-policy discovery would hide from that requester. A public descriptor is a public subset, not a dump of internal topology/providers.
 
 A valid descriptor signature proves integrity/key binding, not capability truth, current availability or requester entitlement.
+
+The TRUYN Agent Descriptor is also distinct from an **A2A Agent Card**. The Descriptor belongs to native TRUYN onboarding; an Agent Card belongs to the external A2A compatibility edge. An adapter may derive one view from another only when identity, visibility and authorization semantics remain explicit.
 
 See `spec/protocol/v1/agent-descriptor.md`.
 
@@ -230,6 +233,36 @@ Current implementation facts:
 - sponsored activation requires actor-bound signed entitlement verification and an atomic durable usage store;
 - a process-local usage counter is not an acceptable production billing boundary.
 
+### External interoperability: A2A and MCP
+
+A2A and MCP are external protocol edges, not new TRUYN/1 primitives.
+
+The compatibility pipeline is:
+
+```text
+A2A / MCP request
+        ↓
+adapter authentication + version validation
+        ↓
+normalize to TRUYN capability / NEED / RESULT semantics
+        ↓
+normal TRUYN authorization + billing + trust policy
+        ↓
+network routing / execution
+        ↓
+normalize result/status/artifact back to external protocol
+```
+
+External protocol metadata is not authoritative TRUYN ownership. An A2A Agent Card, task ID, MCP client metadata or tool name cannot grant provider access by itself.
+
+The current repository contains bounded MCP reference behavior in both directions: TRUYN-as-MCP server and a configured remote MCP HTTP tool provider. General MCP discovery/import, A2A server/client bridges and the bidirectional A2A↔TRUYN↔MCP interoperability proof remain open.
+
+The intended A2A mapping treats Agent Card skills as compatibility views over authorized TRUYN capabilities, A2A Messages as request input, task/context IDs as adapter correlation state and A2A Artifacts as `RESULT` outputs/artifact references. Private TRUYN offers MUST NOT be leaked merely because an Agent Card endpoint exists.
+
+MCP tools can expose TRUYN operations or back a TRUYN provider. MCP Resources may map to `OBJECT`/`STATE` only when their mutability, visibility and integrity semantics are explicitly safe; the adapter must not assume equivalence.
+
+See `docs/architecture/A2A_MCP_INTEROPERABILITY.md` and `docs/compatibility/A2A_MCP_COMPATIBILITY.md`.
+
 ### Settlement neutrality
 
 TRUYN/1 is not a payment protocol. It does not prescribe a currency, billing provider, blockchain, smart contract or settlement rail.
@@ -296,7 +329,9 @@ See `docs/architecture/SDK_DEVELOPER_EXPERIENCE.md` and `docs/compatibility/SDK_
 
 A relay may be public while providers remain private. Public reachability is not provider authorization.
 
-Execution-capable HTTP, WebSocket, MCP, SDK and legacy paths MUST preserve equivalent central authorization before provider execution.
+Execution-capable HTTP, WebSocket, MCP, future A2A, SDK and legacy paths MUST preserve equivalent central authorization before provider execution.
+
+External discovery surfaces such as an A2A Agent Card, MCP tool/resource list or Agent Descriptor MUST preserve the same privacy boundary and MUST NOT enumerate private providers to unauthorized requesters.
 
 The reference provider security path is defense in depth: relay filtering plus provider-host access/billing checks.
 
@@ -359,9 +394,9 @@ Public architecture describes invariants, schemas, threats, generic deployment p
 
 Private operational state includes credentials/private keys, unnecessary cloud identity details, private origins/backchannels, privileged allowlists, exact quotas/cost ceilings, billing/credit information, secret paths and sensitive incident/customer data.
 
-Public Agent Descriptors and SDK examples MUST follow the same boundary. SDK quickstarts/examples must never normalize embedding real provider credentials or private topology into source code or descriptor payloads.
+Public Agent Descriptors, A2A Agent Cards, MCP examples and SDK examples MUST follow the same boundary. Quickstarts/examples must never normalize embedding real provider credentials or private topology into source code, descriptor/card payloads or protocol discovery surfaces.
 
-Security MUST remain correct even if the public architecture and all SDK source code are fully known.
+Security MUST remain correct even if the public architecture and all SDK/adapter source code are fully known.
 
 ## Network modes
 
@@ -381,9 +416,9 @@ Public network mode never overrides provider visibility/authorization.
 
 ## Versioning
 
-Software, protocol, wire, descriptor, SDK and storage versions are independently declared where needed. Current software is `0.1.0-dev`; `TRUYN/1` remains draft. A new software release does not automatically imply a new wire generation.
+Software, TRUYN protocol, wire, Agent Descriptor, SDK, storage and external adapter-protocol versions are independently declared where needed. Current software is `0.1.0-dev`; `TRUYN/1` remains draft. A new software release does not automatically imply a new wire generation, and an A2A/MCP adapter upgrade does not automatically imply a new TRUYN generation.
 
-SDK releases must declare the TRUYN protocol/descriptor versions they support. An SDK release does not itself stabilize TRUYN/1.
+SDK releases must declare the TRUYN protocol/descriptor versions they support. A2A/MCP adapters must record the external protocol version they actually implement. Neither an SDK nor adapter release itself stabilizes TRUYN/1.
 
 See `docs/compatibility/`.
 
@@ -397,10 +432,12 @@ SDK package publication has its own release/provenance requirements but does not
 
 ## Interoperability
 
-TRUYN is model/provider-neutral. Vendor adapters are replaceable edges. MCP, SDKs, HTTP/gRPC/WebSocket gateways and provider-specific adapters connect systems to TRUYN; none defines the network itself.
+TRUYN is model/provider-neutral. Vendor and protocol adapters are replaceable edges. A2A, MCP, SDKs, HTTP/gRPC/WebSocket gateways and provider-specific adapters connect systems to TRUYN; none defines the network itself.
+
+A2A is the target agent-task interoperability edge; MCP is the target model/tool/resource interoperability edge. They may interoperate through TRUYN, but neither is treated as a synonym for TRUYN identity, capability policy, Trustability, Agent Descriptor or settlement.
 
 The required first-party SDK targets are JavaScript/TypeScript, Python, Go, Java and C#/.NET. Their shared job is to make the same TRUYN semantics easy to consume from the major software ecosystems without creating five subtly different protocols.
 
 Settlement adapters follow the same extension philosophy: x402, AP2 and future payment systems are replaceable external edges and do not define the TRUYN core network.
 
-See `docs/compatibility/ADAPTER_COMPATIBILITY.md` and `docs/compatibility/SDK_COMPATIBILITY.md` for the factual compatibility boundaries.
+See `docs/compatibility/ADAPTER_COMPATIBILITY.md`, `docs/compatibility/A2A_MCP_COMPATIBILITY.md`, `docs/compatibility/SDK_COMPATIBILITY.md` and `docs/architecture/A2A_MCP_INTEROPERABILITY.md` for the factual compatibility boundaries.
