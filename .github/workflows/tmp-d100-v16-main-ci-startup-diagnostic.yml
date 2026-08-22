@@ -1,0 +1,53 @@
+name: tmp-d100-v16-main-ci-startup-diagnostic
+
+on:
+  push:
+    branches:
+      - ci/d100-v16-main-security-green-observer-23360cbe
+    paths:
+      - '.github/workflows/tmp-d100-v16-main-ci-startup-diagnostic.yml'
+
+permissions:
+  actions: read
+  checks: read
+  issues: write
+  contents: read
+
+env:
+  RUN_ID: '32558383377'
+  CHECK_SUITE_ID: '88253425149'
+  TARGET_SHA: 23360cbe86e725f79ef0c6772a51f70825b92aef
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Capture startup failure metadata
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          run_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}")"
+          suite_json="$(gh api "repos/${GITHUB_REPOSITORY}/check-suites/${CHECK_SUITE_ID}")"
+          checks_json="$(gh api -X GET "repos/${GITHUB_REPOSITORY}/check-suites/${CHECK_SUITE_ID}/check-runs" -f per_page=100)"
+          jobs_json="$(gh api -X GET "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}/jobs" -f per_page=100)"
+          run_summary="$(jq -c '{id,name,event,head_branch,head_sha,status,conclusion,run_attempt,run_started_at,updated_at}' <<<"$run_json")"
+          suite_summary="$(jq -c '{id,status,conclusion,head_sha,latest_check_runs_count,rerequestable}' <<<"$suite_json")"
+          checks_summary="$(jq -c '[.check_runs[] | {id,name,status,conclusion,started_at,completed_at,output:{title:.output.title,summary:.output.summary,text:.output.text}}]' <<<"$checks_json")"
+          jobs_summary="$(jq -c '{total_count,jobs:[.jobs[] | {id,name,status,conclusion,started_at,completed_at}]}' <<<"$jobs_json")"
+          printf '%s\n' "$run_summary" > /tmp/run.json
+          printf '%s\n' "$suite_summary" > /tmp/suite.json
+          printf '%s\n' "$checks_summary" > /tmp/checks.json
+          printf '%s\n' "$jobs_summary" > /tmp/jobs.json
+          body=$(cat <<EOF
+          target_sha=${TARGET_SHA}
+          run=${run_summary}
+          check_suite=${suite_summary}
+          check_runs=${checks_summary}
+          jobs=${jobs_summary}
+          stage=main_ci_startup_failure_diagnostic
+          EOF
+          )
+          gh api "repos/${GITHUB_REPOSITORY}/issues" -f 'title=TRUYN D-100 V16 MAIN CI STARTUP FAILURE DIAGNOSTIC' -f "body=${body}" >/dev/null
