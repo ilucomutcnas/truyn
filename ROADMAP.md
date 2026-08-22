@@ -20,7 +20,7 @@ A design document does not promote implementation maturity. Conversely, once imp
 
 Canonical status matrix: `docs/architecture/IMPLEMENTATION_STATUS.md`.
 
-## Current snapshot — 2026-08-17
+## Current snapshot — 2026-08-22
 
 | Area | Current maturity |
 |---|---|
@@ -31,6 +31,7 @@ Canonical status matrix: `docs/architecture/IMPLEMENTATION_STATUS.md`.
 | Semantic retrieval/index/distributed retrieval | Implemented + extensive CI/benchmark evidence |
 | Provider ownership/authorization/BYOK | Implemented reference baseline |
 | Billing safety | BYOK/owner-funded implemented; sponsored guard implemented but requires external durable store/issuer; prepaid/subscription fail closed |
+| Settlement adapters | **Defined only; implementation intentionally not started. Settlement-neutral core; first targets x402 + AP2** |
 | Trustability v1/v2 | Implemented + CI/benchmark proven; bounded real-network trust slice proven |
 | Multi-cloud text/image/video providers | Implemented reference adapter paths; individual deployment availability varies |
 | Network productionization | **In progress — Class B closed; Class C heterogeneous WAN/reachability remains next** |
@@ -57,7 +58,7 @@ The repository already contains an executable MVP/reference implementation and c
 14. origin proof is expiry-bound and rotation-capable;
 15. sponsored mode cannot activate without actor-bound signed entitlement verification and an atomic durable usage store.
 
-This baseline is not a claim that rich account/organization tenancy, commercial entitlement issuance, deployed durable accounting, full cloud perimeter proof or mainnet security operations are complete.
+This baseline is not a claim that rich account/organization tenancy, commercial entitlement issuance, deployed durable accounting, settlement adapters, full cloud perimeter proof or mainnet security operations are complete.
 
 See:
 
@@ -65,6 +66,7 @@ See:
 - `docs/architecture/AUTHORIZATION_MODEL.md`
 - `docs/architecture/RELAY_SECURITY.md`
 - `docs/architecture/BILLING_BOUNDARY.md`
+- `docs/architecture/SETTLEMENT_ADAPTERS.md`
 - `docs/architecture/BYOK_ARCHITECTURE.md`
 - `docs/architecture/THREAT_MODEL.md`
 - `docs/security/`
@@ -128,7 +130,7 @@ Still open and required:
 
 Class B is durable evidence. The signed peer-record lifecycle is a later CI-proven productionization prerequisite. Neither fact closes Class C heterogeneous WAN/reachability or Class D scale/adversarial gates.
 
-This gate is deliberately prioritized ahead of further semantic-router feature expansion.
+This gate is deliberately prioritized ahead of further semantic-router feature expansion and ahead of settlement-adapter implementation.
 
 ## v0.2 — Verify — **SUBSTANTIALLY IMPLEMENTED / SCALE GATE OPEN**
 
@@ -219,6 +221,34 @@ Original milestone scope:
 
 Current factual state: executable node/relay/provider/testnet paths and cloud test exercises exist; `docs/operations/`, `docs/security/` and `docs/compatibility/` now document the current boundary. Production installers, signed updater/rollback and stable mainnet operations remain open.
 
+## v0.9 — Settle — **DEFINED / IMPLEMENTATION DEFERRED**
+
+TRUYN keeps settlement outside the core protocol. This milestone adds optional external adapters only after the higher-priority network productionization/operational gates are sufficiently mature.
+
+Planned scope:
+
+- [ ] stable settlement-adapter interface outside the TRUYN/1 core wire vocabulary;
+- [ ] x402 adapter for machine-native payment requirement, verification and settlement;
+- [ ] AP2 adapter for verifiable agent payment authorization through mandates/receipts;
+- [ ] AP2 + x402 composition for autonomous paid cross-owner capability execution;
+- [ ] opaque external receipt/reference binding to requester/provider/TRUYN transaction context;
+- [ ] replay/cross-request-substitution resistance for external settlement evidence;
+- [ ] durable accounting/reconciliation bridge from TRUYN usage attribution to external settlement state;
+- [ ] sandbox/testnet-first financial testing before any production money movement;
+- [ ] negative tests proving payment/settlement metadata cannot bypass provider authorization;
+- [ ] negative tests proving failed/absent settlement cannot fall back to owner-funded provider quota;
+- [ ] compatibility/versioning rules so x402/AP2 upgrades do not force a TRUYN core protocol generation.
+
+Non-goals:
+
+- no TRUYN currency/token;
+- no mandatory blockchain;
+- no mandatory smart contract;
+- no mandatory payment processor;
+- no weakening of BYOK or provider ownership boundaries.
+
+Architecture: `docs/architecture/SETTLEMENT_ADAPTERS.md`.
+
 ## v1.0 — Stabilize — **NOT REACHED**
 
 - Stable `TRUYN/1`
@@ -226,6 +256,7 @@ Current factual state: executable node/relay/provider/testnet paths and cloud te
 - Stable `local` / `testnet` / `mainnet` semantics
 - Production-grade authorization/tenant/BYOK boundary
 - Production-grade upgrade/rollback contract
+- Explicitly stable settlement-neutral extension boundary; settlement adapters remain optional/versioned independently
 - Public mainnet bootstrap
 - Documented SDKs and compatibility policy
 
@@ -233,7 +264,7 @@ Current factual state: executable node/relay/provider/testnet paths and cloud te
 
 - Capability price discovery
 - Provider quality/price/trust competition
-- Optional settlement adapters
+- Multi-rail settlement interoperability and market operations
 - Resource accounting and receipts
 - Explicit provider-owner entitlements for cross-owner execution
 - No mandatory blockchain or single payment rail
